@@ -3,7 +3,15 @@
 #include <cstdlib>
 #include <thread>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX  // 防止 min/max 宏污染后续 STL 头
+#endif
+#include <windows.h>  // CreateProcessA / STARTUPINFOA / CloseHandle
+#else
 #include <spawn.h>
 #include <sys/wait.h>
 extern char** environ;

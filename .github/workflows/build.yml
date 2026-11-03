@@ -40,7 +40,7 @@ jobs:
       - name: Smoke test (dummy video, real core)
         run: |
           mkdir -p smoke/cores smoke/system smoke/saves
-          curl -fSL --retry 3 -o fce.zip \
+          curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 -o fce.zip \
             https://buildbot.libretro.com/nightly/linux/x86_64/latest/fceumm_libretro.so.zip
           python3 -c "import zipfile; zipfile.ZipFile('fce.zip').extractall('smoke/cores')"
           rm -f fce.zip
@@ -87,8 +87,10 @@ jobs:
       - name: Install deps
         run: |
           apt-get update
+          # ca-certificates 必须显式安装：--no-install-recommends 会跳过
+          # libcurl4 对它的 Recommends 依赖，导致 curl (77) 证书错误
           apt-get install -y --no-install-recommends \
-            build-essential cmake libsdl2-dev curl unzip python3
+            build-essential cmake libsdl2-dev ca-certificates curl unzip python3
 
       - name: Configure
         run: |
@@ -102,8 +104,9 @@ jobs:
       - name: Smoke test (dummy video, real aarch64 core)
         run: |
           mkdir -p smoke/cores smoke/system smoke/saves
-          # 注意：arm64 核心位于 linux/aarch64（不是 linux/arm64）
-          curl -fSL --retry 3 -o fce.zip \
+          # 注意：arm64 核心位于 linux/aarch64（不是 linux/arm64）；
+          # buildbot 偶发超时，用足够的重试参数兜底
+          curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 -o fce.zip \
             https://buildbot.libretro.com/nightly/linux/aarch64/latest/fceumm_libretro.so.zip
           python3 -c "import zipfile; zipfile.ZipFile('fce.zip').extractall('smoke/cores')"
           rm -f fce.zip
