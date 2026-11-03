@@ -5,6 +5,9 @@
 # 用法：
 #   ./scripts/fetch_cores.sh                # 按平台下载全部核心（自动回退）
 #   ./scripts/fetch_cores.sh nes psx 3ds    # 只下载指定平台（平台短名）
+#   ./scripts/fetch_cores.sh --dest DIR [平台...]  # 下载到指定目录（打包用）
+#   ./scripts/fetch_cores.sh --arch aarch64      # 覆盖架构（交叉下载/打包用）
+#                                              # 可选：x86_64 / aarch64 / armhf / windows
 #
 # 核心来源：libretro 官方 buildbot（nightly）
 #   Windows:  https://buildbot.libretro.com/nightly/windows/x86_64/latest/
@@ -21,10 +24,28 @@
 # ============================================================================
 set -uo pipefail
 
+# ---------- 参数解析：--dest DIR / --arch ARCH（其余为平台过滤）----------
+DEST_DIR=""
+ARCH_OVERRIDE=""
+FILTERS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dest)   DEST_DIR="$2"; shift 2 ;;
+    --arch)   ARCH_OVERRIDE="$2"; shift 2 ;;
+    --*)      echo "未知选项：$1" >&2; exit 2 ;;
+    *)        FILTERS+=("$1"); shift ;;
+  esac
+done
+
 # ---------- 平台 / 架构判定 ----------
 EXT=".so"
 BASE="https://buildbot.libretro.com/nightly/linux/x86_64/latest"
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+if [[ "$ARCH_OVERRIDE" == "windows" ]]; then
+  EXT=".dll"
+  BASE="https://buildbot.libretro.com/nightly/windows/x86_64/latest"
+elif [[ -n "$ARCH_OVERRIDE" ]]; then
+  BASE="https://buildbot.libretro.com/nightly/linux/${ARCH_OVERRIDE}/latest"
+elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
   EXT=".dll"
   BASE="https://buildbot.libretro.com/nightly/windows/x86_64/latest"
 else
@@ -59,22 +80,24 @@ PLATFORM_CORES=(
   "java|Java ME|squirreljme"
 )
 
-# ---------- 目标目录：优先便携模式 ----------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXE_DIR="$(dirname "$SCRIPT_DIR")"
-if [[ -f "$EXE_DIR/portable.flag" ]]; then
-  CORES_DIR="$EXE_DIR/UserData/cores"
+# ---------- 目标目录：--dest 指定（打包）；否则优先便携模式 ----------
+if [[ -n "$DEST_DIR" ]]; then
+  CORES_DIR="$DEST_DIR"
 else
-  if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
-    CORES_DIR="$XDG_CONFIG_HOME/NesStation/cores"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  EXE_DIR="$(dirname "$SCRIPT_DIR")"
+  if [[ -f "$EXE_DIR/portable.flag" ]]; then
+    CORES_DIR="$EXE_DIR/UserData/cores"
   else
-    CORES_DIR="$HOME/.config/NesStation/cores"
+    if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+      CORES_DIR="$XDG_CONFIG_HOME/NesStation/cores"
+    else
+      CORES_DIR="$HOME/.config/NesStation/cores"
+    fi
   fi
 fi
 mkdir -p "$CORES_DIR"
 
-# ---------- 参数过滤（平台短名，可多个）----------
-FILTERS=("$@")
 want_platform() {
   [[ ${#FILTERS[@]} -eq 0 ]] && return 0
   local f
@@ -108,7 +131,7 @@ for entry in "${PLATFORM_CORES[@]}"; do
   got=""
   for core in $cores; do
     echo "  [下载] $label ← $core ..."
-    if curl -fSL --retry 2 --retry-delay 2 --max-time 600 \
+    if curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 --max-time 600 \
          -o "/tmp/${core}_libretro.zip" \
          "$BASE/${core}_libretro$EXT.zip"; then
       if command -v unzip >/dev/null 2>&1; then

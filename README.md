@@ -66,21 +66,29 @@ scripts\build.bat                  # 自动 FetchContent SDL2
 
 产物：`build/bin/nesstation`（Linux）/ `build/bin/Release/nesstation.exe`（Windows）。
 
-### 2. 下载核心
+### 2. 核心（发布包已内置，开箱即玩）
+
+**官方发布包（CI 产物）已内置当前架构全部可用核心**（exe 同目录 `cores/`，自动识别，15 平台基本全覆盖）
+：Windows zip → `NesStation-windows/cores/*.dll`；Linux tar.gz → `cores/*.so`；
+arm64 deb → `/opt/nesstation/cores/*.so`。解压/安装后无需任何额外步骤即可游玩。
+
+源码自行编译、或想更新/补齐核心时才需要手动下载：
 
 ```bash
 # Linux（自动识别 x86_64 / aarch64 架构，逐平台下载，404 自动回退替代核心）
-./scripts/fetch_cores.sh                     # 全部 15 个平台
-./scripts/fetch_cores.sh nes psx 3ds         # 只下载指定平台
+bash scripts/fetch_cores.sh                     # 全部 15 个平台
+bash scripts/fetch_cores.sh nes psx 3ds         # 只下载指定平台
 # Windows
 powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1
 ```
 
-核心落到 `~/.config/NesStation/cores/`（Linux）/ `%APPDATA%\NesStation\cores\`（Windows）。
+手动下载的核心落到 `~/.config/NesStation/cores/`（Linux）/
+`%APPDATA%\NesStation\cores\`（Windows），**优先级高于包内内置核心**（可覆盖升级）。
 exe 旁放 `portable.flag` 即转便携模式（全部数据进 `UserData/`）。
 
-> libretro 预编译核心并非所有架构都提供（如 azahar 无 linux/aarch64 包），
-> 脚本会自动尝试候选链上的替代核心；应用内启动时也会自动选用已安装的替代核心。
+> libretro 预编译核心并非所有架构都提供（如 azahar 无 linux/aarch64 包，
+> 打包/下载/运行时都会自动回退到 citra）；脚本、CI 打包与应用内启动使用同一条
+> 候选链，某个核心缺失时自动选用链上已安装的替代核心。
 
 ### 3. 放入 ROM
 
@@ -117,16 +125,23 @@ Actions 页面 → **Build** → **Run workflow** → 选择构建目标：
 
 ## 🕹️ 操作
 
+### 三套输入设备全部支持（鼠标 / 键盘 / 手柄）
+
+鼠标为第一等公民：所有按钮、菜单、列表、封面流、磁贴均可点击；
+封面流与磁贴流支持横向拖拽；列表与长页支持滚轮滚动；游戏内**右键**呼出菜单。
+
 ### 手柄 / 键盘（UI 与游戏通用）
 
-| 动作 | 键盘 | 手柄 |
-| --- | --- | --- |
-| 十字 / 摇杆 | 方向键 / WASD 之外的箭头键 | D-pad / 左摇杆 |
-| 确认 | Enter / 鼠标左键 | A |
-| 返回 / 呼出游戏菜单 | Esc / F1 | B / Start |
-| 选项 | E | Y |
-| 收藏 | F | X |
-| 翻页 | PgUp / PgDn / 滚轮 | L / R |
+| 动作 | 键盘 | 手柄 | 鼠标 |
+| --- | --- | --- | --- |
+| 十字 / 摇杆 | 方向键 | D-pad / 左摇杆 | 悬停即选中 |
+| 确认 | Enter | A | 左键点击 |
+| 返回 / 呼出游戏菜单 | Esc | B / Start | 右键（游戏内）或左上角「‹ 返回」按钮 |
+| 选项 | E | Y | — |
+| 收藏 | F | X | — |
+| 翻页 / 滚动 | PgUp / PgDn / 滚轮 | L / R | 滚轮 |
+
+> 每个页面左上角都有可见的「‹ 返回」按钮，不再依赖手柄 Esc。
 
 ### 游戏内（默认映射，与原项目 README 控制表一致，设置页可改）
 
@@ -138,17 +153,24 @@ Actions 页面 → **Build** → **Run workflow** → 选择构建目标：
 
 ### 快捷键
 
-| 键 | 功能 |
+| 快捷键 | 功能 |
 | --- | --- |
-| F1 / Esc | 游戏内菜单（暂停/存档/读档/重置/画面/核心设置/换碟） |
+| F1 / Esc / 右键 | 游戏内菜单（暂停/存档/读档/重置/画面/核心设置/换碟） |
 | F5 / F8 | 快速存档 / 读档（槽位 1） |
 | F6 / Tab（按住） | 快进 ×2 |
 | F11 | 全屏切换 |
+| F12 | 截图当前帧（存数据目录 shots/） |
 
 ## 🖥️ 界面
 
-- **Neon 3D 游戏站**（默认）：深空黑蓝 + 电光青 + 警示红；中央 3D 封面流（透视 + 倒影 + 辉光）、切角边框语言
-- **FSD 经典**：Xbox 360 Freestyle Dash 磁贴桌面；深蓝渐变 + 斜向光带 + 蓝/黄对角色块
+两套主题与 Android 版**像素级同源**（设计令牌逐项移植）：
+
+- **Neon 3D 游戏站**（默认）：深空黑蓝 + 电光青 + 警示红；顶部品牌徽标 + 时钟，
+  7 彩色 chip 菜单行（游戏库/收藏/最近/核心管理/设置/关于/退出），
+  中央 3D 封面流（透视缩放 + 逐级渐隐 + 选中辉光，与 Android NeonFlow 同款弧形导轨），
+  底部信息区（大标题 + 平台徽章 + 游玩统计 + 「开始游戏」渐变主按钮）+ 键帽式按键提示栏
+- **FSD 经典**：Xbox 360 Freestyle Dash 磁贴桌面；像素天空（漂移云 / 闪烁星光 / 海面 / 草地），
+  蓝→黄对角渐变磁贴（白图标 + 左下粗体标签 + 右上徽标），底部半透明 Dock
 - 两套主题在 **设置 → 外观 → 主界面风格** 即时切换（持久化），游戏库 / 设置页全套跟随换肤
 
 功能全景：
@@ -210,6 +232,10 @@ g++ -std=c++17 -I src -I third_party -I third_party/stb -I third_party/libretro 
     src/util/*.cpp src/retro/LibretroCore.cpp src/retro/AudioBridge.cpp \
     src/retro/VideoBridge.cpp src/retro/InputManager.cpp third_party/stb/stb_impl.cpp \
     $(sdl2-config --libs) -ldl -lpthread -o smoke && ./smoke
+
+# 无头 UI 自检（dummy 视频驱动渲染各场景并截图，验证两套主题视觉）
+NESSTATION_SELFTEST="home:90,fsd:120,library:40,settings:40,about:20,exit:1" \
+NESSTATION_SHOT_DIR=/tmp/shots ./build/bin/nesstation
 ```
 
 ## 📜 许可证

@@ -14,7 +14,8 @@ std::unique_ptr<Scene> createHomeScene();
 std::unique_ptr<Scene> createLibraryScene(int platformFilter);
 
 // 设置（含外观风格切换 / 核心管理 / 按键映射 / 路径 / 模拟器 / BIOS）
-std::unique_ptr<Scene> createSettingsScene();
+// initialTab：初始分类（0 外观…6 数据；-1 = 记住上次）。主页「核心管理」入口传 1。
+std::unique_ptr<Scene> createSettingsScene(int initialTab = -1);
 
 // 核心选项浏览（platform：目标平台；运行中则热改）
 std::unique_ptr<Scene> createCoreOptionsScene(GamePlatform platform);
@@ -23,8 +24,11 @@ std::unique_ptr<Scene> createCoreOptionsScene(GamePlatform platform);
 std::unique_ptr<Scene> createAboutScene();
 
 // 模态提示框（核心缺失 / 启动失败等重要信息；warn=true 红色警示边框）
+// okLabel：确认按钮文案；onOk：确认回调（空 = 仅关闭）
 std::unique_ptr<Scene> createMessageScene(const std::string& title,
-                                          const std::string& body, bool warn = true);
+                                          const std::string& body, bool warn = true,
+                                          const std::string& okLabel = "确定",
+                                          std::function<void()> onOk = nullptr);
 
 // 文件浏览器（选择目录 / 文件；title 标题；mode: 0=选目录 1=选文件 2=选核心）
 // 返回值经 std::function 回调

@@ -1,3 +1,5 @@
 // Windows 应用图标资源
-1 ICON "assets/icon.ico"
-IDI_ICON1 ICON DISCARDABLE "assets/icon.ico"
+// 注意：路径相对于 .rc 文件自身（icon.ico 与本文件同在 assets/ 目录）。
+// 不要写 "assets/icon.ico"——rc.exe 会以构建目录解析相对路径而报 RC2135。
+1 ICON "icon.ico"
+IDI_ICON1 ICON DISCARDABLE "icon.ico"

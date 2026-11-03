@@ -178,6 +178,7 @@ void InputManager::beginFrame() {
   }
   mousePressedAccum_ = false;
   mouseReleasedAccum_ = false;
+  mouseRightPressedAccum_ = false;
   wheelAccum_ = 0;
 }
 
@@ -205,6 +206,7 @@ void InputManager::endFrame(float dt) {
   ui_.mousePressed = mousePressedAccum_;
   ui_.mouseReleased = mouseReleasedAccum_;
   ui_.mouseHeld = mouseHeldNow_;
+  ui_.mouseRightPressed = mouseRightPressedAccum_;
   ui_.wheel = wheelAccum_;
   pollRetroState();
 }
@@ -301,18 +303,26 @@ void InputManager::handleEvent(const SDL_Event& ev) {
           mouseHeldNow_ = true;
           mousePressedAccum_ = true;
         }
-        setUiBtn(Btn::Ok, true);
+        // 注意：鼠标点击不再映射为 Btn::Ok —— 否则点窗口任意位置都会
+        // 触发“确认当前焦点项”。鼠标交互统一由各控件矩形命中测试处理
+        //（w::activated / 场景内 rc.contains）。
       }
-      if (ev.button.button == SDL_BUTTON_RIGHT) setUiBtn(Btn::Back, true);
+      if (ev.button.button == SDL_BUTTON_RIGHT) {
+        if (!mouseRightHeld_) {
+          mouseRightHeld_ = true;
+          mouseRightPressedAccum_ = true;
+        }
+      }
       break;
     case SDL_MOUSEBUTTONUP:
       ui_.mouse = Vec2((float)ev.button.x, (float)ev.button.y);
       if (ev.button.button == SDL_BUTTON_LEFT) {
         mouseHeldNow_ = false;
         mouseReleasedAccum_ = true;
-        setUiBtn(Btn::Ok, false);
       }
-      if (ev.button.button == SDL_BUTTON_RIGHT) setUiBtn(Btn::Back, false);
+      if (ev.button.button == SDL_BUTTON_RIGHT) {
+        mouseRightHeld_ = false;
+      }
       break;
     case SDL_MOUSEWHEEL:
       wheelAccum_ += ev.wheel.y;

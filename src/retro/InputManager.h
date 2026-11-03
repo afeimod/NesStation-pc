@@ -94,6 +94,8 @@ class InputManager {
   bool mousePressedAccum_ = false;
   bool mouseReleasedAccum_ = false;
   bool mouseHeldNow_ = false;
+  bool mouseRightHeld_ = false;
+  bool mouseRightPressedAccum_ = false;
   int wheelAccum_ = 0;
 
   // 长按重复

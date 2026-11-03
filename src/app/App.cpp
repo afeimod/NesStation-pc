@@ -11,6 +11,8 @@
 #include "util/Log.h"
 #include <nlohmann/json.hpp>
 
+#include <stb_image_write.h>
+
 namespace ns {
 
 using nlohmann::json;
@@ -114,6 +116,7 @@ bool App::init() {
   SDL_RenderSetLogicalSize(renderer_, winW_, winH_);
 
   draw.begin(renderer_, winW_, winH_);
+  setWindowIcon();
 
   // 数据目录与子系统
   dataDir_ = fsutil::dataDir();
@@ -188,6 +191,43 @@ void App::shutdown() {
   window_ = nullptr;
   SDL_Quit();
   logClose();
+}
+
+// 窗口图标：assets/icon32.png（与 Android 原版同源）
+void App::setWindowIcon() {
+  const std::string path = fsutil::join(fsutil::exeDir(), "assets/icon32.png");
+  int w = 0, h = 0, ch = 0;
+  unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 4);
+  if (!data) {
+    LOGW("窗口图标缺失：%s", path.c_str());
+    return;
+  }
+  SDL_Surface* surf =
+      SDL_CreateRGBSurfaceWithFormatFrom(data, w, h, 32, w * 4, SDL_PIXELFORMAT_ABGR8888);
+  if (surf) {
+    SDL_SetWindowIcon(window_, surf);
+    SDL_FreeSurface(surf);
+  }
+  stbi_image_free(data);
+}
+
+bool App::saveScreenshot(const std::string& pngPath) {
+  if (!renderer_) return false;
+  SDL_Rect vp{};
+  SDL_RenderGetViewport(renderer_, &vp);
+  SDL_Surface* surf =
+      SDL_CreateRGBSurfaceWithFormat(0, vp.w, vp.h, 32, SDL_PIXELFORMAT_ABGR8888);
+  if (!surf) return false;
+  if (SDL_RenderReadPixels(renderer_, &vp, SDL_PIXELFORMAT_ABGR8888, surf->pixels,
+                           surf->pitch) != 0) {
+    SDL_FreeSurface(surf);
+    LOGW("截图失败：%s", SDL_GetError());
+    return false;
+  }
+  const int ok = stbi_write_png(pngPath.c_str(), surf->w, surf->h, 4, surf->pixels,
+                                surf->pitch);
+  SDL_FreeSurface(surf);
+  return ok != 0;
 }
 
 void App::toggleFullscreen() {
@@ -314,6 +354,10 @@ void App::frame() {
 
   drawToasts(1.0f / 60.0f);
   SDL_RenderPresent(renderer_);
+
+  if (testHook_) {
+    testHook_(*this, testFrame_++);
+  }
 }
 
 void App::drawToasts(float dt) {

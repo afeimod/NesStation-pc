@@ -10,6 +10,13 @@ namespace {
 
 class SettingsScene : public Scene {
  public:
+  explicit SettingsScene(int initialTab = -1) {
+    if (initialTab >= 0 && initialTab < kCats) {
+      catSel_ = initialTab;
+      focusArea_ = 1;
+    }
+  }
+
   void onEnter(App& app) override { (void)app; }
 
   void update(App& app, float dt, const InputState& in) override {
@@ -38,7 +45,10 @@ class SettingsScene : public Scene {
       d.rect(Rect(0, app.draw.H * t, app.draw.W, app.draw.H / 40 + 1),
              sk.bg.lerp(sk.bgDeep, t));
     }
-    w::header(app, "设置", "Settings");
+    if (w::header(app, "设置", "Settings", true)) {
+      app.popScene();
+      return;
+    }
 
     const char* cats[kCats] = {"外观", "核心", "按键映射", "路径与扫描",
                                "独立模拟器", "BIOS / 系统", "数据"};
@@ -66,7 +76,7 @@ class SettingsScene : public Scene {
     }
     d.popClip();
 
-    w::hintBar(app, {{"A", "修改"}, {"←→", "切换选项"}, {"B", "返回"}});
+    w::keyHintBar(app, {{"A", "修改"}, {"←→", "切换选项"}, {"B / Esc", "返回"}});
   }
 
   // —— 外观 ——
@@ -138,6 +148,13 @@ class SettingsScene : public Scene {
     app.font.draw(app.sdlRenderer(),
                   "libretro 核心位于：" + app.cores.coreDir(), 270, y, 13, sk.textDim);
     y += 26;
+    if (app.cores.bundledCoreDir() != app.cores.coreDir()) {
+      app.font.draw(app.sdlRenderer(),
+                    "安装包内置核心（自动识别，可被上方目录同名核心覆盖）：" +
+                        app.cores.bundledCoreDir(),
+                    270, y, 13, sk.textDim);
+      y += 26;
+    }
     app.font.draw(app.sdlRenderer(),
                   "缺失时运行 scripts/fetch_cores.sh(.ps1) 一键下载官方 PC 预编译核心",
                   270, y, 13, sk.textDim);
@@ -402,8 +419,8 @@ class SettingsScene : public Scene {
 
 }  // namespace
 
-std::unique_ptr<Scene> createSettingsScene() {
-  return std::unique_ptr<Scene>(new SettingsScene());
+std::unique_ptr<Scene> createSettingsScene(int initialTab) {
+  return std::unique_ptr<Scene>(new SettingsScene(initialTab));
 }
 
 }  // namespace ns

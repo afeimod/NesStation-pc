@@ -1,6 +1,7 @@
 // NesStation PC — 应用中枢：窗口 / 主循环 / 场景栈 / 配置 / 子系统集合
 #pragma once
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -101,6 +102,12 @@ class App {
   void drawButtonHints();          // 底部手柄按键提示栏（场景共用）
   SDL_Renderer* sdlRenderer() { return renderer_; }
 
+  // 截图当前帧存 PNG（F12 快捷键 / 无头自检共用）
+  bool saveScreenshot(const std::string& pngPath);
+
+  // 每帧回调（仅调试/自检挂载；正常运行为空）
+  void setTestHook(std::function<void(App&, Uint32 frame)> h) { testHook_ = std::move(h); }
+
   // 游戏启动入口（EmulatorScene 接管）
   void launchGame(const GameEntry& game);
 
@@ -137,6 +144,10 @@ class App {
   std::map<std::string, TexEntry> texCache_;
   uint64_t frameNo_ = 0;
   void evictTextures();
+
+  void setWindowIcon();
+  std::function<void(App&, Uint32)> testHook_;
+  Uint32 testFrame_ = 0;
 };
 
 }  // namespace ns

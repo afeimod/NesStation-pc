@@ -42,6 +42,13 @@ class Draw {
                  Color8 tint = Color8(255, 255, 255, 255), bool flipV = false);
   void textureAspect(SDL_Texture* tex, const Rect& box,
                     Color8 tint = Color8(255, 255, 255, 255));  // contain 适配
+  // aspect-fill：裁剪源图填满 box（Neon 封面背景用），保持纹理不变形
+  void textureCrop(SDL_Texture* tex, const Rect& box,
+                   Color8 tint = Color8(255, 255, 255, 255));
+  // 透视四边形（3D 封面流）：xy 为四角屏幕坐标（左上/右上/右下/左下），
+  // uv 为对应纹理坐标（0..1）。SDL ≥ 2.0.18 走 SDL_RenderGeometry，
+  // 旧版退化为普通缩放拷贝。
+  void textureQuad(SDL_Texture* tex, const float xy[8], const float uv[8], Color8 tint);
 
   // —— 裁剪栈 ——
   void pushClip(const Rect& rc);

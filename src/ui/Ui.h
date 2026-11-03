@@ -90,15 +90,16 @@ struct InputState {
   bool released[(int)Btn::Count] = {};  // 本帧释放沿
 
   Vec2 mouse;
-  bool mouseHeld = false;     // 左键按住
-  bool mousePressed = false;  // 左键按下沿
+  bool mouseHeld = false;      // 左键按住
+  bool mousePressed = false;   // 左键按下沿
   bool mouseReleased = false;
+  bool mouseRightPressed = false;  // 右键按下沿（游戏内呼出菜单等）
   int wheel = 0;              // 本帧滚轮（+1 上 / -1 下）
 
   bool anyPressed() const {
     for (int i = 0; i < (int)Btn::Count; i++)
       if (pressed[i]) return true;
-    return mousePressed || wheel != 0;
+    return mousePressed || mouseRightPressed || wheel != 0;
   }
 };
 

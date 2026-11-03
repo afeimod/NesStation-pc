@@ -18,6 +18,9 @@ static const char* kLibExt = ".so";
 
 void CoreManager::init(const std::string& dataDir) {
   coreDir_ = fsutil::join(dataDir, "cores");
+  // 安装包内置核心：exe 同目录 cores/（Windows zip / Linux tar.gz / deb 的
+  // /opt/nesstation/cores；exeDir 经 /proc/self/exe 解析，/usr/bin 软链同样生效）
+  bundledCoreDir_ = fsutil::join(fsutil::exeDir(), "cores");
   systemDir_ = fsutil::join(dataDir, "system");
   savesDir_ = fsutil::join(dataDir, "saves");
   statesDir_ = fsutil::join(dataDir, "states");
@@ -34,13 +37,21 @@ void CoreManager::init(const std::string& dataDir) {
   LOGI("CoreManager 初始化：%s", dataDir.c_str());
 }
 
+std::string CoreManager::findCoreFile(const std::string& coreFile) const {
+  const std::string name = coreFile + kLibExt;
+  const std::string user = fsutil::join(coreDir_, name);
+  if (fsutil::isFile(user)) return user;
+  const std::string bundled = fsutil::join(bundledCoreDir_, name);
+  if (fsutil::isFile(bundled)) return bundled;
+  return "";
+}
+
 PlatformCore CoreManager::resolveCore(GamePlatform p) const {
   const std::vector<PlatformCore> chain = platformCoreChain(p);
   if (chain.empty()) return platformCore(p);
   for (const PlatformCore& c : chain) {
     if (c.kind != CoreKind::Libretro) return c;
-    if (fsutil::isFile(fsutil::join(coreDir_, std::string(c.coreFile) + kLibExt)))
-      return c;
+    if (!findCoreFile(c.coreFile).empty()) return c;
   }
   return chain.front();  // 全部缺失 → 返回首选（用于提示/选项）
 }
@@ -48,17 +59,15 @@ PlatformCore CoreManager::resolveCore(GamePlatform p) const {
 std::string CoreManager::corePathFor(GamePlatform p) const {
   const PlatformCore c = resolveCore(p);
   if (c.kind != CoreKind::Libretro) return "";
-  return fsutil::join(coreDir_, std::string(c.coreFile) + kLibExt);
+  return findCoreFile(c.coreFile);
 }
 
 bool CoreManager::libretroCoreAvailable(GamePlatform p) const {
   for (const PlatformCore& c : platformCoreChain(p)) {
     if (c.kind != CoreKind::Libretro) return false;  // Standalone 平台
-    if (fsutil::isFile(fsutil::join(coreDir_, std::string(c.coreFile) + kLibExt)))
-      return true;
+    if (!findCoreFile(c.coreFile).empty()) return true;
   }
-  return fsutil::isFile(fsutil::join(
-      coreDir_, std::string(platformCore(p).coreFile) + kLibExt));
+  return !findCoreFile(platformCore(p).coreFile).empty();
 }
 
 std::string CoreManager::availabilityHint(GamePlatform p) const {
@@ -78,6 +87,8 @@ std::string CoreManager::availabilityHint(GamePlatform p) const {
   hint += "libretro 预编译核心并非所有架构都提供，可任选其一：\n";
   hint += "① 运行 scripts/fetch_cores 脚本自动下载本架构可用核心\n";
   hint += "② 从 libretro buildbot 手动下载后放入：\n    " + coreDir_;
+  if (!bundledCoreDir_.empty() && bundledCoreDir_ != coreDir_)
+    hint += "\n（安装包若内置核心，位于 " + bundledCoreDir_ + "，自动识别）";
   return hint;
 }
 
@@ -162,6 +173,11 @@ std::vector<std::string> CoreManager::installedCores() const {
   std::vector<std::string> out;
   for (const auto& e : fsutil::listDir(coreDir_)) {
     if (!e.isDir) out.push_back(e.name);
+  }
+  // 内置目录去重后一并列出（设置页展示）
+  for (const auto& e : fsutil::listDir(bundledCoreDir_)) {
+    if (!e.isDir && std::find(out.begin(), out.end(), e.name) == out.end())
+      out.push_back(e.name);
   }
   return out;
 }

@@ -50,7 +50,9 @@ class EmulatorScene : public Scene {
 
     // —— 快捷键 ——
     if (!menuOpen_) {
-      if (in.pressed[(int)Btn::Menu] || in.pressed[(int)Btn::Back]) {
+      if (in.pressed[(int)Btn::Menu] || in.pressed[(int)Btn::Back] ||
+          in.mouseRightPressed) {
+        // F1 / Esc / B / 右键 → 呼出游戏菜单（鼠标玩家也能呼出）
         menuOpen_ = true;
         menuIndex_ = 0;
         subMode_ = Sub::Main;
@@ -86,6 +88,19 @@ class EmulatorScene : public Scene {
       const bool f11 = kbd[SDL_SCANCODE_F11] != 0;
       if (f11 && !f11Prev_) app.toggleFullscreen();
       f11Prev_ = f11;
+      const bool f12 = kbd[SDL_SCANCODE_F12] != 0;
+      if (f12 && !f12Prev_) {
+        const std::string dir = fsutil::join(app.dataDir(), "shots");
+        fsutil::makeDirs(dir);
+        char name[64];
+        snprintf(name, sizeof(name), "%u.png", (unsigned)SDL_GetTicks());
+        const std::string path = fsutil::join(dir, name);
+        if (app.saveScreenshot(path))
+          app.toast(std::string("截图已保存：") + name);
+        else
+          app.toast("截图失败");
+      }
+      f12Prev_ = f12;
     }
 
     if (menuOpen_) updateMenu(app, in);
@@ -195,6 +210,14 @@ class EmulatorScene : public Scene {
     const float panelW = 420;
     const float panelH = 520;
     Rect panel(app.draw.W / 2 - panelW / 2, app.draw.H / 2 - panelH / 2, panelW, panelH);
+    // 点击面板外 = 关闭菜单
+    {
+      const InputState& in = app.input.input();
+      if (in.mousePressed && !panel.contains(in.mouse)) {
+        closeMenu();
+        return;
+      }
+    }
     skinPanel(app.draw, panel, true, 14);
 
     const float pad = 24;
@@ -259,9 +282,14 @@ class EmulatorScene : public Scene {
         break;
       }
       case Sub::States: {
+        // 子页顶部返回行（鼠标玩家可见的返回入口）
+        {
+          const Rect rc(panel.x + pad * 0.5f, panel.y + 88, panelW - pad, 36);
+          if (w::listRow(app, rc, "‹ 返回主菜单", "", false)) subMode_ = Sub::Main;
+        }
         app.font.draw(app.sdlRenderer(), saveMode_ ? "存档到槽位" : "读取槽位",
-                      panel.x + pad, panel.y + 90, 18, sk.accent, true);
-        y = panel.y + 130;
+                      panel.x + pad, panel.y + 132, 18, sk.accent, true);
+        y = panel.y + 168;
         const auto existing = emu ? emu->slots(app) : std::vector<int>{};
         for (int slot = 0; slot <= 10; slot++) {
           if (y > panel.bottom() - 60) break;
@@ -291,9 +319,13 @@ class EmulatorScene : public Scene {
         break;
       }
       case Sub::Video: {
-        app.font.draw(app.sdlRenderer(), "画面设置", panel.x + pad, panel.y + 90, 18,
+        {
+          const Rect rc(panel.x + pad * 0.5f, panel.y + 88, panelW - pad, 36);
+          if (w::listRow(app, rc, "‹ 返回主菜单", "", false)) subMode_ = Sub::Main;
+        }
+        app.font.draw(app.sdlRenderer(), "画面设置", panel.x + pad, panel.y + 132, 18,
                       sk.accent, true);
-        y = panel.y + 130;
+        y = panel.y + 168;
         {
           const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
           std::vector<std::string> opts = {"保持比例", "拉伸填充", "整数缩放"};
@@ -338,9 +370,13 @@ class EmulatorScene : public Scene {
         break;
       }
       case Sub::Disk: {
-        app.font.draw(app.sdlRenderer(), "切换磁盘", panel.x + pad, panel.y + 90, 18,
+        {
+          const Rect rc(panel.x + pad * 0.5f, panel.y + 88, panelW - pad, 36);
+          if (w::listRow(app, rc, "‹ 返回主菜单", "", false)) subMode_ = Sub::Main;
+        }
+        app.font.draw(app.sdlRenderer(), "切换磁盘", panel.x + pad, panel.y + 132, 18,
                       sk.accent, true);
-        y = panel.y + 130;
+        y = panel.y + 168;
         if (emu && emu->core()) {
           DiskControl& dc = emu->core()->diskControl();
           const unsigned n = dc.numImages();
@@ -357,10 +393,11 @@ class EmulatorScene : public Scene {
       }
     }
 
-    w::hintBar(app, {
-                        {"A", "确认"},
-                        {"B", "返回"},
-                    });
+    w::keyHintBar(app, {
+                          {"A / 点击", "确认"},
+                          {"B / Esc / 右键", "返回"},
+                          {"点击面板外", "关闭"},
+                      });
   }
 
   void exitGame(App& app) {
@@ -382,6 +419,7 @@ class EmulatorScene : public Scene {
   bool fastForward_ = false;
   bool ffToggle_ = false;
   bool f5Prev_ = false, f6Prev_ = false, f8Prev_ = false, f11Prev_ = false;
+  bool f12Prev_ = false;
   double accum_ = 0;
   float fps_ = 0;
   int fpsAccum_ = 0;

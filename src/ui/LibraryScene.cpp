@@ -71,7 +71,11 @@ class LibraryScene : public Scene {
   void update(App& app, float dt, const InputState& in) override {
     (void)dt;
     if (in.pressed[(int)Btn::Back]) {
-      if (detailOpen_) {
+      if (renaming_) {
+        // 重命名中：Esc 仅取消重命名，不关详情/不退出场景
+        renaming_ = false;
+        app.input.textInputStop();
+      } else if (detailOpen_) {
         detailOpen_ = false;
       } else {
         app.popScene();
@@ -188,10 +192,6 @@ class LibraryScene : public Scene {
     }
     if (renaming_) {
       renameBuf_ = app.input.textBuffer();
-      if (app.input.input().pressed[(int)Btn::Back]) {
-        renaming_ = false;
-        app.input.textInputStop();
-      }
     }
   }
 
@@ -206,7 +206,17 @@ class LibraryScene : public Scene {
              sk.bg.lerp(sk.bgDeep, t));
     }
 
-    w::header(app, "游戏库", std::to_string(games_.size()) + " 个游戏");
+    if (w::header(app, "游戏库", std::to_string(games_.size()) + " 个游戏", true)) {
+      if (renaming_) {
+        renaming_ = false;
+        app.input.textInputStop();
+      } else if (detailOpen_) {
+        detailOpen_ = false;
+      } else {
+        app.popScene();
+      }
+      return;
+    }
 
     // —— 左侧过滤列表 ——
     float y = 120;
@@ -216,7 +226,7 @@ class LibraryScene : public Scene {
       std::string sub;
       if (cats_[i].id == -1) sub = std::to_string(app.library.games().size());
       else if (cats_[i].id == -2) sub = std::to_string(app.library.favorites().size());
-      else if (cats_[i].id == -3) sub = "";
+      else if (cats_[i].id == -3) sub = std::to_string(app.library.recent(100).size());
       else sub = std::to_string(app.library.countFor((GamePlatform)cats_[i].id));
       if (w::listRow(app, rc, cats_[i].name, sub, focused)) {
         catSel_ = (int)i;
@@ -246,11 +256,6 @@ class LibraryScene : public Scene {
       const Rect rc(gx, gy, cw, ch);
       const bool focused = focusArea_ == 1 && gridSel_ == idx;
       w::coverCard(app, rc, games_[(size_t)idx], focused);
-      // 标题
-      const std::string title =
-          app.font.ellipsize(games_[(size_t)idx].displayTitle(), 13, cw);
-      app.font.draw(app.sdlRenderer(), title, gx, gy + ch + 5, 13,
-                    focused ? sk.textHi : sk.text);
       // 鼠标
       if (rc.contains(app.input.input().mouse)) {
         gridSel_ = idx;
@@ -278,7 +283,8 @@ class LibraryScene : public Scene {
     if (detailOpen_) drawDetail(app);
     if (renaming_) drawRename(app);
 
-    w::hintBar(app, {{"A", "详情"}, {"X", "收藏"}, {"B", "返回"}, {"Start", "设置"}});
+    w::keyHintBar(app, {{"A", "详情"}, {"X / F", "收藏"}, {"B / Esc", "返回"},
+                        {"Start", "设置"}});
   }
 
   void startAddRomDir(App& app) {
@@ -417,7 +423,7 @@ class LibraryScene : public Scene {
       renaming_ = false;
       app.input.textInputStop();
     }
-    w::hintBar(app, {{"Enter/退格", "输入"}, {"Esc", "取消"}});
+    w::keyHintBar(app, {{"Enter / 退格", "输入"}, {"Esc", "取消"}});
   }
 
  private:

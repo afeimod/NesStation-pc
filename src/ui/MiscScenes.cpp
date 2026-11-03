@@ -96,15 +96,30 @@ class CoreOptionsScene : public Scene {
              sk.bg.lerp(sk.bgDeep, t));
     }
     const PlatformCore pc = app.cores.resolveCore(platform_);
-    w::header(app, std::string("核心设置 · ") + pc.coreTitle,
-              live_ ? "游戏运行中 · 热生效" : platformFullName(platform_));
+    if (w::header(app, std::string("核心设置 · ") + pc.coreTitle,
+                  live_ ? "游戏运行中 · 热生效" : platformFullName(platform_), true)) {
+      app.popScene();
+      return;
+    }
 
     LibretroCore* c = core(app);
     if (!c) return;
     const auto& opts = c->options();
 
-    d.pushClip(Rect(24, 110, app.draw.W - 48, app.draw.H - 150));
-    float y = 116;
+    // 滚轮滚动长列表
+    const Rect listRc(24, 110, app.draw.W - 48, app.draw.H - 150);
+    if (listRc.contains(app.input.input().mouse)) {
+      scroll_ = std::max(0.0f, scroll_ - (float)app.input.input().wheel * 56.0f);
+    }
+    // 焦点行跟随滚动可见
+    {
+      const float rowY = 116 + (float)sel_ * 56 - scroll_;
+      if (rowY < listRc.y) scroll_ -= (listRc.y - rowY);
+      if (rowY > listRc.bottom() - 56) scroll_ += (rowY - (listRc.bottom() - 56));
+      if (scroll_ < 0) scroll_ = 0;
+    }
+    d.pushClip(listRc);
+    float y = 116 - scroll_;
     if (opts.empty()) {
       app.font.draw(app.sdlRenderer(), "该核心没有可配置选项", 40, 140, 16, sk.textDim);
     }
@@ -137,11 +152,19 @@ class CoreOptionsScene : public Scene {
         applyOption(app, o, idx);
       }
       y += 56;
-      if (y > app.draw.H - 200) break;
     }
     d.popClip();
+    // 滚动条
+    {
+      const float total = 116 + (float)opts.size() * 56;
+      const float viewH = listRc.h;
+      if (total > viewH) {
+        w::scrollIndicator(app, Rect(app.draw.W - 12, listRc.y, 6, listRc.h),
+                           viewH / (total - 116), scroll_ / (total - 116 - viewH));
+      }
+    }
 
-    w::hintBar(app, {{"←→", "切换值"}, {"A", "下一项"}, {"B", "返回"}});
+    w::keyHintBar(app, {{"←→", "切换值"}, {"A", "下一项"}, {"B / Esc", "返回"}});
   }
 
  private:
@@ -149,6 +172,7 @@ class CoreOptionsScene : public Scene {
   bool live_ = false;
   std::unique_ptr<LibretroCore> temp_;
   int sel_ = 0;
+  float scroll_ = 0;
 };
 
 // ==================== 文件浏览器 ====================
@@ -165,8 +189,6 @@ class FileBrowserScene : public Scene {
   void update(App& app, float dt, const InputState& in) override {
     (void)dt;
     if (in.pressed[(int)Btn::Back]) {
-      if (inHoldingBack_) {
-      }
       app.popScene();
       return;
     }
@@ -247,31 +269,56 @@ class FileBrowserScene : public Scene {
     const Skin& sk = Theme::skin();
     Draw& d = app.draw;
     d.rect(Rect(0, 0, app.draw.W, app.draw.H), sk.bgDeep);
-    w::header(app, req_.title, fsutil::pathDisplay(drivesMode_ ? "本电脑" : cur_));
+    if (w::header(app, req_.title, fsutil::pathDisplay(drivesMode_ ? "本电脑" : cur_),
+                  true)) {
+      // 返回 = 取消
+      app.popScene();
+      if (req_.onCancel) req_.onCancel();
+      return;
+    }
 
     // 目录模式下：选择当前目录按钮
     if (req_.mode == 0 && !drivesMode_) {
       const Rect pickRc(app.draw.W - 240, 30, 200, 46);
-      if (w::button(app, pickRc, "选择此目录", true, 16, true)) {
+      if (w::primaryButton(app, pickRc, "选择此目录", 4)) {
         app.popScene();
         if (req_.onPick) req_.onPick(cur_);
         return;
       }
     }
 
-    d.pushClip(Rect(24, 110, app.draw.W - 48, app.draw.H - 160));
-    float y = 116;
+    // 滚轮滚动
+    const Rect listRc(24, 110, app.draw.W - 48, app.draw.H - 160);
+    if (listRc.contains(app.input.input().mouse)) {
+      scroll_ = std::max(0.0f, scroll_ - (float)app.input.input().wheel * 48.0f);
+    }
+    // 焦点行跟随可见
+    {
+      const float rowY = 116 + (float)sel_ * 48 - scroll_;
+      if (rowY < listRc.y) scroll_ -= (listRc.y - rowY);
+      if (rowY > listRc.bottom() - 48) scroll_ += (rowY - (listRc.bottom() - 48));
+      if (scroll_ < 0) scroll_ = 0;
+    }
+    d.pushClip(listRc);
+    float y = 116 - scroll_;
     for (size_t i = 0; i < entries_.size(); i++) {
       const Rect rc(24, y, app.draw.W - 60, 42);
       if (w::listRow(app, rc, entries_[i].name, entries_[i].dir ? "目录" : "", sel_ == (int)i)) {
         activate(app, entries_[(size_t)i]);
       }
       y += 48;
-      if (y > app.draw.H - 170) break;
     }
     d.popClip();
+    // 滚动条
+    {
+      const float total = 116 + (float)entries_.size() * 48;
+      if (total > listRc.h) {
+        w::scrollIndicator(app, Rect(app.draw.W - 12, listRc.y, 6, listRc.h),
+                           listRc.h / (total - 116), scroll_ / (total - 116 - listRc.h));
+      }
+    }
 
-    w::hintBar(app, {{"A", "进入 / 选择"}, {"B", "返回"}});
+    w::keyHintBar(app, {{"A / 双击", "进入 / 选择"}, {"B / Esc", "返回"}});
   }
 
  private:
@@ -279,24 +326,30 @@ class FileBrowserScene : public Scene {
   std::string cur_;
   std::vector<Entry> entries_;
   int sel_ = 0;
+  float scroll_ = 0;
   bool drivesMode_ = false;
-  bool inHoldingBack_ = false;
 };
 
 // ==================== 模态提示框 ====================
 // 用于核心缺失 / 启动失败等重要信息的醒目提示（区别于轻量 toast）
 class MessageScene : public Scene {
  public:
-  MessageScene(const std::string& title, const std::string& body,
-               bool warn = true)
-      : title_(title), body_(body), warn_(warn) {}
+  MessageScene(const std::string& title, const std::string& body, bool warn,
+               std::string okLabel, std::function<void()> onOk)
+      : title_(title), body_(body), warn_(warn), okLabel_(std::move(okLabel)),
+        onOk_(std::move(onOk)) {}
 
   void update(App& app, float dt, const InputState& in) override {
     (void)dt;
     if (in.pressed[(int)Btn::Ok] || in.pressed[(int)Btn::Back] ||
         in.pressed[(int)Btn::Menu]) {
-      app.popScene();
+      confirm(app);
     }
+  }
+
+  void confirm(App& app) {
+    app.popScene();
+    if (onOk_) onOk_();
   }
 
   void draw(App& app) override {
@@ -352,15 +405,16 @@ class MessageScene : public Scene {
     }
 
     // 确定按钮
-    const Rect btn(panel.cx() - 90, panel.bottom() - 66, 180, 46);
-    if (w::button(app, btn, "确定", true, 17, true)) app.popScene();
+    const Rect btn(panel.cx() - 100, panel.bottom() - 66, 200, 46);
+    if (w::primaryButton(app, btn, okLabel_)) confirm(app);
 
-    w::hintBar(app, {{"A / B", "关闭"}});
+    w::keyHintBar(app, {{"A / Esc", "关闭"}});
   }
 
  private:
-  std::string title_, body_;
+  std::string title_, body_, okLabel_;
   bool warn_ = true;
+  std::function<void()> onOk_;
 };
 
 // ==================== 关于 ====================
@@ -379,7 +433,10 @@ class AboutScene : public Scene {
       d.rect(Rect(0, app.draw.H * t, app.draw.W, app.draw.H / 40 + 1),
              sk.bg.lerp(sk.bgDeep, t));
     }
-    w::header(app, "关于 NesStation PC");
+    if (w::header(app, "关于 NesStation PC", "", true)) {
+      app.popScene();
+      return;
+    }
 
     const float cx = app.draw.W / 2;
     app.font.draw(app.sdlRenderer(), "NESSTATION", cx - app.font.textWidth("NESSTATION", 52, true) / 2,
@@ -408,7 +465,7 @@ class AboutScene : public Scene {
                     s.find("核心矩阵") != std::string::npos ? sk.accent : sk.text);
       y += 26;
     }
-    w::hintBar(app, {{"A/B", "返回"}});
+    w::keyHintBar(app, {{"A / B / Esc", "返回"}});
   }
 };
 
@@ -427,8 +484,11 @@ std::unique_ptr<Scene> createAboutScene() {
 }
 
 std::unique_ptr<Scene> createMessageScene(const std::string& title,
-                                          const std::string& body, bool warn) {
-  return std::unique_ptr<Scene>(new MessageScene(title, body, warn));
+                                          const std::string& body, bool warn,
+                                          const std::string& okLabel,
+                                          std::function<void()> onOk) {
+  return std::unique_ptr<Scene>(
+      new MessageScene(title, body, warn, okLabel, std::move(onOk)));
 }
 
 }  // namespace ns

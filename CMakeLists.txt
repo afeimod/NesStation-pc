@@ -45,6 +45,13 @@ file(GLOB_RECURSE NESSTATION_SOURCES CONFIGURE_DEPENDS
 add_executable(nesstation ${NESSTATION_SOURCES}
                ${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.rc)
 
+if(MSVC)
+  # rc.exe 以构建目录为工作目录解析 .rc 里的相对路径；显式把 assets/ 加入
+  # RC 搜索路径，确保 icon.rc 能找到同目录的 icon.ico（RC2135 兜底）
+  set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.rc PROPERTIES
+    COMPILE_FLAGS "/I\"${CMAKE_CURRENT_SOURCE_DIR}/assets\"")
+endif()
+
 set_target_properties(nesstation PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 

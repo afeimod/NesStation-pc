@@ -5,6 +5,8 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1 nes psx 3ds
 #     （参数 = 平台短名：nes sfc gb gba md pce nds psx ps2 dc n3ds psp arcade dos java）
+#   powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1 -Dest DIR [平台...]
+#     （-Dest：下载到指定目录，打包/便携分发用）
 #
 # 核心来源：https://buildbot.libretro.com/nightly/windows/x86_64/latest/
 # 每个平台按候选链依次尝试（与 src/core/Platform.cpp 一致），某个核心
@@ -13,7 +15,7 @@
 # 下载后自动解压到 <数据目录>\cores\（%APPDATA%\NesStation\cores\；
 # exe 旁有 portable.flag 时为 <exe 目录>\UserData\cores\）
 # ============================================================================
-param([string[]]$Only)
+param([string]$Dest, [string[]]$Only)
 
 $ErrorActionPreference = 'Continue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -38,7 +40,9 @@ $PlatformCores = @(
 )
 
 $exeDir = Split-Path -Parent $PSScriptRoot
-if (Test-Path "$exeDir\portable.flag") {
+if ($Dest) {
+  $coresDir = $Dest
+} elseif (Test-Path "$exeDir\portable.flag") {
   $coresDir = "$exeDir\UserData\cores"
 } else {
   $coresDir = "$env:APPDATA\NesStation\cores"
@@ -80,7 +84,19 @@ foreach ($plat in $PlatformCores) {
       if (Test-Path $dest) { $got = $core; break }
       Write-Host "         $core 解压后未找到核心，尝试替代..."
     } catch {
-      Write-Host "         $core 不可用（$($_.Exception.Message)），尝试替代核心..."
+      if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+        Write-Host "         $core 在本架构不可用（404），尝试替代核心..."
+      } else {
+        # 网络抖动重试一次
+        try {
+          Start-Sleep -Seconds 5
+          Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing -TimeoutSec 600
+          Expand-Archive -Path $tmpZip -DestinationPath $coresDir -Force
+          if (Test-Path $dest) { $got = $core; break }
+        } catch {
+          Write-Host "         $core 下载失败（$($_.Exception.Message)），尝试替代核心..."
+        }
+      }
     } finally {
       if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force }
     }

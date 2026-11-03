@@ -14,7 +14,10 @@ class CoreManager {
   void init(const std::string& dataDir);
 
   // 目录
+  // coreDir：用户数据目录下的 cores/（用户下载/更新的核心，优先）
+  // bundledCoreDir：exe 同目录 cores/（安装包内置核心，随包分发，只读）
   const std::string& coreDir() const { return coreDir_; }
+  const std::string& bundledCoreDir() const { return bundledCoreDir_; }
   const std::string& systemDir() const { return systemDir_; }
   const std::string& savesDir() const { return savesDir_; }
   const std::string& statesDir() const { return statesDir_; }
@@ -49,7 +52,10 @@ class CoreManager {
   std::vector<std::string> installedCores() const;
 
  private:
-  std::string coreDir_, systemDir_, savesDir_, statesDir_, optionsDir_;
+  // 按优先级查找核心文件（数据目录 → exe 旁内置目录）；找不到返回空串
+  std::string findCoreFile(const std::string& coreFile) const;
+
+  std::string coreDir_, bundledCoreDir_, systemDir_, savesDir_, statesDir_, optionsDir_;
 };
 
 }  // namespace ns

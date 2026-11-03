@@ -227,6 +227,60 @@ void Draw::textureAspect(SDL_Texture* tex, const Rect& box, Color8 tint) {
   texture(tex, Rect(box.cx() - dw / 2, box.cy() - dh / 2, dw, dh), tint);
 }
 
+void Draw::textureCrop(SDL_Texture* tex, const Rect& box, Color8 tint) {
+  if (!tex) return;
+  int w = 0, h = 0;
+  SDL_QueryTexture(tex, nullptr, nullptr, &w, &h);
+  if (w <= 0 || h <= 0) return;
+  // aspect-fill：源图裁剪出与 box 同比例的居中区域
+  const float boxAspect = box.w / box.h;
+  SDL_Rect src;
+  if ((float)w / h > boxAspect) {
+    src.h = h;
+    src.w = (int)(h * boxAspect);
+    src.x = (w - src.w) / 2;
+    src.y = 0;
+  } else {
+    src.w = w;
+    src.h = (int)(w / boxAspect);
+    src.x = 0;
+    src.y = (h - src.h) / 2;
+  }
+  SDL_SetTextureColorMod(tex, tint.r, tint.g, tint.b);
+  SDL_SetTextureAlphaMod(tex, tint.a);
+  SDL_Rect dst{(int)box.x, (int)box.y, (int)box.w, (int)box.h};
+  SDL_RenderCopy(ren, tex, &src, &dst);
+}
+
+void Draw::textureQuad(SDL_Texture* tex, const float xy[8], const float uv[8],
+                       Color8 tint) {
+  if (!tex) return;
+  SDL_SetTextureColorMod(tex, tint.r, tint.g, tint.b);
+  SDL_SetTextureAlphaMod(tex, tint.a);
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+  // 左上 / 右上 / 右下 / 左下 → 两个三角形（0-1-2, 0-2-3）
+  SDL_Vertex vx[4];
+  for (int i = 0; i < 4; i++) {
+    vx[i].position.x = xy[i * 2];
+    vx[i].position.y = xy[i * 2 + 1];
+    vx[i].color = SDL_Color{255, 255, 255, 255};
+    vx[i].tex_coord.x = uv[i * 2];
+    vx[i].tex_coord.y = uv[i * 2 + 1];
+  }
+  const int idx[6] = {0, 1, 2, 0, 2, 3};
+  SDL_RenderGeometry(ren, tex, vx, 4, idx, 6);
+#else
+  // 旧版 SDL：退化为包围盒缩放拷贝（无透视，但布局不乱）
+  const float minX = std::min({xy[0], xy[2], xy[4], xy[6]});
+  const float minY = std::min({xy[1], xy[3], xy[5], xy[7]});
+  const float maxX = std::max({xy[0], xy[2], xy[4], xy[6]});
+  const float maxY = std::max({xy[1], xy[3], xy[5], xy[7]});
+  SDL_Rect dst{(int)minX, (int)minY, (int)(maxX - minX), (int)(maxY - minY)};
+  SDL_RenderCopy(ren, tex, nullptr, &dst);
+#endif
+}
+
+
 void Draw::pushClip(const Rect& rc) {
   SDL_Rect r{(int)rc.x, (int)rc.y, (int)rc.w, (int)rc.h};
   SDL_RenderSetClipRect(ren, &r);

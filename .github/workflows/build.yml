@@ -57,6 +57,15 @@ jobs:
           SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./smoke/test \
             smoke/cores/fceumm_libretro.so smoke/test.nes smoke
 
+      - name: Bundle cores (buildbot x86_64)
+        run: |
+          mkdir -p dist/NesStation-linux/cores
+          # 下载本架构全部可用核心进包（azahar 等缺失时自动回退替代核心）
+          bash scripts/fetch_cores.sh --dest dist/NesStation-linux/cores || true
+          n=$(find dist/NesStation-linux/cores -name '*_libretro.so' | wc -l)
+          echo "bundled cores: $n / 15"
+          test "$n" -ge 12
+
       - name: Package (portable tar.gz)
         run: |
           mkdir -p dist/NesStation-linux/cores dist/NesStation-linux/assets/fonts
@@ -123,6 +132,16 @@ jobs:
           SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./smoke/test \
             smoke/cores/fceumm_libretro.so smoke/test.nes smoke
 
+      - name: Bundle cores (buildbot aarch64)
+        run: |
+          # 核心进 deb：/opt/nesstation/cores（exe 同目录，CoreManager 自动识别）
+          # azahar 在 aarch64 无预编译包 → 自动回退 citra
+          mkdir -p dist/root/opt/nesstation/cores
+          bash scripts/fetch_cores.sh --dest dist/root/opt/nesstation/cores || true
+          n=$(find dist/root/opt/nesstation/cores -name '*_libretro.so' | wc -l)
+          echo "bundled cores: $n / 15"
+          test "$n" -ge 12
+
       - name: Package (.deb, Debian/Ubuntu)
         env:
           DEB_VERSION: "1.0.0"
@@ -130,6 +149,7 @@ jobs:
           set -eux
           PKG="dist/root"
           mkdir -p "$PKG/opt/nesstation/assets/fonts" \
+                   "$PKG/opt/nesstation/cores" \
                    "$PKG/usr/bin" \
                    "$PKG/usr/share/applications" \
                    "$PKG/usr/share/icons/hicolor/256x256/apps" \
@@ -207,6 +227,17 @@ jobs:
       - name: Build
         run: cmake --build build --config Release -- -m
 
+      - name: Bundle cores (buildbot windows x64)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/NesStation-windows/cores" | Out-Null
+          # 下载全部可用核心进包（缺失时自动回退替代核心）
+          ./scripts/fetch_cores.ps1 -Dest "dist/NesStation-windows/cores"
+          $n = (Get-ChildItem "dist/NesStation-windows/cores" -Filter '*_libretro.dll').Count
+          Write-Host "bundled cores: $n / 15"
+          if ($n -lt 12) { throw "内置核心过少：$n" }
+          exit 0
+
       - name: Package
         shell: pwsh
         run: |
@@ -216,6 +247,9 @@ jobs:
           Copy-Item assets/fonts/*.ttf $out/assets/fonts/
           Copy-Item README.md, LICENSE $out/
           Copy-Item scripts/fetch_cores.ps1 $out/
+          # 内置核心目录（已由上一步下载填充）
+          $cores = (Get-ChildItem "$out/cores/*_libretro.dll").Count
+          Write-Host "packaging with $cores bundled cores"
           Compress-Archive -Path $out -DestinationPath dist/NesStation-windows-x64.zip
 
       - uses: actions/upload-artifact@v4

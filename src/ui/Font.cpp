@@ -138,7 +138,47 @@ bool FontCache::atlasPlace(Atlas& atlas, int w, int h) {
 
 const FontCache::Glyph& FontCache::bake(Atlas& atlas, float size, bool bold, uint32_t cp) {
   auto it = atlas.glyphs.find(cp);
-  if (it != atlas.glyphs.end()) return it->second;
+  if (it != atlas.glyphs.end()) {
+    // 防御：历史上经无渲染器路径只测量未上传的字形（px=py=0 且有位图），
+    // 现在渲染器就绪 → 立即补上传（真实放置坐标恒 ≥1，0,0 不会误判）
+    if (it->second.w > 0 && it->second.h > 0 && it->second.px == 0 &&
+        it->second.py == 0 && bakeRenderer_) {
+      if (!atlas.tex) {
+        atlas.tex = SDL_CreateTexture(bakeRenderer_, SDL_PIXELFORMAT_ARGB8888,
+                                      SDL_TEXTUREACCESS_STREAMING, atlas.size, atlas.size);
+        if (atlas.tex) {
+          std::vector<uint32_t> zeros((size_t)atlas.size * atlas.size, 0);
+          SDL_UpdateTexture(atlas.tex, nullptr, zeros.data(), atlas.size * 4);
+          SDL_SetTextureBlendMode(atlas.tex, SDL_BLENDMODE_BLEND);
+        }
+      }
+      if (atlas.tex) {
+        stbtt_fontinfo* f2 =
+            reinterpret_cast<stbtt_fontinfo*>((bold && boldFont_) ? boldFont_ : regFont_);
+        if (!f2) f2 = reinterpret_cast<stbtt_fontinfo*>(regFont_);
+        int w2 = 0, h2 = 0;
+        unsigned char* bmp2 = stbtt_GetCodepointBitmap(
+            f2, 0, stbtt_ScaleForPixelHeight(f2, size), cp, &w2, &h2, nullptr, nullptr);
+        if (bmp2 && w2 > 0 && h2 > 0 && atlasPlace(atlas, w2, h2)) {
+          std::vector<uint32_t> buf((size_t)w2 * h2);
+          for (int i = 0; i < w2 * h2; i++)
+            buf[i] = ((uint32_t)bmp2[i] << 24) | 0x00FFFFFFu;
+          SDL_Rect r2{atlas.cursorX, atlas.cursorY, w2, h2};
+          SDL_UpdateTexture(atlas.tex, &r2, buf.data(), w2 * 4);
+          it->second.px = atlas.cursorX;
+          it->second.py = atlas.cursorY;
+          it->second.u0 = (float)atlas.cursorX / atlas.size;
+          it->second.v0 = (float)atlas.cursorY / atlas.size;
+          it->second.u1 = (float)(atlas.cursorX + w2) / atlas.size;
+          it->second.v1 = (float)(atlas.cursorY + h2) / atlas.size;
+          atlas.cursorX += w2 + 1;
+          atlas.rowH = std::max(atlas.rowH, h2);
+        }
+        if (bmp2) stbtt_FreeBitmap(bmp2, nullptr);
+      }
+    }
+    return it->second;
+  }
 
   stbtt_fontinfo* font =
       (bold && boldFont_) ? reinterpret_cast<stbtt_fontinfo*>(boldFont_)
@@ -238,12 +278,22 @@ float FontCache::drawVCentered(SDL_Renderer* r, const std::string& utf8, float x
 }
 
 float FontCache::textWidth(const std::string& utf8, float size, bool bold) {
-  Atlas& atlas = atlasFor(size, bold);
+  // 直接用 stbtt 度量，不烘焙字形：
+  // bake() 需要渲染器（bakeRenderer_）才能建图集纹理；若在首次 draw 之前
+  // 经 textWidth 烘焙，字形会以 px=py=0 入缓存却从未上传 —— 永久不可见
+  // （曾导致主页徽标 NES·STATION 整串消失）。
+  stbtt_fontinfo* font =
+      (bold && boldFont_) ? reinterpret_cast<stbtt_fontinfo*>(boldFont_)
+                          : reinterpret_cast<stbtt_fontinfo*>(regFont_);
+  if (!font) font = reinterpret_cast<stbtt_fontinfo*>(regFont_);
+  if (!font) return 0;
+  const float scale = stbtt_ScaleForPixelHeight(font, size);
   const auto cps = utf8ToCodepoints(utf8);
   float w = 0;
   for (uint32_t cp : cps) {
-    const Glyph& g = bake(atlas, size, bold, cp);
-    w += g.advance;
+    int adv = 0, lsb = 0;
+    stbtt_GetCodepointHMetrics(font, cp, &adv, &lsb);
+    w += (float)adv * scale;
   }
   return w;
 }
