@@ -1,0 +1,143 @@
+#include "retro/CoreManager.h"
+
+#include <algorithm>
+
+#include "util/Fs.h"
+#include "util/Log.h"
+#include <nlohmann/json.hpp>
+
+namespace ns {
+
+using nlohmann::json;
+
+#ifdef _WIN32
+static const char* kLibExt = ".dll";
+#else
+static const char* kLibExt = ".so";
+#endif
+
+void CoreManager::init(const std::string& dataDir) {
+  coreDir_ = fsutil::join(dataDir, "cores");
+  systemDir_ = fsutil::join(dataDir, "system");
+  savesDir_ = fsutil::join(dataDir, "saves");
+  statesDir_ = fsutil::join(dataDir, "states");
+  optionsDir_ = fsutil::join(dataDir, "core-options");
+  for (const char* d : {coreDir_.c_str(), systemDir_.c_str(), savesDir_.c_str(),
+                        statesDir_.c_str(), optionsDir_.c_str()}) {
+    fsutil::makeDirs(d);
+  }
+  // 核心子目录（FBNeo BIOS 等）
+  fsutil::makeDirs(fsutil::join(systemDir_, "fbneo"));
+  fsutil::makeDirs(fsutil::join(systemDir_, "pcsx2"));
+  fsutil::makeDirs(fsutil::join(systemDir_, "azahar"));
+  fsutil::makeDirs(fsutil::join(systemDir_, "dc"));
+  LOGI("CoreManager 初始化：%s", dataDir.c_str());
+}
+
+std::string CoreManager::corePathFor(GamePlatform p) const {
+  const PlatformCore c = platformCore(p);
+  if (c.kind != CoreKind::Libretro) return "";
+  return fsutil::join(coreDir_, std::string(c.coreFile) + kLibExt);
+}
+
+bool CoreManager::libretroCoreAvailable(GamePlatform p) const {
+  return fsutil::isFile(corePathFor(p));
+}
+
+std::string CoreManager::availabilityHint(GamePlatform p) const {
+  const PlatformCore c = platformCore(p);
+  if (c.kind == CoreKind::Standalone) {
+    return std::string("需要 PC 版 ") + c.coreTitle +
+           "：放在应用目录 emulators/ 下或到设置页配置安装路径";
+  }
+  if (libretroCoreAvailable(p)) return "";
+  return std::string("缺少核心文件 ") + c.coreFile + kLibExt +
+         " —— 运行 scripts/fetch_cores 脚本下载，或手动放入 " + coreDir_;
+}
+
+std::string CoreManager::resolveOption(const std::string& coreKey,
+                                       const std::string& optKey) const {
+  const auto kv = loadOptions(coreKey);
+  const auto it = kv.find(optKey);
+  return it != kv.end() ? it->second : "";
+}
+
+void CoreManager::storeOption(const std::string& coreKey, const std::string& optKey,
+                              const std::string& value) {
+  auto kv = loadOptions(coreKey);
+  kv[optKey] = value;
+  saveOptions(coreKey, kv);
+}
+
+std::map<std::string, std::string> CoreManager::loadOptions(
+    const std::string& coreKey) const {
+  std::map<std::string, std::string> out;
+  const std::string file = fsutil::join(optionsDir_, coreKey + ".json");
+  std::string text;
+  if (fsutil::readFile(file, &text)) {
+    try {
+      const json j = json::parse(text, nullptr, false);
+      if (!j.is_discarded() && j.is_object()) {
+        for (auto it = j.begin(); it != j.end(); ++it)
+          out[it.key()] = it.value().get<std::string>();
+      }
+    } catch (...) {
+    }
+  }
+  return out;
+}
+
+void CoreManager::saveOptions(const std::string& coreKey,
+                              const std::map<std::string, std::string>& kv) {
+  json j = json::object();
+  for (const auto& [k, v] : kv) j[k] = v;
+  const std::string file = fsutil::join(optionsDir_, coreKey + ".json");
+  fsutil::writeFile(file, j.dump(2));
+}
+
+std::string CoreManager::statePath(const std::string& gameId, int slot) const {
+  const std::string dir = fsutil::join(statesDir_, gameId);
+  fsutil::makeDirs(dir);
+  return fsutil::join(dir, slot <= 0 ? "auto.state" : ("slot" + std::to_string(slot) + ".state"));
+}
+
+std::vector<int> CoreManager::existingSlots(const std::string& gameId) const {
+  std::vector<int> out;
+  const std::string dir = fsutil::join(statesDir_, gameId);
+  for (const auto& e : fsutil::listDir(dir)) {
+    if (e.isDir) continue;
+    const std::string n = fsutil::stemOf(e.name);
+    if (n == "auto") out.push_back(0);
+    else if (n.rfind("slot", 0) == 0) {
+      try {
+        out.push_back(std::stoi(n.substr(4)));
+      } catch (...) {
+      }
+    }
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+bool CoreManager::saveState(LibretroCore& core, const std::string& gameId, int slot) {
+  std::vector<uint8_t> data;
+  if (!core.serialize(&data)) return false;
+  return fsutil::writeFile(statePath(gameId, slot),
+                           std::string((const char*)data.data(), data.size()));
+}
+
+bool CoreManager::loadState(LibretroCore& core, const std::string& gameId, int slot) {
+  std::string data;
+  if (!fsutil::readFile(statePath(gameId, slot), &data)) return false;
+  return core.unserialize((const uint8_t*)data.data(), data.size());
+}
+
+std::vector<std::string> CoreManager::installedCores() const {
+  std::vector<std::string> out;
+  for (const auto& e : fsutil::listDir(coreDir_)) {
+    if (!e.isDir) out.push_back(e.name);
+  }
+  return out;
+}
+
+}  // namespace ns

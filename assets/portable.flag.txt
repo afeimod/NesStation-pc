@@ -1,0 +1,22 @@
+NesStation PC 便携模式
+======================
+
+此文件（portable.flag）存在时，NesStation 将把全部用户数据保存到
+可执行文件旁边的 UserData/ 目录，而不是系统的用户配置目录：
+
+  Windows: %APPDATA%\NesStation\   →   <exe目录>\UserData\
+  Linux:   ~/.config/NesStation/   →   <exe目录>/UserData\
+
+UserData/ 内包含：
+  cores/          libretro 核心（fetch_cores 脚本也识别便携模式）
+  system/         BIOS / 系统文件
+  saves/          SRAM 存档
+  states/         即时存档
+  covers/         封面缓存
+  core-options/   核心选项持久化
+  library.json    游戏库
+  config.json     应用配置
+  nesstation.log  日志
+
+整个目录随 exe 拷贝即迁移，适合 U 盘 / 免安装使用。
+删除此文件即恢复系统配置目录模式（数据不会自动迁移）。

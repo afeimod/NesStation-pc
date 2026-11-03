@@ -1,0 +1,38 @@
+# 构建产物
+build/
+build-*/
+out/
+dist/
+*.obj
+*.o
+*.a
+*.lib
+*.exe
+*.dll
+*.so
+*.pdb
+*.ilk
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+CMakeSettings.json
+compile_commands.json
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake.tmp
+
+# 运行时数据（本地调试）
+UserData/
+*.log
+.DS_Store
+
+# 模拟器超级构建目录
+bundle/

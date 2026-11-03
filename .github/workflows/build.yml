@@ -1,0 +1,87 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux (GCC, x86_64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libsdl2-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DNESSTATION_USE_SYSTEM_SDL2=ON
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Smoke test (dummy video, real core)
+        run: |
+          mkdir -p smoke/cores smoke/system smoke/saves
+          curl -fSL --retry 3 -o fce.zip \
+            https://buildbot.libretro.com/nightly/linux/x86_64/latest/fceumm_libretro.so.zip
+          python3 -c "import zipfile; zipfile.ZipFile('fce.zip').extractall('smoke/cores')"
+          rm -f fce.zip
+          g++ -std=c++17 -w -I src -I third_party -I third_party/stb -I third_party/libretro \
+              $(sdl2-config --cflags) tests/smoke_libretro.cpp \
+              src/util/Log.cpp src/util/Fs.cpp src/retro/LibretroCore.cpp \
+              src/retro/AudioBridge.cpp src/retro/VideoBridge.cpp src/retro/InputManager.cpp \
+              third_party/stb/stb_impl.cpp $(sdl2-config --libs) -ldl -lpthread -o smoke/test
+          python3 - <<'EOF'
+          prg = bytes([0xA9,0x01,0x8D,0x06,0x20,0xA9,0x00,0x8D,0x06,0x20]) + bytes([0xEA]*(16*1024-10))
+          chr_ = bytes([0x00,0xFF]*4) + bytes([0x00]*(8*1024-8))
+          open('smoke/test.nes','wb').write(bytes([0x4E,0x45,0x53,0x1A,1,1,0,0,0,0,0,0,0,0,0,0]) + prg + chr_)
+          EOF
+          SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./smoke/test \
+            smoke/cores/fceumm_libretro.so smoke/test.nes smoke
+
+      - name: Package
+        run: |
+          mkdir -p dist/NesStation-linux/cores dist/NesStation-linux/assets/fonts
+          cp build/bin/nesstation dist/NesStation-linux/
+          cp assets/fonts/*.ttf dist/NesStation-linux/assets/fonts/
+          cp README.md LICENSE dist/NesStation-linux/
+          cd dist && tar czf NesStation-linux-x64.tar.gz NesStation-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NesStation-linux-x64
+          path: dist/NesStation-linux-x64.tar.gz
+
+  windows:
+    name: Windows (MSVC, x64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        # SDL2 由 FetchContent 自动拉取静态构建（无需预装）
+
+      - name: Build
+        run: cmake --build build --config Release -- -m
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "dist/NesStation-windows"
+          New-Item -ItemType Directory -Force -Path "$out/cores", "$out/assets/fonts" | Out-Null
+          Copy-Item build/bin/Release/nesstation.exe $out/
+          Copy-Item assets/fonts/*.ttf $out/assets/fonts/
+          Copy-Item README.md, LICENSE $out/
+          Copy-Item scripts/fetch_cores.ps1 $out/
+          Compress-Archive -Path $out -DestinationPath dist/NesStation-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NesStation-windows-x64
+          path: dist/NesStation-windows-x64.zip

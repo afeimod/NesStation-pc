@@ -1,0 +1,43 @@
+第三方组件许可证索引
+====================
+
+NesStation PC 应用代码以 MIT 发布（见根目录 LICENSE）。运行时加载的各模拟器
+核心遵循其上游许可证，本目录不重复收录全文 —— 请以下列官方来源为准：
+
+libretro 核心（经 buildbot 下载或源码编译）
+------------------------------------------
+核心                许可证       上游
+FCEUmm              GPLv2        https://github.com/libretro/libretro-fceumm
+snes9x              非商业       https://github.com/snes9xgit/snes9x
+mGBA                MPL-2.0      https://github.com/mgba-emu/mgba
+Geargrafx           GPLv2        https://github.com/libretro/beetle-pce-fast
+FBNeo               非商业       https://github.com/finalburnneo/FBNeo
+DOSBox-Pure         GPLv2        https://github.com/schellingb/dosbox-pure
+Genesis-Plus-GX     GPLv2        https://github.com/ekeeke/Genesis-Plus-GX
+melonDS             GPLv3        https://github.com/melonDS-emu/melonDS
+PCSX-ReARMed        GPLv2        https://github.com/libretro/pcsx_rearmed
+PCSX2               GPLv3        https://github.com/PCSX2/pcsx2
+Flycast             GPLv2        https://github.com/flyinghead/flycast
+PPSSPP              GPLv2        https://github.com/hrydgard/ppsspp
+Azahar              GPLv2+       https://github.com/azahar-emu/azahar
+SquirrelJME         GPLv3        https://github.com/XerTheSquirrel/SquirrelJME
+
+独立模拟器（源码集成 / 外部启动）
+----------------------------------
+模拟器             许可证       上游
+Dolphin (NGC/Wii)  GPLv2+       https://github.com/dolphin-emu/dolphin
+Cemu (Wii U)       MPL-2.0      https://github.com/cemu-project/Cemu
+Eden (Switch)      GPLv3        https://github.com/eden-emulator/mirror
+
+内嵌第三方库
+------------
+stb 系列            公有领域/MIT  https://github.com/nothings/stb
+nlohmann/json v3    MIT           https://github.com/nlohmann/json
+SDL2                zlib          https://github.com/libsdl-org/SDL
+libretro.h          MIT           https://github.com/libretro/libretro-common
+Noto Sans SC        OFL 1.1       https://github.com/googlefonts/noto-cjk
+
+ROM / BIOS 法律声明
+-------------------
+本仓库不含任何 ROM、BIOS、密钥或固件文件。此类文件包含受版权保护的内容：
+请仅使用从你自己拥有的设备与正版游戏合法提取/转储的文件，且不得分发。

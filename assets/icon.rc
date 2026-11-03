@@ -1,0 +1,3 @@
+// Windows 应用图标资源
+1 ICON "assets/icon.ico"
+IDI_ICON1 ICON DISCARDABLE "assets/icon.ico"
