@@ -20,10 +20,14 @@ class CoreManager {
   const std::string& statesDir() const { return statesDir_; }
   const std::string& optionsDir() const { return optionsDir_; }
 
-  // 平台核心是否就绪（Libretro：文件存在；Standalone：探测到模拟器或已配置路径）
+  // 平台核心是否就绪（Libretro：候选链上任一核心文件存在；
+  // Standalone：探测到模拟器或已配置路径）
+  // 解析实际使用的核心：候选链上第一个已安装者；
+  // 全部缺失时返回链首（首选），供提示与选项持久化使用
+  PlatformCore resolveCore(GamePlatform p) const;
   std::string corePathFor(GamePlatform p) const;
   bool libretroCoreAvailable(GamePlatform p) const;
-  // 未就绪时的提示（含获取方式）
+  // 未就绪时的提示（含获取方式与全部候选核心）
   std::string availabilityHint(GamePlatform p) const;
 
   // —— 核心选项持久层 ——

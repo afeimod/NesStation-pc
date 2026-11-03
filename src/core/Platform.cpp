@@ -192,6 +192,120 @@ PlatformCore platformCore(GamePlatform p) {
   return {CoreKind::Libretro, "fceumm_libretro", nullptr, "FCEUmm", ""};
 }
 
+// —— 核心候选链 ————————————————————————————————————————————
+// 候选均经 libretro buildbot 实测（linux/x86_64、linux/aarch64、
+// windows/x86_64 三个平台），缺失平台由链上后续核心自动补位：
+//   azahar 在 linux/aarch64 无预编译包 → Citra 顶替
+std::vector<PlatformCore> platformCoreChain(GamePlatform p) {
+  switch (p) {
+    case GamePlatform::NES:
+      return {
+          {CoreKind::Libretro, "fceumm_libretro", nullptr, "FCEUmm",
+           "FDS 游戏需要 disksys.rom（放入 system 目录）"},
+          {CoreKind::Libretro, "nestopia_libretro", nullptr, "Nestopia",
+           "FDS 游戏需要 disksys.rom"},
+          {CoreKind::Libretro, "quicknes_libretro", nullptr, "QuickNES",
+           "无需 BIOS（精度较低）"},
+      };
+    case GamePlatform::SFC:
+      return {
+          {CoreKind::Libretro, "snes9x_libretro", nullptr, "snes9x", "无需 BIOS"},
+          {CoreKind::Libretro, "bsnes_libretro", nullptr, "bsnes", "无需 BIOS"},
+      };
+    case GamePlatform::GB:
+      return {
+          {CoreKind::Libretro, "mgba_libretro", nullptr, "mGBA", "无需 BIOS"},
+          {CoreKind::Libretro, "gambatte_libretro", nullptr, "Gambatte",
+           "无需 BIOS"},
+      };
+    case GamePlatform::GBA:
+      return {
+          {CoreKind::Libretro, "mgba_libretro", nullptr, "mGBA", "无需 BIOS"},
+          {CoreKind::Libretro, "vba_next_libretro", nullptr, "VBA-M", "无需 BIOS"},
+          {CoreKind::Libretro, "gpsp_libretro", nullptr, "gpSP",
+           "GBA BIOS 可选（gba_bios.bin）"},
+      };
+    case GamePlatform::DOS:
+      return {
+          {CoreKind::Libretro, "dosbox_pure_libretro", nullptr, "DOSBox-Pure",
+           "无需 BIOS"},
+          {CoreKind::Libretro, "dosbox_svn_libretro", nullptr, "DOSBox-SVN",
+           "无需 BIOS"},
+      };
+    case GamePlatform::ARCADE:
+      return {
+          {CoreKind::Libretro, "fbneo_libretro", nullptr, "FBNeo",
+           "NeoGeo → neogeo.zip，PGM → pgm.zip（放 system/fbneo/）"},
+          {CoreKind::Libretro, "mame2003_plus_libretro", nullptr, "MAME 2003-Plus",
+           "NeoGeo → neogeo.zip"},
+      };
+    case GamePlatform::MD:
+      return {
+          {CoreKind::Libretro, "genesis_plus_gx_libretro", nullptr,
+           "Genesis-Plus-GX", "Mega-CD 需要 bios_CD_E/J/U.zip"},
+          {CoreKind::Libretro, "picodrive_libretro", nullptr, "PicoDrive",
+           "32X 支持；Mega-CD 需要 BIOS"},
+      };
+    case GamePlatform::PCE:
+      return {
+          {CoreKind::Libretro, "geargrafx_libretro", nullptr, "Geargrafx",
+           "PCE-CD 需要 syscard3.pce（System Card）"},
+          {CoreKind::Libretro, "mednafen_pce_fast_libretro", nullptr,
+           "Mednafen PCE Fast", "PCE-CD 需要 syscard3.pce"},
+      };
+    case GamePlatform::NDS:
+      return {
+          {CoreKind::Libretro, "melonds_libretro", nullptr, "melonDS",
+           "无需 BIOS（内置 FreeBIOS）"},
+          {CoreKind::Libretro, "desmume_libretro", nullptr, "DeSmuME",
+           "无需 BIOS"},
+      };
+    case GamePlatform::PSX:
+      return {
+          {CoreKind::Libretro, "pcsx_rearmed_libretro", nullptr, "PCSX-ReARMed",
+           "无需 BIOS（HLE）；部分游戏推荐 BIOS"},
+          {CoreKind::Libretro, "swanstation_libretro", nullptr, "SwanStation",
+           "无需 BIOS（HLE）；要求更高精度时使用"},
+      };
+    case GamePlatform::PS2:
+      return {
+          {CoreKind::Libretro, "pcsx2_libretro", nullptr, "PCSX2",
+           "无需 BIOS（内置）；推荐放 system/pcsx2/bios"},
+      };
+    case GamePlatform::JAVA:
+      return {
+          {CoreKind::Libretro, "squirreljme_libretro", nullptr, "SquirrelJME",
+           "无需 BIOS"},
+      };
+    case GamePlatform::DC:
+      return {
+          {CoreKind::Libretro, "flycast_libretro", nullptr, "Flycast",
+           "dc_boot.bin + dc_flash.bin（NAOMI 无需）"},
+      };
+    case GamePlatform::N3DS:
+      return {
+          {CoreKind::Libretro, "azahar_libretro", nullptr, "Azahar",
+           "加密游戏需 aes_keys.txt；部分游戏需系统档案"},
+          {CoreKind::Libretro, "citra_libretro", nullptr, "Citra",
+           "加密游戏需 aes_keys.txt；部分游戏需系统档案"},
+      };
+    case GamePlatform::NGCWII:
+      return {{CoreKind::Standalone, nullptr, "dolphin", "Dolphin",
+               "大部分游戏免 BIOS（DSP LLE 需 DSP ROM）"}};
+    case GamePlatform::WIIU:
+      return {{CoreKind::Standalone, nullptr, "cemu", "Cemu",
+               "免 BIOS（WUD 解密需 otp.bin）"}};
+    case GamePlatform::PSP:
+      return {
+          {CoreKind::Libretro, "ppsspp_libretro", nullptr, "PPSSPP", "无需 BIOS"},
+      };
+    case GamePlatform::NSWITCH:
+      return {{CoreKind::Standalone, nullptr, "eden", "Eden",
+               "加密游戏需 prod.keys；固件 zip 在模拟器内安装"}};
+  }
+  return {};
+}
+
 GamePlatform platformFromExtension(const std::string& extRaw) {
   const std::string ext = toLower(extRaw);
   if (ext == "nes" || ext == "unf" || ext == "unif" || ext == "fds" || ext == "nez" ||

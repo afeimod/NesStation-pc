@@ -27,14 +27,21 @@ std::string EmuRunner::start(App& app, const GameEntry& game) {
   }
 
   // —— libretro 平台：进程内会话 ——
+  // 候选链解析：首选核心缺失时自动落到替代核心（如 3DS：Azahar → Citra）
+  const PlatformCore resolved = app.cores.resolveCore(game.platform);
   const std::string corePath = app.cores.corePathFor(game.platform);
   if (!fsutil::isFile(corePath)) {
     return app.cores.availabilityHint(game.platform);
   }
+  if (resolved.kind == CoreKind::Libretro && resolved.coreFile != pc.coreFile) {
+    app.toast(std::string("首选核心 ") + pc.coreTitle + " 缺失，已改用 " +
+              resolved.coreTitle);
+  }
 
   teardown(app);
   core_.reset(new LibretroCore(app.audio, app.video, app.input));
-  coreKey_ = pc.coreFile;
+  // 核心键 = 实际解析到的核心（可能是替代核心，如 3DS 的 Citra）
+  coreKey_ = fsutil::stemOf(fsutil::baseOf(corePath));
 
   App* appPtr = &app;
   auto resolver = [appPtr, this](const std::string& optKey) -> std::string {

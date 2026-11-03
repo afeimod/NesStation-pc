@@ -1,34 +1,40 @@
 # ============================================================================
-# NesStation PC — 一键下载 libretro 官方 PC 预编译核心（Windows PowerShell）
+# NesStation PC — 一键下载 libretro 官方预编译核心（Windows PowerShell）
 #
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1 fceumm mgba
+#   powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1 nes psx 3ds
+#     （参数 = 平台短名：nes sfc gb gba md pce nds psx ps2 dc n3ds psp arcade dos java）
 #
 # 核心来源：https://buildbot.libretro.com/nightly/windows/x86_64/latest/
+# 每个平台按候选链依次尝试（与 src/core/Platform.cpp 一致），某个核心
+# 无预编译包（404）时自动落到替代核心（如 3DS：azahar → citra）。
+#
 # 下载后自动解压到 <数据目录>\cores\（%APPDATA%\NesStation\cores\；
 # exe 旁有 portable.flag 时为 <exe 目录>\UserData\cores\）
 # ============================================================================
 param([string[]]$Only)
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$AllCores = @(
-  'fceumm',            # NES / FC
-  'snes9x',            # SNES / SFC
-  'mgba',              # GB / GBC / GBA
-  'genesis_plus_gx',   # MD / SMS / GG / SG / Mega-CD
-  'geargrafx',         # PCE / TG16
-  'fbneo',             # Arcade
-  'dosbox_pure',       # MS-DOS
-  'melonds',           # NDS
-  'pcsx_rearmed',      # PS1
-  'pcsx2',             # PS2
-  'flycast',           # DC / NAOMI
-  'ppsspp',            # PSP
-  'azahar',            # 3DS
-  'squirreljme'        # Java ME
+# 平台 → 核心候选链（与 src/core/Platform.cpp 一致）
+$PlatformCores = @(
+  @{ key='nes';     label='NES / FC';      cores=@('fceumm','nestopia','quicknes') },
+  @{ key='sfc';     label='SNES / SFC';    cores=@('snes9x','bsnes') },
+  @{ key='gb';      label='GB / GBC';      cores=@('mgba','gambatte') },
+  @{ key='gba';     label='GBA';           cores=@('mgba','vba_next','gpsp') },
+  @{ key='md';      label='MD / SEGA';     cores=@('genesis_plus_gx','picodrive') },
+  @{ key='pce';     label='PCE / TG16';    cores=@('geargrafx','mednafen_pce_fast') },
+  @{ key='nds';     label='NDS';           cores=@('melonds','desmume') },
+  @{ key='psx';     label='PS1';           cores=@('pcsx_rearmed','swanstation') },
+  @{ key='ps2';     label='PS2';           cores=@('pcsx2') },
+  @{ key='dc';      label='Dreamcast';     cores=@('flycast') },
+  @{ key='n3ds';    label='3DS';           cores=@('azahar','citra') },
+  @{ key='psp';     label='PSP';           cores=@('ppsspp') },
+  @{ key='arcade';  label='Arcade';        cores=@('fbneo','mame2003_plus') },
+  @{ key='dos';     label='MS-DOS';        cores=@('dosbox_pure','dosbox_svn') },
+  @{ key='java';    label='Java ME';       cores=@('squirreljme') }
 )
 
 $exeDir = Split-Path -Parent $PSScriptRoot
@@ -39,46 +45,60 @@ if (Test-Path "$exeDir\portable.flag") {
 }
 New-Item -ItemType Directory -Force -Path $coresDir | Out-Null
 
-$cores = if ($Only -and $Only.Count -gt 0) { $Only } else { $AllCores }
+$base = 'https://buildbot.libretro.com/nightly/windows/x86_64/latest'
 
 Write-Host "=========================================="
 Write-Host " NesStation PC 核心下载器 (Windows x64)"
 Write-Host " 目录：$coresDir"
 Write-Host "=========================================="
 
-$ok = 0; $fail = 0
-foreach ($core in $cores) {
-  $dest = "$coresDir\${core}_libretro.dll"
-  if (Test-Path $dest) {
-    Write-Host "  [跳过] $core（已存在）"
-    $ok++
+$ok = 0; $skip = 0; $miss = 0
+foreach ($plat in $PlatformCores) {
+  if ($Only -and $Only.Count -gt 0 -and $Only -notcontains $plat.key) { continue }
+
+  # 链上已有任一核心 → 跳过
+  $installed = $null
+  foreach ($core in $plat.cores) {
+    if (Test-Path "$coresDir\${core}_libretro.dll") { $installed = $core; break }
+  }
+  if ($installed) {
+    Write-Host "  [跳过] $($plat.label)（已安装 $installed）"
+    $skip++
     continue
   }
-  $url = "https://buildbot.libretro.com/nightly/windows/x86_64/latest/${core}_libretro.dll.zip"
-  $tmpZip = "$env:TEMP\${core}_libretro.zip"
-  Write-Host "  [下载] $core ..."
-  try {
-    Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing -TimeoutSec 600
-    Expand-Archive -Path $tmpZip -DestinationPath $coresDir -Force
-    if (Test-Path $dest) {
-      Write-Host "  [完成] $core"
-      $ok++
-    } else {
-      Write-Host "  [失败] $core（解压后未找到核心）"
-      $fail++
+
+  # 依次尝试候选核心（404 → 下一个）
+  $got = $null
+  foreach ($core in $plat.cores) {
+    $url = "$base/${core}_libretro.dll.zip"
+    $tmpZip = "$env:TEMP\${core}_libretro.zip"
+    $dest = "$coresDir\${core}_libretro.dll"
+    Write-Host "  [下载] $($plat.label) ← $core ..."
+    try {
+      Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing -TimeoutSec 600
+      Expand-Archive -Path $tmpZip -DestinationPath $coresDir -Force
+      if (Test-Path $dest) { $got = $core; break }
+      Write-Host "         $core 解压后未找到核心，尝试替代..."
+    } catch {
+      Write-Host "         $core 不可用（$($_.Exception.Message)），尝试替代核心..."
+    } finally {
+      if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force }
     }
-  } catch {
-    Write-Host "  [失败] $core（$($_.Exception.Message)）"
-    $fail++
-  } finally {
-    if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force }
+  }
+
+  if ($got) {
+    Write-Host "         [完成] $($plat.label) → $got"
+    $ok++
+  } else {
+    Write-Host "         [缺失] $($plat.label)：无任何候选核心可下载"
+    $miss++
   }
 }
 
 Write-Host "=========================================="
-Write-Host " 完成：$ok 成功，$fail 失败"
+Write-Host " 完成：$ok 新装，$skip 已有，$miss 平台无可用核心"
 Write-Host " 提示：NGC/Wii、Wii U、Switch 为独立模拟器"
 Write-Host " （Dolphin / Cemu / Eden），放 emulators\ 目录"
 Write-Host " 或到设置页配置路径。"
 Write-Host "=========================================="
-exit $fail
+exit $miss

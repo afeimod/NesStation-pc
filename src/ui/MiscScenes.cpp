@@ -17,23 +17,31 @@ class CoreOptionsScene : public Scene {
 
   void onEnter(App& app) override {
     // 运行中同核心 → 直接热改；否则临时装载核心读取选项
+    // （按候选链解析后的实际核心，可能是替代核心）
+    const PlatformCore resolved = app.cores.resolveCore(platform_);
     EmuRunner* emu = app.activeEmu();
     if (emu && emu->running() && emu->core() && emu->isLibretro() &&
         platformCore(emu->game().platform).kind == CoreKind::Libretro &&
-        platformCore(emu->game().platform).coreFile == platformCore(platform_).coreFile) {
+        app.cores.resolveCore(emu->game().platform).coreFile == resolved.coreFile) {
       live_ = true;
     } else {
       live_ = false;
       temp_.reset(new LibretroCore(app.audio, app.video, app.input));
       App* appPtr = &app;
-      const std::string coreKey = platformCore(platform_).coreFile;
+      const std::string coreKey = resolved.coreFile;
       auto resolver = [appPtr, coreKey](const std::string& k) {
         return appPtr->cores.resolveOption(coreKey, k);
       };
-      if (!temp_->load(app.cores.corePathFor(platform_), app.cores.systemDir(),
-                       app.cores.savesDir(), resolver)) {
+      const std::string path = app.cores.corePathFor(platform_);
+      if (path.empty() || !fsutil::isFile(path)) {
+        app.toast("核心未安装：" + app.cores.availabilityHint(platform_));
+        app.popScene();
+        return;
+      }
+      if (!temp_->load(path, app.cores.systemDir(), app.cores.savesDir(), resolver)) {
         app.toast("核心装载失败：" + temp_->lastError());
         app.popScene();
+        return;
       }
     }
   }
@@ -74,7 +82,7 @@ class CoreOptionsScene : public Scene {
     if (!c || o.values.empty()) return;
     const std::string val = o.values[(size_t)valueIdx];
     c->setOptionValue(o.key, val);
-    app.cores.storeOption(platformCore(platform_).coreFile, o.key, val);
+    app.cores.storeOption(app.cores.resolveCore(platform_).coreFile, o.key, val);
     if (live_) app.toast("已应用（部分核心需重开游戏生效）");
     else app.toast("已保存（下次启动游戏生效）");
   }
@@ -87,7 +95,7 @@ class CoreOptionsScene : public Scene {
       d.rect(Rect(0, app.draw.H * t, app.draw.W, app.draw.H / 40 + 1),
              sk.bg.lerp(sk.bgDeep, t));
     }
-    const PlatformCore pc = platformCore(platform_);
+    const PlatformCore pc = app.cores.resolveCore(platform_);
     w::header(app, std::string("核心设置 · ") + pc.coreTitle,
               live_ ? "游戏运行中 · 热生效" : platformFullName(platform_));
 
@@ -114,7 +122,7 @@ class CoreOptionsScene : public Scene {
         // 当前值查询（经 GET_VARIABLE 路径走 currentValues —— 这里读 CoreManager
         // 持久层 + 默认）
         const std::string stored =
-            app.cores.resolveOption(platformCore(platform_).coreFile, o.key);
+            app.cores.resolveOption(app.cores.resolveCore(platform_).coreFile, o.key);
         if (!stored.empty() && stored == o.values[v]) {
           cur = (int)v;
           break;
@@ -275,6 +283,86 @@ class FileBrowserScene : public Scene {
   bool inHoldingBack_ = false;
 };
 
+// ==================== 模态提示框 ====================
+// 用于核心缺失 / 启动失败等重要信息的醒目提示（区别于轻量 toast）
+class MessageScene : public Scene {
+ public:
+  MessageScene(const std::string& title, const std::string& body,
+               bool warn = true)
+      : title_(title), body_(body), warn_(warn) {}
+
+  void update(App& app, float dt, const InputState& in) override {
+    (void)dt;
+    if (in.pressed[(int)Btn::Ok] || in.pressed[(int)Btn::Back] ||
+        in.pressed[(int)Btn::Menu]) {
+      app.popScene();
+    }
+  }
+
+  void draw(App& app) override {
+    const Skin& sk = Theme::skin();
+    Draw& d = app.draw;
+    // 半透明遮罩（覆盖下层场景）
+    d.rect(Rect(0, 0, app.draw.W, app.draw.H), Color8(0, 0, 0, 175));
+
+    // 文本折行（标题手动，正文自动）
+    std::vector<std::string> lines;
+    {
+      // 按 \n 拆段后逐段折行
+      size_t pos = 0;
+      while (pos <= body_.size()) {
+        const size_t nl = body_.find('\n', pos);
+        const std::string seg =
+            body_.substr(pos, nl == std::string::npos ? std::string::npos
+                                                      : nl - pos);
+        if (seg.empty())
+          lines.push_back("");
+        else
+          for (const auto& l : app.font.wrap(seg, 16, app.draw.W - 360))
+            lines.push_back(l);
+        if (nl == std::string::npos) break;
+        pos = nl + 1;
+      }
+    }
+
+    const float panelW = std::min(app.draw.W - 120.0f, 720.0f);
+    const float bodyH = (float)lines.size() * 26 + 30;
+    const float panelH = 150 + bodyH;
+    const Rect panel(app.draw.W / 2 - panelW / 2, app.draw.H / 2 - panelH / 2,
+                     panelW, panelH);
+    d.roundRect(panel, 14, Color8(sk.bgPanel.r, sk.bgPanel.g, sk.bgPanel.b, 246));
+    d.roundRectOutline(panel, 14, warn_ ? Color8(0xE7, 0x4C, 0x3C, 230) : sk.accent,
+                       2);
+
+    // 标题
+    float y = panel.y + 34;
+    app.font.draw(app.sdlRenderer(), title_,
+                  panel.cx() - app.font.textWidth(title_, 24, true) / 2, y, 24,
+                  warn_ ? Color8(0xFF, 0x88, 0x78) : sk.textHi, true);
+    y += 46;
+    d.rect(Rect(panel.cx() - 36, y, 72, 3), warn_ ? Color8(0xE7, 0x4C, 0x3C) : sk.accent);
+    y += 26;
+
+    // 正文
+    for (const auto& ln : lines) {
+      if (!ln.empty())
+        app.font.draw(app.sdlRenderer(), ln,
+                      panel.cx() - app.font.textWidth(ln, 16) / 2, y, 16, sk.text);
+      y += 26;
+    }
+
+    // 确定按钮
+    const Rect btn(panel.cx() - 90, panel.bottom() - 66, 180, 46);
+    if (w::button(app, btn, "确定", true, 17, true)) app.popScene();
+
+    w::hintBar(app, {{"A / B", "关闭"}});
+  }
+
+ private:
+  std::string title_, body_;
+  bool warn_ = true;
+};
+
 // ==================== 关于 ====================
 class AboutScene : public Scene {
  public:
@@ -336,6 +424,11 @@ std::unique_ptr<Scene> createFileBrowser(const BrowserRequest& req) {
 
 std::unique_ptr<Scene> createAboutScene() {
   return std::unique_ptr<Scene>(new AboutScene());
+}
+
+std::unique_ptr<Scene> createMessageScene(const std::string& title,
+                                          const std::string& body, bool warn) {
+  return std::unique_ptr<Scene>(new MessageScene(title, body, warn));
 }
 
 }  // namespace ns

@@ -14,7 +14,7 @@ C++17 + SDL2 单二进制原生实现，libretro 核心进程内加载（RetroAr
 | --- | --- | --- |
 | 界面框架 | Kotlin + Compose | C++17 + SDL2 立即模式 UI |
 | 主题 | **Neon 3D 游戏站 / FSD 经典** 双风格 | **完全保留**，设置里即时切换 |
-| 核心 | Android arm64 预编译 .so | **PC x64 核心**（buildbot 官方预编译 / 源码集成） |
+| 核心 | Android arm64 预编译 .so | **PC x64 / arm64 核心**（buildbot 官方预编译 / 源码集成） |
 | 构建 | Gradle + Android Gradle Plugin | **CMake**（Windows MSVC / Linux GCC） |
 | 已移除 | — | **DraStic（激烈，无 PC 版）**、**Citra MMJ（无 PC 版）** |
 
@@ -44,7 +44,8 @@ C++17 + SDL2 单二进制原生实现，libretro 核心进程内加载（RetroAr
 | **Wii U** | **Cemu 2.6** | 独立模拟器（源码集成 / 外部探测） | `.wud` `.wux` `.wua` `.rpx` | 免（WUD 解密需 otp.bin） |
 | **Switch** | **Eden 0.2.1** | 独立模拟器（源码集成 / 外部探测） | `.xci` `.nsp` `.nro` | 需 `prod.keys` |
 
-> - libretro 核心来自 **libretro 官方 buildbot**（nightly x86_64，与 RetroArch 同源），`scripts/fetch_cores.sh / .ps1` 一键下载。
+> - libretro 核心来自 **libretro 官方 buildbot**（nightly，与 RetroArch 同源）：Windows x64 / Linux x86_64 / **Linux arm64（aarch64）**，`scripts/fetch_cores.sh / .ps1` 自动识别架构一键下载。
+> - **核心回退链**：部分架构无某核心预编译包时自动改用替代核心（如 3DS：Azahar → Citra；NES：FCEUmm → Nestopia → QuickNES；PS1：PCSX-ReARMed → SwanStation 等）。核心缺失时启动游戏会弹出提示框列出全部候选与获取方式。
 > - NGC/Wii、Wii U、Switch 与 Android 版 Cemu-AZ / Eden 源码级集成同构：`-DNESSTATION_SUPERBUILD=ON` 从官方源码树编译（ExternalProject），产物进 `emulators/`；也可以直接使用已安装的官方 PC 版（设置页配置路径即可）。
 > - Ishiiruka 原仓库（TinobIshiiruka）已停止维护且无后续版本，PC 版采用其上游 **Dolphin**（Ishiiruka 的画质增强选项大部分已被上游吸收）。
 
@@ -68,14 +69,18 @@ scripts\build.bat                  # 自动 FetchContent SDL2
 ### 2. 下载核心
 
 ```bash
-# Linux
-./scripts/fetch_cores.sh                     # 全部 14 个 libretro 核心
+# Linux（自动识别 x86_64 / aarch64 架构，逐平台下载，404 自动回退替代核心）
+./scripts/fetch_cores.sh                     # 全部 15 个平台
+./scripts/fetch_cores.sh nes psx 3ds         # 只下载指定平台
 # Windows
 powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1
 ```
 
 核心落到 `~/.config/NesStation/cores/`（Linux）/ `%APPDATA%\NesStation\cores\`（Windows）。
 exe 旁放 `portable.flag` 即转便携模式（全部数据进 `UserData/`）。
+
+> libretro 预编译核心并非所有架构都提供（如 azahar 无 linux/aarch64 包），
+> 脚本会自动尝试候选链上的替代核心；应用内启动时也会自动选用已安装的替代核心。
 
 ### 3. 放入 ROM
 
@@ -92,6 +97,23 @@ exe 旁放 `portable.flag` 即转便携模式（全部数据进 `UserData/`）�
    ./scripts/build.sh --superbuild    # 需 vcpkg（Cemu）、系统依赖见下
    ```
    编译产物自动进 `emulators/`，前端直接接管启动。
+
+### 5. CI 构建（GitHub Actions，手动触发）
+
+Actions 页面 → **Build** → **Run workflow** → 选择构建目标：
+
+| 目标 | 产物 | 说明 |
+| --- | --- | --- |
+| `linux-x64` | `NesStation-linux-x64.tar.gz` | 便携包（含字体），Ubuntu 22.04 基线 |
+| `linux-arm64` | `nesstation_1.0.0_arm64.deb` | **Debian / Ubuntu 安装包**，Debian 12+ / Ubuntu 22.04+ |
+| `windows-x64` | `NesStation-windows-x64.zip` | 便携包（SDL2 静态链接，FetchContent） |
+| `all` | 以上全部 | — |
+
+> - arm64 deb 在 arm64 runner 的 **debian:12 容器**内原生构建（glibc 2.36 基线 +
+>   libstdc++ 静态链接），运行时仅依赖 `libc6` + `libsdl2-2.0-0`，
+>   `sudo apt install ./nesstation_1.0.0_arm64.deb` 即装（含桌面图标）。
+> - Linux 任务含真实核心冒烟测试（buildbot fceumm + 假视频驱动跑 240 帧 + 快速存读档）。
+> - 构建不随 push / PR 自动触发，完全手动。
 
 ## 🕹️ 操作
 
@@ -174,9 +196,9 @@ NesStation-PC/
 │   └── util/                   # 日志 / 文件系统
 ├── third_party/                # stb · nlohmann/json · libretro.h（全部单头内嵌）
 ├── assets/fonts/               # Noto Sans SC（中文字体内嵌分发）
-├── scripts/                    # build.sh/.bat · fetch_cores.sh/.ps1
+├── scripts/                    # build.sh/.bat · fetch_cores.sh/.ps1（架构自适应+回退链）
 ├── tests/smoke_libretro.cpp    # 真实核心链路冒烟测试
-└── .github/workflows/build.yml # Windows + Linux CI
+└── .github/workflows/build.yml # CI（手动触发：linux-x64 / linux-arm64(deb) / windows-x64）
 ```
 
 ## 🧪 测试

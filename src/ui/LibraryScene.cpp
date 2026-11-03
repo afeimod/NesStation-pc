@@ -343,9 +343,14 @@ class LibraryScene : public Scene {
       }
       y += 46;
     }
-    // 平台核心提示
-    app.font.draw(app.sdlRenderer(),
-                  std::string("核心：") + platformCore(g.platform).coreTitle,
+    // 平台核心提示（按候选链解析，可能是替代核心）
+    const PlatformCore coreInUse = app.cores.resolveCore(g.platform);
+    std::string coreLine = std::string("核心：") + coreInUse.coreTitle;
+    if (coreInUse.kind == CoreKind::Libretro &&
+        std::string(coreInUse.coreFile) != std::string(platformCore(g.platform).coreFile)) {
+      coreLine += "（替代）";
+    }
+    app.font.draw(app.sdlRenderer(), coreLine,
                   panel.x + 24, panel.bottom() - 34, 12, sk.textDim);
   }
 

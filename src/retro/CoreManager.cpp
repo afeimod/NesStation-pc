@@ -34,14 +34,31 @@ void CoreManager::init(const std::string& dataDir) {
   LOGI("CoreManager 初始化：%s", dataDir.c_str());
 }
 
+PlatformCore CoreManager::resolveCore(GamePlatform p) const {
+  const std::vector<PlatformCore> chain = platformCoreChain(p);
+  if (chain.empty()) return platformCore(p);
+  for (const PlatformCore& c : chain) {
+    if (c.kind != CoreKind::Libretro) return c;
+    if (fsutil::isFile(fsutil::join(coreDir_, std::string(c.coreFile) + kLibExt)))
+      return c;
+  }
+  return chain.front();  // 全部缺失 → 返回首选（用于提示/选项）
+}
+
 std::string CoreManager::corePathFor(GamePlatform p) const {
-  const PlatformCore c = platformCore(p);
+  const PlatformCore c = resolveCore(p);
   if (c.kind != CoreKind::Libretro) return "";
   return fsutil::join(coreDir_, std::string(c.coreFile) + kLibExt);
 }
 
 bool CoreManager::libretroCoreAvailable(GamePlatform p) const {
-  return fsutil::isFile(corePathFor(p));
+  for (const PlatformCore& c : platformCoreChain(p)) {
+    if (c.kind != CoreKind::Libretro) return false;  // Standalone 平台
+    if (fsutil::isFile(fsutil::join(coreDir_, std::string(c.coreFile) + kLibExt)))
+      return true;
+  }
+  return fsutil::isFile(fsutil::join(
+      coreDir_, std::string(platformCore(p).coreFile) + kLibExt));
 }
 
 std::string CoreManager::availabilityHint(GamePlatform p) const {
@@ -51,8 +68,17 @@ std::string CoreManager::availabilityHint(GamePlatform p) const {
            "：放在应用目录 emulators/ 下或到设置页配置安装路径";
   }
   if (libretroCoreAvailable(p)) return "";
-  return std::string("缺少核心文件 ") + c.coreFile + kLibExt +
-         " —— 运行 scripts/fetch_cores 脚本下载，或手动放入 " + coreDir_;
+  const std::vector<PlatformCore> chain = platformCoreChain(p);
+  std::string names;
+  for (const PlatformCore& cc : chain) {
+    if (!names.empty()) names += " / ";
+    names += cc.coreTitle;
+  }
+  std::string hint = std::string("缺少核心（") + names + "）\n";
+  hint += "libretro 预编译核心并非所有架构都提供，可任选其一：\n";
+  hint += "① 运行 scripts/fetch_cores 脚本自动下载本架构可用核心\n";
+  hint += "② 从 libretro buildbot 手动下载后放入：\n    " + coreDir_;
+  return hint;
 }
 
 std::string CoreManager::resolveOption(const std::string& coreKey,

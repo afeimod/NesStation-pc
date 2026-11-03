@@ -148,14 +148,28 @@ class SettingsScene : public Scene {
       Rect rc(270, y, app.draw.W - 300, 46);
       std::string status;
       if (pc.kind == CoreKind::Libretro) {
-        status = app.cores.libretroCoreAvailable(p) ? "✓ 已安装" : "✗ 缺失";
+        if (app.cores.libretroCoreAvailable(p)) {
+          const PlatformCore inUse = app.cores.resolveCore(p);
+          status = std::string(inUse.coreFile) == std::string(pc.coreFile)
+                       ? "✓ 已安装"
+                       : std::string("✓ 用替代 ") + inUse.coreTitle;
+        } else {
+          status = "✗ 缺失";
+        }
       } else {
         status = app.externals.available(p) ? "✓ 已探测" : "✗ 未找到";
       }
       if (w::listRow(app, rc, std::string(platformShortName(p)) + " · " + pc.coreTitle,
                      status, focusArea_ == 1, pc.biosNote)) {
         if (pc.kind == CoreKind::Libretro) {
-          app.pushScene(createCoreOptionsScene(p));
+          if (!app.cores.libretroCoreAvailable(p)) {
+            // 缺核心 → 弹提示框（部分架构无预编译核心，含替代方案）
+            app.pushScene(createMessageScene(
+                std::string(platformShortName(p)) + " 核心未安装",
+                app.cores.availabilityHint(p)));
+          } else {
+            app.pushScene(createCoreOptionsScene(p));
+          }
         } else {
           app.toast("请在「独立模拟器」页配置 " + std::string(pc.coreTitle));
         }

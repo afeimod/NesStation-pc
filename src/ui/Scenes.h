@@ -22,6 +22,10 @@ std::unique_ptr<Scene> createCoreOptionsScene(GamePlatform platform);
 // 关于
 std::unique_ptr<Scene> createAboutScene();
 
+// 模态提示框（核心缺失 / 启动失败等重要信息；warn=true 红色警示边框）
+std::unique_ptr<Scene> createMessageScene(const std::string& title,
+                                          const std::string& body, bool warn = true);
+
 // 文件浏览器（选择目录 / 文件；title 标题；mode: 0=选目录 1=选文件 2=选核心）
 // 返回值经 std::function 回调
 struct BrowserRequest {

@@ -273,7 +273,8 @@ void App::launchGame(const GameEntry& game) {
   if (err.empty()) {
     LOGI("游戏启动成功：%s", game.displayTitle().c_str());
   } else {
-    toast(err);
+    // 核心缺失 / 启动失败 → 模态提示框（重要信息不吞进 toast）
+    pushScene(createMessageScene("无法启动游戏", err));
     LOGE("游戏启动失败：%s", err.c_str());
   }
 }

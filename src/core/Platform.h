@@ -52,6 +52,12 @@ struct PlatformCore {
 
 PlatformCore platformCore(GamePlatform p);
 
+// 平台核心候选链（按优先级）：首选在前，替代核心在后。
+// 例如 3DS：Azahar → Citra（部分架构 buildbot 不提供 azahar 预编译包）。
+// 运行时取链上第一个已安装的核心；链为空表示该平台无 libretro 核心
+// （Standalone 平台）。
+std::vector<PlatformCore> platformCoreChain(GamePlatform p);
+
 // ROM 扩展名 → 平台（完整移植原 fromExtension；.zip/.bin 故意不映射，
 // 与原逻辑一致：由导入时的平台页提示消歧）
 GamePlatform platformFromExtension(const std::string& ext);

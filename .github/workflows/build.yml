@@ -1,14 +1,27 @@
 name: Build
 
+# 手动触发：选择构建目标（不再随 push / PR 自动触发）
 on:
-  push:
-    branches: [main, master]
-  pull_request:
   workflow_dispatch:
+    inputs:
+      target:
+        description: '构建目标'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - linux-x64
+          - linux-arm64
+          - windows-x64
 
 jobs:
-  linux:
-    name: Linux (GCC, x86_64)
+  # ==========================================================================
+  # Linux x86_64（tar.gz 便携包）
+  # ==========================================================================
+  linux-x64:
+    name: Linux x86_64 (GCC, tar.gz)
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'linux-x64' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +57,7 @@ jobs:
           SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./smoke/test \
             smoke/cores/fceumm_libretro.so smoke/test.nes smoke
 
-      - name: Package
+      - name: Package (portable tar.gz)
         run: |
           mkdir -p dist/NesStation-linux/cores dist/NesStation-linux/assets/fonts
           cp build/bin/nesstation dist/NesStation-linux/
@@ -57,15 +70,136 @@ jobs:
           name: NesStation-linux-x64
           path: dist/NesStation-linux-x64.tar.gz
 
-  windows:
-    name: Windows (MSVC, x64)
+  # ==========================================================================
+  # Linux arm64（.deb，兼容 Debian 12+ / Ubuntu 22.04+）
+  # 在 arm64 runner 的 debian:12 容器内原生构建：
+  #   - debian:12 基线（glibc 2.36 / libstdc++ 静态链接）保证旧发行版可运行
+  #   - 静态链接 libstdc++/libgcc，运行时仅依赖 libc6 + libsdl2-2.0-0
+  # ==========================================================================
+  linux-arm64:
+    name: Linux arm64 (GCC, deb)
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'linux-arm64' }}
+    runs-on: ubuntu-24.04-arm
+    container: debian:12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake libsdl2-dev curl unzip python3
+
+      - name: Configure
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DNESSTATION_USE_SYSTEM_SDL2=ON \
+            -DCMAKE_CXX_FLAGS="-static-libstdc++ -static-libgcc"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Smoke test (dummy video, real aarch64 core)
+        run: |
+          mkdir -p smoke/cores smoke/system smoke/saves
+          # 注意：arm64 核心位于 linux/aarch64（不是 linux/arm64）
+          curl -fSL --retry 3 -o fce.zip \
+            https://buildbot.libretro.com/nightly/linux/aarch64/latest/fceumm_libretro.so.zip
+          python3 -c "import zipfile; zipfile.ZipFile('fce.zip').extractall('smoke/cores')"
+          rm -f fce.zip
+          g++ -std=c++17 -w -I src -I third_party -I third_party/stb -I third_party/libretro \
+              $(sdl2-config --cflags) tests/smoke_libretro.cpp \
+              src/util/Log.cpp src/util/Fs.cpp src/retro/LibretroCore.cpp \
+              src/retro/AudioBridge.cpp src/retro/VideoBridge.cpp src/retro/InputManager.cpp \
+              third_party/stb/stb_impl.cpp $(sdl2-config --libs) -ldl -lpthread -o smoke/test
+          python3 - <<'EOF'
+          prg = bytes([0xA9,0x01,0x8D,0x06,0x20,0xA9,0x00,0x8D,0x06,0x20]) + bytes([0xEA]*(16*1024-10))
+          chr_ = bytes([0x00,0xFF]*4) + bytes([0x00]*(8*1024-8))
+          open('smoke/test.nes','wb').write(bytes([0x4E,0x45,0x53,0x1A,1,1,0,0,0,0,0,0,0,0,0,0]) + prg + chr_)
+          EOF
+          SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./smoke/test \
+            smoke/cores/fceumm_libretro.so smoke/test.nes smoke
+
+      - name: Package (.deb, Debian/Ubuntu)
+        env:
+          DEB_VERSION: "1.0.0"
+        run: |
+          set -eux
+          PKG="dist/root"
+          mkdir -p "$PKG/opt/nesstation/assets/fonts" \
+                   "$PKG/usr/bin" \
+                   "$PKG/usr/share/applications" \
+                   "$PKG/usr/share/icons/hicolor/256x256/apps" \
+                   "$PKG/usr/share/doc/nesstation" \
+                   "$PKG/DEBIAN"
+
+          # /opt 布局（exeDir 经 /proc/self/exe 解析，/usr/bin 软链可用）
+          cp build/bin/nesstation          "$PKG/opt/nesstation/"
+          cp assets/fonts/*.ttf            "$PKG/opt/nesstation/assets/fonts/"
+          cp assets/legal/THIRD_PARTY_NOTICES.txt "$PKG/usr/share/doc/nesstation/"
+          cp LICENSE                       "$PKG/usr/share/doc/nesstation/copyright"
+          cp README.md                     "$PKG/usr/share/doc/nesstation/"
+          ln -s /opt/nesstation/nesstation "$PKG/usr/bin/nesstation"
+          cp assets/icon.png               "$PKG/usr/share/icons/hicolor/256x256/apps/nesstation.png"
+
+          cat > "$PKG/usr/share/applications/nesstation.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=NesStation
+          GenericName=Retro Game Station
+          Comment=多平台复古游戏站（libretro 前端，支持 NES/SFC/GBA/PSX 等 18 平台）
+          Exec=nesstation
+          Icon=nesstation
+          Terminal=false
+          Categories=Game;Emulator;
+          StartupWMClass=NesStation
+          EOF
+
+          cat > "$PKG/DEBIAN/control" <<EOF
+          Package: nesstation
+          Version: ${DEB_VERSION}
+          Section: games
+          Priority: optional
+          Architecture: arm64
+          Depends: libc6, libsdl2-2.0-0
+          Maintainer: NesStation PC <nesstation@users.noreply.github.com>
+          Description: Multi-platform retro game station (libretro frontend)
+           NesStation PC is a retro gaming frontend for Windows/Linux, powered by
+           libretro cores: NES, SFC, GB/GBC, GBA, MD, PCE, NDS, PSX, PS2, DC,
+           3DS, PSP, Arcade, DOS, Java ME and more.
+          EOF
+
+          # md5sums（路径相对包根）
+          cd "$PKG" && find . -type f ! -path "./DEBIAN/*" -exec md5sum {} \; \
+            | sed 's|  \./|  |' > DEBIAN/md5sums && cd - >/dev/null
+
+          # 权限规范：目录 0755，数据 0644，二进制 0755
+          find "$PKG" -type d -exec chmod 0755 {} \;
+          find "$PKG" -type f -exec chmod 0644 {} \;
+          chmod 0755 "$PKG/opt/nesstation/nesstation"
+
+          mkdir -p dist/deb
+          dpkg-deb --build --root-owner-group "$PKG" "dist/deb/nesstation_${DEB_VERSION}_arm64.deb"
+          dpkg-deb --info "dist/deb/nesstation_${DEB_VERSION}_arm64.deb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NesStation-linux-arm64-deb
+          path: dist/deb/*.deb
+
+  # ==========================================================================
+  # Windows x64（zip 便携包；SDL2 由 FetchContent 静态构建，无需预装）
+  # ==========================================================================
+  windows-x64:
+    name: Windows x64 (MSVC, zip)
+    if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'windows-x64' }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
-        # SDL2 由 FetchContent 自动拉取静态构建（无需预装）
+        # SDL2 经 FetchContent 拉取 release-2.32.4（标签已验证存在）静态构建
 
       - name: Build
         run: cmake --build build --config Release -- -m
