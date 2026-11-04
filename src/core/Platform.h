@@ -64,6 +64,16 @@ std::vector<PlatformCore> platformCoreChain(GamePlatform p);
 // 与原逻辑一致：由导入时的平台页提示消歧）
 GamePlatform platformFromExtension(const std::string& ext);
 
+// ★ ROM 内容嗅探（扫描入库用）：对 .zip/.cue/.bin/.iso/.img/.chd 等歧义扩展名
+// 读取文件内容识别真实平台（zip 解析内部文件名、光盘镜像读 ISO9660 PVD /
+// SEGA 引导标识 / GC·Wii 魔数），识别失败返回 fallback。
+// 对齐 Android 版「导入页平台消歧」的 PC 无交互等价实现。
+GamePlatform sniffRomPlatform(const std::string& romPath, GamePlatform fallback);
+
+// 平台占位封面渐变色对（与 Android 版 PlaceholderCover.platformColors 完全一致）
+// 返回 {顶部色, 底部色}，均为 0xRRGGBB
+void platformGradient(GamePlatform p, uint32_t* top, uint32_t* bottom);
+
 // 字符串 → 平台（原 fromString 的别名表全量移植）
 GamePlatform platformFromString(const std::string& value);
 

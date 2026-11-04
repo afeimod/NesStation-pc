@@ -25,16 +25,54 @@ static void chamferGradientH(Draw& d, const Rect& rc, float c, Color8 a, Color8 
   }
 }
 
+// —— 手势追踪（拖拽滚动 vs 点击互斥）——
+// 按下记录起点，按住累计位移；位移 > 10px 判为拖拽，松开时不触发点击
+namespace {
+struct GestureState {
+  bool down = false;
+  float travel = 0;
+  uint64_t frame = 0;
+} g_gesture;
+
+void gesturePump(App& app) {
+  if (g_gesture.frame == app.frameNo()) return;  // 每帧只更新一次
+  g_gesture.frame = app.frameNo();
+  const InputState& in = app.input.input();
+  if (in.mousePressed) {
+    g_gesture.down = true;
+    g_gesture.travel = 0;
+  } else if (in.mouseHeld && g_gesture.down) {
+    g_gesture.travel += std::fabs(in.mouseDx) + std::fabs(in.mouseDy);
+  } else if (!in.mouseHeld) {
+    g_gesture.down = false;
+  }
+}
+}  // namespace
+
+bool dragGestureActive() { return g_gesture.down && g_gesture.travel > 10.0f; }
+
 bool hovered(App& app, const Rect& rc) {
   return rc.contains(app.input.input().mouse);
 }
 
 bool activated(App& app, const Rect& rc, bool focused) {
+  gesturePump(app);
   const InputState& in = app.input.input();
   const bool hov = hovered(app, rc);
   if (focused && in.pressed[(int)Btn::Ok]) return true;
-  if (hov && in.mousePressed) return true;
+  // 鼠标：松开时命中且未拖拽 = 点击（拖拽交给滚动，不误触控件）
+  if (hov && in.mouseReleased && !dragGestureActive()) return true;
   return false;
+}
+
+float dragScroll(App& app, const Rect& rc) {
+  gesturePump(app);
+  const InputState& in = app.input.input();
+  if (in.mouseHeld && rc.contains(in.mouse)) {
+    // 手指/鼠标下拉（dy>0）→ 内容跟随下移（scroll 减小）
+    return -in.mouseDy;
+  }
+  return 0;
 }
 
 void panel(App& app, const Rect& rc, bool highlighted, float glow) {
@@ -221,6 +259,8 @@ bool sliderRow(App& app, const Rect& rc, const std::string& title, float& value0
   const InputState& in = app.input.input();
   const bool hot = focused || hovered(app, rc);
   bool changed = false;
+  // 轨道几何（固定在行右侧区域）
+  const Rect track(rc.right() - 230, rc.cy() - 4, 190, 8);
   if (hot) {
     if (in.pressed[(int)Btn::Left]) {
       value01 = std::max(0.0f, value01 - 0.05f);
@@ -230,27 +270,189 @@ bool sliderRow(App& app, const Rect& rc, const std::string& title, float& value0
       value01 = std::min(1.0f, value01 + 0.05f);
       changed = true;
     }
-    if (hovered(app, rc) && (in.mouseHeld)) {
-      const float rel = (in.mouse.x - (rc.right() - 220)) / 190.0f;
-      if (rel >= -0.05f && rel <= 1.1f) {
-        value01 = std::min(1.0f, std::max(0.0f, rel));
-        changed = true;
-      }
+  }
+  // ★ 拖拽修复：命中区 = 轨道纵向扩展 ±18px（不要求精准点中细轨道）；
+  // 按住期间持续跟随（含移出行也继续拖，与 Android SeekBar 一致）
+  const Rect hit(track.x - 14, track.y - 18, track.w + 28, track.h + 36);
+  static bool s_sliderHeld = false;
+  if (in.mousePressed && hit.contains(in.mouse)) s_sliderHeld = true;
+  if (!in.mouseHeld) s_sliderHeld = false;
+  if (s_sliderHeld) {
+    const float rel = (in.mouse.x - track.x) / track.w;
+    const float v = std::min(1.0f, std::max(0.0f, rel));
+    if (std::fabs(v - value01) > 0.001f) {
+      value01 = v;
+      changed = true;
     }
   }
-  // 轨道
-  const Rect track(rc.right() - 210, rc.cy() - 3, 180, 6);
-  app.draw.roundRect(track, 3, sk.line);
-  const Rect fill(track.x, track.y, track.w * value01, track.h);
-  app.draw.roundRect(fill, 3, hot ? sk.accent : sk.accentDim);
-  app.draw.circle(track.x + track.w * value01, track.cy(), 8,
-                  hot ? sk.accent : sk.accentDim);
+  // 轨道：圆角胶囊 + accent 填充 + 发光滑钮
+  app.draw.roundRect(track, 4, sk.line);
+  const Rect fill(track.x, track.y, std::max(8.0f, track.w * value01), track.h);
+  app.draw.roundRect(fill, 4, hot ? sk.accent : sk.accentDim);
+  const float kx = track.x + track.w * value01;
+  if (hot)
+    app.draw.glowRect(Rect(kx - 12, track.cy() - 12, 24, 24), 12,
+                       Color8(sk.accent.r, sk.accent.g, sk.accent.b, 70), 8);
+  app.draw.circle(kx, track.cy(), hot ? 10 : 8, sk.accent);
+  app.draw.circle(kx, track.cy(), hot ? 4 : 3, sk.bgDeep);
   return changed;
 }
 
 void sectionLabel(App& app, float x, float y, const std::string& text) {
   const Skin& sk = Theme::skin();
   app.font.draw(app.sdlRenderer(), text, x, y, 14, sk.textDim, true);
+}
+
+// —— NeonSettingsScreen 1:1 控件 ——
+
+void blockTitle(App& app, float x, float y, const std::string& text) {
+  const Skin& sk = Theme::skin();
+  // SettingsBlock：accent 12sp 粗体（Android：Neon.Accent）
+  app.font.draw(app.sdlRenderer(), text, x, y, 13, sk.accent, true);
+}
+
+void blockPanel(App& app, const Rect& rc) {
+  const Skin& sk = Theme::skin();
+  // NeonPanel：切角 0.10 + BgPanel 底 + 1px Line 描线（FSD 皮肤用圆角）
+  if (Theme::isNeon()) {
+    const float c = rc.minDim() * 0.10f;
+    app.draw.chamferRect(rc, c, sk.bgPanel);
+    app.draw.chamferRectOutline(rc, c, sk.line, 1.0f);
+  } else {
+    app.draw.roundRect(rc, 10, sk.bgPanel);
+    app.draw.roundRectOutline(rc, 10, sk.line, 1.0f);
+  }
+}
+
+bool blockRow(App& app, const Rect& rc, const std::string& label,
+              const std::string& sub, bool focused) {
+  const Skin& sk = Theme::skin();
+  const bool hov = hovered(app, rc);
+  const bool hot = focused || hov;
+  // hover / 焦点：淡 accent 底 + 左侧 accent 竖条（Neon 切角底，FSD 圆角）
+  if (hot) {
+    const Color8 hl = Color8(sk.accent.r, sk.accent.g, sk.accent.b, 26);
+    if (Theme::isNeon())
+      app.draw.chamferRect(rc, rc.minDim() * 0.12f, hl);
+    else
+      app.draw.roundRect(rc, 6, hl);
+    app.draw.rect(Rect(rc.x, rc.y + 4, 3, rc.h - 8), sk.accent);
+  }
+  const float pad = 18;
+  if (!sub.empty()) {
+    app.font.draw(app.sdlRenderer(), label, rc.x + pad, rc.y + rc.h * 0.16f, 15,
+                  hot ? sk.textHi : sk.text, hot);
+    app.font.draw(app.sdlRenderer(), sub, rc.x + pad, rc.y + rc.h * 0.56f, 12,
+                  sk.textDim);
+  } else {
+    app.font.drawVCentered(app.sdlRenderer(), label, rc.x + pad, rc.cy(), 15,
+                           hot ? sk.textHi : sk.text, hot);
+  }
+  return activated(app, rc, focused);
+}
+
+bool switchNeon(App& app, const Rect& rc, bool& value, bool focused) {
+  const Skin& sk = Theme::skin();
+  const bool hov = hovered(app, rc);
+  // 整块可点（点击轨道即切换）
+  bool toggled = false;
+  if (activated(app, rc, focused)) {
+    value = !value;
+    toggled = true;
+  }
+  // Compose NeonSwitch：开 = accent 轨道 + BgDeep 钮；关 = BgPanelHi 轨道 + TextDim 钮
+  const float tw = 52, th = 28;
+  const Rect track(rc.right() - tw - 8, rc.cy() - th / 2, tw, th);
+  const Color8 trackOn = Color8(sk.accent.r, sk.accent.g, sk.accent.b, 235);
+  const Color8 trackOff = sk.bgPanelHi;
+  app.draw.roundRect(track, th / 2, value ? trackOn : trackOff);
+  // 描边：开 = accent 实线；关 = Line（保证深底上可见）
+  app.draw.roundRectOutline(track, th / 2,
+                            value ? Color8(sk.accent.r, sk.accent.g, sk.accent.b, 255)
+                                  : (hov || focused
+                                         ? Color8(sk.accent.r, sk.accent.g, sk.accent.b, 110)
+                                         : sk.line),
+                            1.4f);
+  const float knobR = th / 2 - 4;
+  const float knobX = value ? track.right() - knobR - 4 : track.x + knobR + 4;
+  if (value)
+    app.draw.glowRect(Rect(knobX - knobR - 4, track.cy() - knobR - 4, knobR * 2 + 8,
+                           knobR * 2 + 8),
+                      knobR + 4, Color8(255, 255, 255, 40), 6);
+  app.draw.circle(knobX, track.cy(), knobR, value ? sk.bgDeep : sk.textDim);
+  return toggled;
+}
+
+bool styleCard(App& app, const Rect& rc, const std::string& title,
+               const std::string& desc, bool selected, Color8 accent) {
+  const Skin& sk = Theme::skin();
+  // Compose StyleCard：选中 = accent 16% 底 + accent 描边；未选 = BgPanelHi + Line
+  if (Theme::isNeon()) {
+    const float c = rc.minDim() * 0.14f;
+    app.draw.chamferRect(rc, c, selected ? Color8(accent.r, accent.g, accent.b, 41)
+                                         : sk.bgPanelHi);
+    app.draw.chamferRectOutline(rc, c, selected ? accent : sk.line, selected ? 1.8f : 1.0f);
+  } else {
+    app.draw.roundRect(rc, 10, selected ? Color8(accent.r, accent.g, accent.b, 41)
+                                        : sk.bgPanelHi);
+    app.draw.roundRectOutline(rc, 10, selected ? accent : sk.line, selected ? 1.8f : 1.0f);
+  }
+  if (selected)
+    app.draw.glowRect(rc.shrink(-4), Theme::isNeon() ? rc.minDim() * 0.14f : 10,
+                      Color8(accent.r, accent.g, accent.b, 36), 8);
+  app.font.draw(app.sdlRenderer(), title, rc.x + 16, rc.y + 16, 17,
+                selected ? accent : sk.textHi, true);
+  const auto lines = app.font.wrap(desc, 12, rc.w - 32);
+  float y = rc.y + 42;
+  for (size_t i = 0; i < lines.size() && i < 2; i++) {
+    app.font.draw(app.sdlRenderer(), lines[i], rc.x + 16, y, 12, sk.textDim);
+    y += 16;
+  }
+  return activated(app, rc, false);
+}
+
+bool spinnerChip(App& app, const Rect& rc, const std::vector<std::string>& options,
+                 int& index, bool focused) {
+  const Skin& sk = Theme::skin();
+  if (options.empty()) return false;
+  if (index < 0 || index >= (int)options.size()) index = 0;
+  const std::string& val = options[(size_t)index];
+  // Chip 宽度按文字自适应（右侧留 30px 边距）
+  const float fs = 14;
+  const float cw = std::max(86.0f, app.font.textWidth(val, fs, true) + 34);
+  const Rect chip(rc.right() - cw - 8, rc.cy() - 16, cw, 32);
+  const bool hov = hovered(app, chip) || (focused && hovered(app, rc));
+  bool changed = false;
+  if (activated(app, chip, focused) || (focused && app.input.input().pressed[(int)Btn::Ok])) {
+    index = (index + 1) % (int)options.size();
+    changed = true;
+  }
+  if (focused) {
+    const InputState& in = app.input.input();
+    if (in.pressed[(int)Btn::Left]) {
+      index = (index - 1 + (int)options.size()) % (int)options.size();
+      changed = true;
+    }
+    if (in.pressed[(int)Btn::Right]) {
+      index = (index + 1) % (int)options.size();
+      changed = true;
+    }
+  }
+  if (Theme::isNeon()) {
+    app.draw.chamferRect(chip, chip.minDim() * 0.4f, sk.bgPanelHi);
+    if (hov || focused)
+      app.draw.chamferRectOutline(chip, chip.minDim() * 0.4f, sk.accent, 1.4f);
+  } else {
+    app.draw.roundRect(chip, 6, sk.bgPanelHi);
+    if (hov || focused) app.draw.roundRectOutline(chip, 6, sk.accent, 1.4f);
+  }
+  // ‹ 值 ›（accent 粗体，同 SpinnerRow）
+  app.font.drawVCentered(app.sdlRenderer(), "‹", chip.x + 8, chip.cy(), 14, sk.textDim);
+  app.font.drawVCentered(app.sdlRenderer(), val,
+                         chip.cx() - app.font.textWidth(val, fs, true) / 2, chip.cy(), fs,
+                         sk.accent, true);
+  app.font.drawVCentered(app.sdlRenderer(), "›", chip.right() - 16, chip.cy(), 14, sk.textDim);
+  return changed;
 }
 
 void keyHintBar(App& app, const std::vector<KeyHint>& hints) {
@@ -306,6 +508,7 @@ void icon(App& app, int id, const Rect& rc, Color8 c) {
     case 18: iconLogout(app, rc, c); break;
     case 19: iconArrowLeft(app, rc, c); break;
     case 20: iconRefresh(app, rc, c); break;
+    case 21: iconPercent(app, rc, c); break;
     default: break;
   }
 }
@@ -556,6 +759,16 @@ void iconArrowLeft(App& app, const Rect& rc, Color8 c) {  // 返回
   d.line(cx - s * 0.5f, cy, cx + s * 0.9f, cy, c, 2.5f);
 }
 
+void iconPercent(App& app, const Rect& rc, Color8 c) {  // 百分比（性能）
+  Draw& d = app.draw;
+  const float s = rc.minDim() * 0.36f;
+  // 左上圆 + 右下圆（实心）+ 对角线
+  d.circle(rc.x + rc.w * 0.32f, rc.y + rc.h * 0.32f, s * 0.42f, c);
+  d.circle(rc.x + rc.w * 0.68f, rc.y + rc.h * 0.68f, s * 0.42f, c);
+  d.line(rc.x + rc.w * 0.62f, rc.y + rc.h * 0.16f, rc.x + rc.w * 0.38f,
+         rc.y + rc.h * 0.84f, c, 2.6f);
+}
+
 void iconRefresh(App& app, const Rect& rc, Color8 c) {  // 刷新
   Draw& d = app.draw;
   const float cx = rc.cx(), cy = rc.cy();
@@ -631,31 +844,40 @@ SDL_Texture* coverTexture(App& app, const GameEntry& g) {
 
 void platformPlaceholder(App& app, const Rect& rc, GamePlatform p, const std::string& title) {
   Draw& d = app.draw;
-  const uint32_t acc = platformAccent(p);
-  const Color8 c1 = Color8::hex(acc);
-  const Color8 c2 = c1.scale(0.35f);
-  // 对角渐变近似（多条横带插值）
-  const int bands = 8;
+  // ★ 1:1 移植 Android PlaceholderCover：
+  //   平台色垂直渐变（c1→c2）+ 内边距 10dp + 居中白色手柄图标 34dp +
+  //   平台名（白 13sp 粗体）+ 游戏名（白 85% 10sp，最多 2 行）
+  uint32_t c1h = 0, c2h = 0;
+  platformGradient(p, &c1h, &c2h);
+  const Color8 c1 = Color8::hex(c1h);
+  const Color8 c2 = Color8::hex(c2h);
+  // 垂直渐变（分段插值）
+  const int bands = 14;
   for (int i = 0; i < bands; i++) {
     const float t = (float)i / bands;
-    const Color8 c = Color8::hex(acc).lerp(Color8::hex(0x0B1020), t * 0.85f);
-    d.rect(Rect(rc.x, rc.y + rc.h * t, rc.w, rc.h / bands + 1), c);
+    d.rect(Rect(rc.x, rc.y + rc.h * t, rc.w, rc.h / bands + 1), c1.lerp(c2, t));
   }
-  // 像素网格点缀
-  for (int yy = 0; yy < rc.h; yy += 14) {
-    for (int xx = 0; xx < rc.w; xx += 14) {
-      if (((xx / 14) + (yy / 14)) % 5 == 0)
-        d.rect(Rect(rc.x + xx, rc.y + yy, 3, 3), Color8(c1.r, c1.g, c1.b, 40));
-    }
+  const float pad = 10;
+  const Rect inner = rc.inset(pad, pad, pad, pad);
+  // 手柄图标（居中偏上，34dp）
+  const float iconSize = std::min(52.0f, inner.w * 0.34f);
+  const Rect iconRc(inner.cx() - iconSize / 2, inner.cy() - iconSize * 0.78f, iconSize,
+                    iconSize);
+  iconGamepad(app, iconRc, Color8(255, 255, 255, 230));
+  // 平台名（白 13sp 粗体，居中）
+  const std::string pname = platformShortName(p);
+  const float pw = app.font.textWidth(pname, 14, true);
+  app.font.draw(app.sdlRenderer(), pname, inner.cx() - pw / 2,
+                iconRc.bottom() + 8, 14, Color8(255, 255, 255, 255), true);
+  // 游戏名（白 85% 10sp，最多两行，居中）
+  const auto lines = app.font.wrap(title, 12, inner.w);
+  float ty = iconRc.bottom() + 32;
+  for (size_t i = 0; i < lines.size() && i < 2; i++) {
+    const float lw = app.font.textWidth(lines[i], 12);
+    app.font.draw(app.sdlRenderer(), app.font.ellipsize(lines[i], 12, inner.w),
+                  inner.cx() - lw / 2, ty, 12, Color8(255, 255, 255, 217));
+    ty += 16;
   }
-  // 底部标题条
-  d.rect(Rect(rc.x, rc.bottom() - 34, rc.w, 34), Color8::hex(0x05070E, 210));
-  d.line(rc.x, rc.bottom() - 34, rc.right(), rc.bottom() - 34, c1, 2);
-  app.font.draw(app.sdlRenderer(), platformShortName(p), rc.x + 8, rc.bottom() - 30, 12, c1,
-                true);
-  const std::string t = app.font.ellipsize(title, 13, rc.w - 16);
-  app.font.draw(app.sdlRenderer(), t, rc.x + 8, rc.bottom() - 15, 13, Color8::hex(0xEAF6FF));
-  (void)c2;
 }
 
 }  // namespace w

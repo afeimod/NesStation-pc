@@ -25,20 +25,9 @@ std::string clockText() {
   return buf;
 }
 
-std::string lastPlayedText(int64_t epoch) {
-  if (epoch <= 0) return "从未游玩";
-  const int64_t diff = (int64_t)time(nullptr) - epoch;
-  if (diff < 60) return "刚刚游玩";
-  if (diff < 3600) return std::to_string(diff / 60) + " 分钟前";
-  if (diff < 86400) return std::to_string(diff / 3600) + " 小时前";
-  return std::to_string(diff / 86400) + " 天前";
-}
-
-std::string playTimeText(int64_t sec) {
-  if (sec < 60) return sec > 0 ? std::to_string(sec) + " 秒" : "—";
-  if (sec < 3600) return std::to_string(sec / 60) + " 分钟";
-  return std::to_string(sec / 3600) + " 小时 " + std::to_string((sec % 3600) / 60) + " 分";
-}
+// APK GamePlatform.kt 格式化已下沉至 GameLibrary.cpp（formatPlayTime / formatLastPlayed）
+#define lastPlayedText formatLastPlayed
+#define playTimeText formatPlayTime
 
 // 排序：最近游玩优先（与 Android NeonHomeScreen flowGames 一致）
 std::vector<GameEntry> recentFirst(const std::vector<GameEntry>& games) {
@@ -77,7 +66,7 @@ void homeAction(App& app, int action) {
     case 0: app.pushScene(createLibraryScene(-1)); break;
     case 1: app.pushScene(createLibraryScene(-2)); break;
     case 2: app.pushScene(createLibraryScene(-3)); break;
-    case 3: app.pushScene(createSettingsScene(1)); break;  // 设置 → 核心
+    case 3: app.pushScene(createSettingsScene(6)); break;  // 核心管理 → 核心设置
     case 4: app.pushScene(createSettingsScene()); break;
     case 5: app.pushScene(createAboutScene()); break;
     case 6:

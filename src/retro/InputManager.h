@@ -99,6 +99,7 @@ class InputManager {
   bool mouseRightHeld_ = false;
   bool mouseRightPressedAccum_ = false;
   int wheelAccum_ = 0;
+  float mouseDxAccum_ = 0, mouseDyAccum_ = 0;
 
   // 长按重复
   float repeatTimer_[(int)Btn::Count] = {};

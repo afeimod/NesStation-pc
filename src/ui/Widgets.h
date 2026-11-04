@@ -11,9 +11,15 @@
 namespace ns {
 namespace w {
 
-// 激活判定：键盘/手柄焦点确认 或 鼠标点击（矩形命中）
+// 激活判定：键盘/手柄焦点确认 或 鼠标点击（矩形命中；松开且未拖动 = 点击，
+// 与拖拽滚动手势互斥 —— 修复「列表拖不动 + 拖动误触」）
 bool activated(App& app, const Rect& rc, bool focused);
 bool hovered(App& app, const Rect& rc);
+// 拖拽滚动（触摸/鼠标按住拖动）：返回应加到 scroll_ 的增量；
+// 在 rc 内按住并拖动时生效（所有列表容器可用）
+float dragScroll(App& app, const Rect& rc);
+// 当前是否处于拖拽手势（位移 > 10px）——控件抑制误触用
+bool dragGestureActive();
 
 // —— 控件 ——
 bool button(App& app, const Rect& rc, const std::string& label, bool focused,
@@ -29,9 +35,27 @@ bool toggleRow(App& app, const Rect& rc, const std::string& title, bool& value,
 bool cycleRow(App& app, const Rect& rc, const std::string& title,
               const std::vector<std::string>& options, int& index, bool focused,
               const std::string& subtitle = "");
-// 滑条（0..1）
+// 滑条（0..1）：拖拽轨道任意位置 / 点击定位 / ←→微调（修复无法拖动问题）
 bool sliderRow(App& app, const Rect& rc, const std::string& title, float& value01,
                bool focused, const std::string& subtitle = "");
+
+// —— NeonSettingsScreen 1:1 控件（设置页专用） ——
+// SettingsBlock 标题（accent 12sp 粗体，同 Compose SettingsBlock）
+void blockTitle(App& app, float x, float y, const std::string& text);
+// NeonPanel：切角面板 + Line 描线（同 Compose NeonPanel）
+void blockPanel(App& app, const Rect& rc);
+// NeonRow：无框行（label 13sp + sub 11sp，hover/焦点高亮），返回激活
+bool blockRow(App& app, const Rect& rc, const std::string& label,
+              const std::string& sub, bool focused);
+// NeonSwitch：开=accent 轨道 + 深色钮；关=BgPanelHi 轨道 + 灰钮（同 Compose NeonSwitch）
+// 返回「本次发生切换」
+bool switchNeon(App& app, const Rect& rc, bool& value, bool focused);
+// SpinnerRow：切角 chip（BgPanelHi 底 + accent 粗体），点击/Enter 循环选项
+bool spinnerChip(App& app, const Rect& rc, const std::vector<std::string>& options,
+                 int& index, bool focused);
+// StyleCard：外观风格双选卡（选中 = accent 16% 底 + accent 描边）
+bool styleCard(App& app, const Rect& rc, const std::string& title,
+               const std::string& desc, bool selected, Color8 accent);
 
 // —— 结构元素 ——
 void panel(App& app, const Rect& rc, bool highlighted = false, float glow = 0);
@@ -83,11 +107,13 @@ void iconHelp(App& app, const Rect& rc, Color8 c);        // 关于
 void iconLogout(App& app, const Rect& rc, Color8 c);      // 退出
 void iconArrowLeft(App& app, const Rect& rc, Color8 c);   // 返回
 void iconRefresh(App& app, const Rect& rc, Color8 c);     // 刷新
+void iconPercent(App& app, const Rect& rc, Color8 c);     // 百分比（性能）
 
 // 封面卡片（面板 + 封面/占位 + 收藏角标）
 void coverCard(App& app, const Rect& rc, const GameEntry& g, bool selected);
 
-// 平台占位封面（程序化像素风：平台色 + 平台名 + 游戏名）
+// 平台占位封面（★ 1:1 移植 Android PlaceholderCover：平台色垂直渐变 +
+// 白色手柄图标 + 平台名 + 游戏名）
 void platformPlaceholder(App& app, const Rect& rc, GamePlatform p, const std::string& title);
 // 取游戏封面纹理（本地文件 → 占位返回 nullptr）
 SDL_Texture* coverTexture(App& app, const GameEntry& g);

@@ -1,7 +1,10 @@
 // NesStation PC — 游戏库（扫描 / 持久化 / 收藏 / 游玩统计）
 #pragma once
+#include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/Platform.h"
@@ -56,6 +59,16 @@ class GameLibrary {
   int scanDirectory(const std::string& dir, GamePlatform platformHint = GamePlatform::NES,
                     bool useHint = false, bool recursive = true);
 
+  // ★ 重扫全部 ROM 目录（对齐 Android 版「启动/手动刷新时自动入库」）
+  // 后台线程枚举 → pendingScan_ → 主线程 drainPendingScan 合入（线程安全）
+  void startBackgroundRescan(bool recursive = true);
+  bool scanRunning() const;
+  size_t pendingScanCount() const;
+  int drainPendingScan();  // 主线程：合入候选并返回新增数
+  int lastScanAdded() const { return lastScanAdded_.load(); }
+  void clearScanAddedFlag() { lastScanAdded_.store(0); }
+  void joinScanThread();
+
   void remove(const std::string& id);            // 仅移出库（不删文件）
   void toggleFavorite(const std::string& id);
   void rename(const std::string& id, const std::string& customTitle);
@@ -81,6 +94,13 @@ class GameLibrary {
   std::string coverDir_;
   std::vector<GameEntry> games_;
   std::vector<std::string> romDirs_;
+
+  // 后台扫描（启动时自动重扫 ROM 目录）
+  mutable std::mutex scanMu_;
+  std::thread scanThread_;
+  std::vector<std::string> pendingScan_;  // 后台枚举结果（互斥锁保护）
+  std::atomic<bool> scanRunning_{false};
+  std::atomic<int> lastScanAdded_{0};
 };
 
 // romPath → 稳定 id（FNV-1a 64bit hex）

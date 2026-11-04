@@ -103,21 +103,38 @@ exe 旁放 `portable.flag` 即转便携模式（全部数据进 `UserData/`）�
 
 ### 3. 放入 ROM
 
-- 主界面 → 游戏库 → **＋ 添加 ROM 目录**（递归扫描，`.zip/.bin/.iso` 等歧义扩展按平台页消歧）
+- 主界面 → 游戏库 → **＋ 添加 ROM 目录**（递归扫描，最深 32 层，符号链接环自动去重）
+- ★ **智能平台嗅探**：`.zip` 解析内部文件名、`.cue/.bin/.iso/.img/.mdf` 读取光盘镜像头
+  （ISO9660 PVD / PLAYSTATION 标识 / SEGA 引导区 / GC·Wii 魔数 / PSP 魔数）自动
+  识别真实平台；街机包（无扩展名部件文件）自动归入街机。识别失败才回退按扩展名
+- ★ **启动自动重扫**：每次启动后台线程重扫全部 ROM 目录，新游戏自动入库
+  （对齐 Android 版「启动/手动刷新时自动入库」）
 - 封面自动从 libretro 官方缩略图库获取（`thumbnails.libretro.com` + jsDelivr 镜像）
-- BIOS 放 `~/.config/NesStation/system/`（详见设置 → BIOS / 系统）
+- BIOS 放 `~/.config/NesStation/system/`（详见设置 → 存储）
 
 ### 4. NGC/Wii · Wii U · Switch 及外置独立核心
 
-设置 → **核心** / **独立模拟器** 页三种方式任选：
+★ **源码级集成（v1.2 新）**：仓库 `emulators/` 目录已内置三大模拟器完整源码快照
+（Dolphin 2609 / Cemu v2.6 / Eden v0.2.1，含全部子模块），本地构建无需联网：
+
+```bash
+# Linux / macOS（依赖清单见脚本头部注释）
+scripts/build_emulators.sh all          # 产物：dist/emulators/<名称>/
+# Windows（VS2022）
+powershell -File scripts\build_emulators.ps1 -Target all
+# 或 CMake 超级构建：cmake -B build -DNESSTATION_SUPERBUILD=ON .
+```
+
+产物目录放到 nesstation 可执行文件旁的 `emulators/` 下即自动识别，
+详见 `emulators/README.md`。不想编译时三种替代方式：
 1. **自动下载**（Cemu / PCSX2 / PPSSPP / Flycast / Azahar）：点击「自动下载」，
    从 GitHub Releases 拉取官方包并自动安装到 `数据目录/external/<id>/`
-2. **打开官网**（Ishiiruka / Eden / FreeJ2ME）：点击「打开官网」到官方发布页下载，
+2. **打开官网**（Eden / FreeJ2ME）：点击「打开官网」到官方发布页下载，
    解压后「手动选择」可执行文件
 3. **自动探测**：已安装的官方版放 `emulators/<名称>/`（或装在 Program Files /
    /usr/bin 等常见位置）会被自动识别
 
-启动参数已按各官方推荐配置（Ishiiruka `-e` / Cemu `-g … -f` / Eden 直启等），
+启动参数已按各官方推荐配置（Dolphin/Ishiiruka `-e` / Cemu `-g … -f` / Eden 直启等），
 双形态平台（PS2/PSP/DC/3DS/Java）启动时可在进程内与外置核心间选择。
 
 ### 5. CI 构建（GitHub Actions，手动触发）
@@ -141,8 +158,9 @@ Actions 页面 → **Build** → **Run workflow** → 选择构建目标：
 
 ### 三套输入设备全部支持（鼠标 / 键盘 / 手柄）
 
-鼠标为第一等公民：所有按钮、菜单、列表、封面流、磁贴均可点击；
-封面流与磁贴流支持横向拖拽；列表与长页支持滚轮滚动；游戏内**右键**呼出菜单。
+鼠标与触摸为第一等公民：所有按钮、菜单、列表、封面流、磁贴均可点击；
+封面流与磁贴流支持横向拖拽；★ **所有列表/长页支持按住拖拽滚动**（鼠标/
+触摸屏一致，拖动与点击自动互斥不误触）；滚轮同步支持；游戏内**右键**呼出菜单。
 
 ### 手柄 / 键盘（UI 与游戏通用）
 
@@ -188,9 +206,16 @@ Actions 页面 → **Build** → **Run workflow** → 选择构建目标：
 - 两套主题在 **设置 → 外观 → 主界面风格** 即时切换（持久化），游戏库 / 设置页全套跟随换肤
 
 功能全景：
-- 游戏库：平台过滤 / 收藏 / 最近游玩、封面网格、重命名、移除、重新获取封面
+- 游戏库双皮肤（与 Android 版同构）：Neon = 左侧核心列表（彩点 + 计数 + 搜索 +
+  导入/刷新）+ 平台大标题/时代副标题 + 3D 封面流 + 底部信息条（徽章 / ★ 收藏 /
+  删除 / 开始）；FSD = 顶栏 + 平台过滤 chips + 方形封面网格
+- 设置双皮肤：Neon = 左侧彩色图标分类导航（外观/视频/显示/性能/输入/存储/核心设置/关于）
+  + NeonPanel 分节面板 + NeonSwitch/SpinnerRow/StyleCard；FSD = 单页分节滚动
 - 游戏内菜单：即时存档 ×11 槽（A=自动）、读档、重置、画面设置（缩放 / 扫描线 / CRT 荫罩 / 平滑 / 双屏布局）、核心设置（热生效）、磁盘切换（FDS/Mega-CD 换碟）
-- 核心选项：libretro 标准核心选项 UI（v1/v2 统一解析，分类显示，持久化到 `core-options/*.json`）
+- ★ 核心选项全面中文化：选项名 / 分类 / 取值（Enabled→开启、NTSC→NTSC（美/日）等
+  200+ 词条 + 前缀规则），未命中词条回退英文原文；核心名全部中文标注
+  （如「FCEUmm · FC/NES 模拟」「Snes9x · 超级任天堂模拟」）
+- 核心选项持久化到 `core-options/*.json`（v1/v2 统一解析，分类显示）
 - 双屏平台（NDS/3DS）：双屏 / 仅上屏 / 仅下屏布局
 - 按键映射：双端口 × 16 键，键位捕获重绑定，恢复默认
 - 数据：`~/.config/NesStation/`（library.json / config.json / cores / system / saves / states / covers / 日志）
@@ -205,11 +230,14 @@ cmake -B build -DNESSTATION_SUPERBUILD=ON \
 cmake --build build -j$(nproc)
 ```
 
-| 模拟器 | 版本锚点 | 系统依赖（Linux） | Windows |
+★ **v1.2 起源码已随仓库内置**（`emulators/` 目录，含全部子模块快照），超级构建
+**不再联网拉取**；也可用 `scripts/build_emulators.sh(.ps1)` 独立构建（见 emulators/README.md）。
+
+| 模拟器 | 源码快照 | 离线构建依赖（Linux） | Windows |
 | --- | --- | --- | --- |
-| Dolphin | `2512` | cmake、gcc≥10、libgtk（可关）、libevdev | vcpkg 工具链自动 |
-| Cemu | `v2.6` | vcpkg（`VCPKG_ROOT`）+ C++20 | vcpkg 工具链自动 |
-| Eden | `v0.2.1` | cmake、gcc≥10、nasm（可选） | vcpkg 可选 |
+| Dolphin | `2609`（34 Externals 全内置） | cmake≥3.16、gcc≥10、Qt6/Qt5 开发包 | VS2022（Qt 预编译已内置） |
+| Cemu | `v2.6`（dependencies 全内置） | cmake≥3.21、GTK3/Wayland 开发包 | VS2022 + 内置 vcpkg |
+| Eden | `v0.2.1`（镜像快照） | cmake≥3.22 + 系统库（`CPMUTIL_FORCE_SYSTEM=ON`，清单见脚本） | 首次配置需联网拉 CPM 依赖 |
 
 > 三个项目体量巨大（各 30~90 分钟编译）。**即便跳过超级构建**，前端也能直接使用
 > 用户已安装的官方 PC 版 —— 与 Android 版“探测到即用”的体验一致。

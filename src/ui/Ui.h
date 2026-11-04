@@ -90,6 +90,7 @@ struct InputState {
   bool released[(int)Btn::Count] = {};  // 本帧释放沿
 
   Vec2 mouse;
+  float mouseDx = 0, mouseDy = 0;  // 本帧鼠标位移增量（拖拽滚动 / 触摸滑动用）
   bool mouseHeld = false;      // 左键按住
   bool mousePressed = false;   // 左键按下沿
   bool mouseReleased = false;

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "emu/EmuRunner.h"
+#include "ui/OptionZh.h"
 #include "ui/Scenes.h"
 #include "ui/Widgets.h"
 #include "util/Fs.h"
@@ -106,8 +107,9 @@ class CoreOptionsScene : public Scene {
     if (!c) return;
     const auto& opts = c->options();
 
-    // 滚轮滚动长列表
+    // 滚轮 + ★拖拽滚动长列表
     const Rect listRc(24, 110, app.draw.W - 48, app.draw.H - 150);
+    scroll_ += w::dragScroll(app, listRc);
     if (listRc.contains(app.input.input().mouse)) {
       scroll_ = std::max(0.0f, scroll_ - (float)app.input.input().wheel * 56.0f);
     }
@@ -129,7 +131,7 @@ class CoreOptionsScene : public Scene {
       if (!o.visible) continue;
       if (!o.categoryKey.empty() && o.categoryKey != lastCat) {
         lastCat = o.categoryKey;
-        w::sectionLabel(app, 40, y, lastCat);
+        w::sectionLabel(app, 40, y, zhOptionCategory(o.categoryKey));
         y += 28;
       }
       int cur = 0;
@@ -143,12 +145,15 @@ class CoreOptionsScene : public Scene {
           break;
         }
       }
-      // 用 labels 显示
-      std::vector<std::string> labels = o.labels;
+      // ★ 显示名与取值标签中文化（未命中词条时回退英文原文）
+      std::vector<std::string> labels;
+      labels.reserve(o.labels.size());
+      for (const auto& lb : o.labels) labels.push_back(zhOptionValue(lb));
       int idx = cur;
       const Rect rc(24, y, app.draw.W - 60, 50);
       const bool focused = sel_ == (int)i;
-      if (w::cycleRow(app, rc, o.desc, labels, idx, focused, o.info)) {
+      if (w::cycleRow(app, rc, zhOptionDesc(o.desc), labels, idx, focused,
+                      o.info)) {
         applyOption(app, o, idx);
       }
       y += 56;
@@ -375,8 +380,9 @@ class FileBrowserScene : public Scene {
       }
     }
 
-    // 滚轮滚动
+    // 滚轮 + ★拖拽滚动
     const Rect listRc(24, 110, app.draw.W - 48, app.draw.H - 160);
+    scroll_ += w::dragScroll(app, listRc);
     if (listRc.contains(app.input.input().mouse)) {
       scroll_ = std::max(0.0f, scroll_ - (float)app.input.input().wheel * 48.0f);
     }

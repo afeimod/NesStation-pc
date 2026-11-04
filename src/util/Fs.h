@@ -34,9 +34,10 @@ uint64_t fileSize(const std::string& path);
 std::vector<DirEntry> listDir(const std::string& dir); // 名称排序，目录优先
 std::vector<std::string> listFilesRecursive(const std::string& dir);
 
-// 递归收集 romPath 指定目录下所有文件（限制层级防符号环）
+// 递归收集 romPath 指定目录下所有文件
+// 深度上限 32（覆盖深层 ROM 整理目录）；符号链接环按 dev+inode 去重剪枝
 void walkFiles(const std::string& dir, std::vector<std::string>* out,
-               int maxDepth = 8, int depth = 0);
+               int maxDepth = 32, int depth = 0);
 
 // 执行文件所在目录（用于 exe 同目录的 cores/、emulators/、assets/ 探测）
 std::string exeDir();

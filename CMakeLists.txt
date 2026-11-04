@@ -10,13 +10,12 @@ option(NESSTATION_USE_SYSTEM_SDL2 "Use system-installed SDL2 instead of FetchCon
 # 构建完成后自动下载 libretro 官方预编译核心到 build/bin/cores/（exe 同目录，
 # CoreManager 自动识别），源码构建开箱即玩。离线/CI 环境传 OFF。
 option(NESSTATION_FETCH_CORES     "Download libretro cores next to the built binary (needs network)" ON)
-option(NESSTATION_SUPERBUILD      "Build standalone emulators (Dolphin/Cemu/Eden) from source" OFF)
-option(NESSTATION_BUILD_DOLPHIN   "Superbuild: Nintendo GameCube / Wii (Dolphin ${NESSTATION_DOLPHIN_TAG})" ON)
-option(NESSTATION_BUILD_CEMU      "Superbuild: Nintendo Wii U (Cemu)" ON)
-option(NESSTATION_BUILD_EDEN      "Superbuild: Nintendo Switch (Eden)" ON)
-set(NESSTATION_DOLPHIN_TAG "2512" CACHE STRING "Dolphin release tag (NGC/Wii)")
-set(NESSTATION_CEMU_TAG    "v2.6" CACHE STRING "Cemu release tag (Wii U)")
-set(NESSTATION_EDEN_TAG    "v0.2.1" CACHE STRING "Eden release tag (Switch)")
+# ★ 源码级集成：emulators/ 目录已内置三大模拟器完整源码（含全部子模块），
+#   超级构建全程无联网；也可用 scripts/build_emulators.sh(.ps1) 独立构建
+option(NESSTATION_SUPERBUILD      "Build standalone emulators (Dolphin/Cemu/Eden) from the vendored source in emulators/" OFF)
+option(NESSTATION_BUILD_DOLPHIN   "Superbuild: Nintendo GameCube / Wii (Dolphin 2609, vendored)" ON)
+option(NESSTATION_BUILD_CEMU      "Superbuild: Nintendo Wii U (Cemu v2.6, vendored)" ON)
+option(NESSTATION_BUILD_EDEN      "Superbuild: Nintendo Switch (Eden v0.2.1, vendored)" ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

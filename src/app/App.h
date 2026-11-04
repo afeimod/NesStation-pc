@@ -97,6 +97,7 @@ class App {
   void requestExit() { running_ = false; }
   bool isFullscreen() const { return config.fullscreen; }
   void toggleFullscreen();
+  void applyFullscreen();   // 按当前 config.fullscreen 应用窗口状态（不翻转）
   int width() const { return winW_; }
   int height() const { return winH_; }
   const std::string& dataDir() const { return dataDir_; }
@@ -144,6 +145,9 @@ class App {
   };
   std::map<std::string, TexEntry> texCache_;
   uint64_t frameNo_ = 0;
+
+ public:
+  uint64_t frameNo() const { return frameNo_; }
   void evictTextures();
 
   void setWindowIcon();

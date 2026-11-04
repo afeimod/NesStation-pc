@@ -133,6 +133,9 @@ bool App::init() {
 
   cores.init(dataDir_);
   library.load(dataDir_);
+  // ★ 启动时自动重扫 ROM 目录（对齐 Android 版「启动/手动刷新时自动入库」）：
+  // 后台线程枚举，主线程逐帧合并（games_ 只在主线程写，线程安全）
+  library.startBackgroundRescan(config.scanRecursive);
   externals.init(dataDir_);
   for (const auto& [k, v] : config.emulatorPaths) {
     // 旧版本键名兼容：dolphin → ishiiruka（对齐 Android CoreRegistry id）
@@ -185,6 +188,7 @@ void App::shutdown() {
   for (auto& kv : texCache_)
     if (kv.second.tex) SDL_DestroyTexture(kv.second.tex);
   texCache_.clear();
+  library.joinScanThread();  // 等待后台扫描线程退出（防退出闪退）
   if (!configFile_.empty()) {
     config.padMapping = input.mapping();
     config.save(configFile_);
@@ -239,6 +243,10 @@ bool App::saveScreenshot(const std::string& pngPath) {
 
 void App::toggleFullscreen() {
   config.fullscreen = !config.fullscreen;
+  applyFullscreen();
+}
+
+void App::applyFullscreen() {
   SDL_SetWindowFullscreen(window_, config.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 }
 
@@ -367,6 +375,15 @@ void App::frame() {
   input.endFrame(1.0f / 60.0f);
   const InputState& in = input.input();
   covers.pump(*this);
+
+  // 启动后台扫描：枚举完成后合入游戏库（主线程写入，无锁竞争）
+  if (!library.scanRunning() && library.pendingScanCount() > 0) {
+    const int n = library.drainPendingScan();
+    if (n > 0) {
+      library.save();
+      toast("启动扫描：新增 " + std::to_string(n) + " 个游戏");
+    }
+  }
 
   if (!scenes_.empty()) {
     Scene* s = scenes_.back().get();

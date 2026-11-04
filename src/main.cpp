@@ -61,12 +61,12 @@ void applyStep(ns::App& app, const std::string& name) {
   } else if (name == "settings") {
     app.pushScene(ns::createSettingsScene());
   } else if (name == "perf") {
-    app.pushScene(ns::createSettingsScene(6));  // 性能 tab（快进倍速）
+    app.pushScene(ns::createSettingsScene(3));  // 性能 tab（快进倍速）
   } else if (name == "cores") {
-    app.pushScene(ns::createSettingsScene(1));  // 核心 tab（应用内下载）
+    app.pushScene(ns::createSettingsScene(6));  // 核心设置 tab（应用内下载）
   } else if (name == "ext") {
-    // 独立模拟器 tab（外置核心管理：自动下载 / 手动选择 / 打开官网 / 移除）
-    app.pushScene(ns::createSettingsScene(4));
+    // 核心设置 tab 的外置核心区块（自动下载 / 手动选择 / 打开官网 / 移除）
+    app.pushScene(ns::createSettingsScene(6));
   } else if (name == "about") {
     app.pushScene(ns::createAboutScene());
   } else if (name == "browser") {

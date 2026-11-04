@@ -22,6 +22,22 @@ std::string gameIdForPath(const std::string& path) {
   return buf;
 }
 
+// —— APK GamePlatform.kt 格式化（文案 1:1；HomeScenes / Library 共用）——
+std::string formatPlayTime(int64_t sec) {
+  if (sec < 60) return sec > 0 ? std::to_string(sec) + " 秒" : "—";
+  if (sec < 3600) return std::to_string(sec / 60) + " 分钟";
+  return std::to_string(sec / 3600) + " 小时 " + std::to_string((sec % 3600) / 60) + " 分";
+}
+
+std::string formatLastPlayed(int64_t epoch) {
+  if (epoch <= 0) return "从未游玩";
+  const int64_t diff = (int64_t)time(nullptr) - epoch;
+  if (diff < 60) return "刚刚游玩";
+  if (diff < 3600) return std::to_string(diff / 60) + " 分钟前";
+  if (diff < 86400) return std::to_string(diff / 3600) + " 小时前";
+  return std::to_string(diff / 86400) + " 天前";
+}
+
 std::string prettifyTitle(const std::string& filename) {
   std::string name = fsutil::stemOf(filename);
   // 下划线 / 点分隔 → 空格（点仅在无中文时替换，避免误伤中文句点）
@@ -99,7 +115,12 @@ void GameLibrary::load(const std::string& dataDir) {
             e.lastPlayedAt = g.value("lastPlayedAt", (int64_t)0);
             e.playTimeSec = g.value("playTimeSec", (int64_t)0);
             e.favorite = g.value("favorite", false);
-            if (!e.romPath.empty() && fsutil::isFile(e.romPath)) games_.push_back(std::move(e));
+            if (!e.romPath.empty() && fsutil::isFile(e.romPath)) {
+              // id 恒为 romPath 的稳定哈希：加载时重算自愈（手改/旧格式/
+              // 缺失 id 的库文件不会破坏扫描去重）
+              e.id = gameIdForPath(e.romPath);
+              games_.push_back(std::move(e));
+            }
           }
         }
         if (j.contains("romDirs") && j["romDirs"].is_array()) {
@@ -158,13 +179,15 @@ bool GameLibrary::addRom(const std::string& romPath, GamePlatform platformHint,
   const std::string ext = fsutil::extOf(romPath);
   if (ext.empty()) return false;
 
-  // 与原项目一致的歧义处理：zip / bin / iso / elf 按导入页平台消歧
+  // 与原项目一致的歧义处理 + ★ PC 增强：内容噢探（zip 内部文件名 /
+  // 光盘镜像 ISO9660·SEGA·GC/Wii 魔数）自动识别真实平台，对齐
+  // Android 版「导入页平台消歧」的无交互等价实现
   GamePlatform p;
   if (useHint) {
     p = platformHint;
   } else if (ext == "zip" || ext == "bin" || ext == "iso" || ext == "elf" || ext == "cue" ||
-             ext == "chd" || ext == "img" || ext == "exe") {
-    p = platformHint;
+             ext == "chd" || ext == "img" || ext == "exe" || ext == "mdf") {
+    p = sniffRomPlatform(romPath, platformHint);
   } else {
     p = platformFromExtension(ext);
   }
@@ -202,9 +225,76 @@ int GameLibrary::scanDirectory(const std::string& dir, GamePlatform platformHint
       if (!e.isDir) files.push_back(e.fullPath);
   }
   int added = 0;
-  for (const auto& f : files)
-    if (addRom(f, platformHint, useHint)) added++;
+  try {
+    for (const auto& f : files)
+      if (addRom(f, platformHint, useHint)) added++;
+  } catch (...) {
+    // 单个条目异常不影响扫描结果（已计入的保留）
+  }
   return added;
+}
+
+// ★ 重扫全部 ROM 目录（对齐 Android 版「启动/手动刷新时自动入库」）
+// 线程安全设计：后台线程只做磁盘枚举（重 I/O），收集到的候选文件路径
+// 经互斥锁交给 pendingScan_；由主线程 drainPendingScan() 合入 games_
+//（games_ 仅主线程读写，杜绝并发崩溃 —— arm64 闪退的常见根源）
+void GameLibrary::startBackgroundRescan(bool recursive) {
+  joinScanThread();
+  if (romDirs_.empty()) return;
+  scanRunning_.store(true);
+  lastScanAdded_.store(0);
+  scanThread_ = std::thread([this, recursive] {
+    std::vector<std::string> found;
+    const std::vector<std::string> dirs = romDirs_;  // 启动早期快照（主循环前）
+    for (const auto& dir : dirs) {
+      try {
+        if (recursive) {
+          const auto fs = fsutil::listFilesRecursive(dir);
+          found.insert(found.end(), fs.begin(), fs.end());
+        } else {
+          for (const auto& e : fsutil::listDir(dir))
+            if (!e.isDir) found.push_back(e.fullPath);
+        }
+      } catch (...) {
+        // 单目录异常跳过，继续其余目录
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lk(scanMu_);
+      pendingScan_ = std::move(found);
+    }
+    scanRunning_.store(false);
+  });
+}
+
+bool GameLibrary::scanRunning() const { return scanRunning_.load(); }
+
+size_t GameLibrary::pendingScanCount() const {
+  std::lock_guard<std::mutex> lk(scanMu_);
+  return pendingScan_.size();
+}
+
+// 主线程调用：把后台枚举到的候选文件合入库（去重 + 平台嗅探在此进行）
+int GameLibrary::drainPendingScan() {
+  std::vector<std::string> batch;
+  {
+    std::lock_guard<std::mutex> lk(scanMu_);
+    batch.swap(pendingScan_);
+  }
+  if (batch.empty()) return 0;
+  int added = 0;
+  for (const auto& path : batch) {
+    try {
+      if (addRom(path, GamePlatform::NES, false)) added++;
+    } catch (...) {
+    }
+  }
+  lastScanAdded_.store(added);
+  return added;
+}
+
+void GameLibrary::joinScanThread() {
+  if (scanThread_.joinable()) scanThread_.join();
 }
 
 void GameLibrary::remove(const std::string& id) {

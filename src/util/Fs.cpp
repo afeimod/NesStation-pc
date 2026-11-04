@@ -5,11 +5,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -28,6 +30,10 @@ std::string normalizeSep(std::string s) {
   return s;
 }
 }  // namespace
+
+// 带符号环去重的递归枚举实现（walkFiles 用）
+void walkFilesImpl(const std::string& dir, std::vector<std::string>* out, int maxDepth,
+                   int depth, std::set<std::pair<uint64_t, uint64_t>>* visited);
 
 std::string join(const std::string& a, const std::string& b) {
   if (a.empty()) return b;
@@ -123,19 +129,62 @@ uint64_t fileSize(const std::string& path) {
 
 std::vector<DirEntry> listDir(const std::string& dir) {
   std::vector<DirEntry> out;
-  std::error_code ec;
-  stdfs::path p(dir);
-  if (!stdfs::is_directory(p, ec)) return out;
-  for (stdfs::directory_iterator it(p, ec), end; it != end && !ec; it.increment(ec)) {
+#ifdef _WIN32
+  // Windows：MSVC 的 std::filesystem 实现成熟稳定，保留（带 ec 全防护）
+  try {
+    std::error_code ec;
+    stdfs::path p(dir);
+    if (!stdfs::is_directory(p, ec)) return out;
+    for (stdfs::directory_iterator it(p, ec), end; it != end && !ec; it.increment(ec)) {
+      DirEntry e;
+      e.name = it->path().filename().string();
+      if (e.name.empty() || e.name == "." || e.name == "..") continue;
+      e.fullPath = it->path().string();
+      std::error_code ec2;
+      e.isDir = it->is_directory(ec2);
+      e.size = e.isDir ? 0 : fileSize(e.fullPath);
+      out.push_back(std::move(e));
+    }
+  } catch (...) {
+    // 枚举异常（网络盘断开等）：返回已收集项，绝不向上抛
+  }
+#else
+  // Linux / macOS：纯 POSIX opendir/readdir（含 d_type 未知回退 stat，
+  // 各 arm64 发行版 / 老工具链下最稳，避开 libstdc++ filesystem 兼容性问题）
+  DIR* d = opendir(dir.c_str());
+  if (!d) return out;
+  struct dirent* de;
+  while ((de = readdir(d)) != nullptr) {
+    const char* n = de->d_name;
+    if (n[0] == 0 || (n[0] == '.' && (n[1] == 0 || (n[1] == '.' && n[2] == 0)))) continue;
     DirEntry e;
-    e.name = it->path().filename().string();
-    if (e.name.empty() || e.name == "." || e.name == "..") continue;
-    e.fullPath = it->path().string();
-    std::error_code ec2;
-    e.isDir = it->is_directory(ec2);
-    e.size = e.isDir ? 0 : fileSize(e.fullPath);
+    e.name = n;
+    e.fullPath = join(dir, e.name);
+    bool knownDir = false, knownFile = false;
+#ifdef DT_DIR
+    if (de->d_type == DT_DIR) knownDir = true;
+    else if (de->d_type == DT_REG) knownFile = true;
+#endif
+    if (!knownDir && !knownFile) {
+      // d_type 未知（部分文件系统 / 老内核）：stat 兜底
+      struct stat st;
+      if (::stat(e.fullPath.c_str(), &st) == 0) {
+        if (S_ISDIR(st.st_mode)) knownDir = true;
+        else if (S_ISREG(st.st_mode)) knownFile = true;
+      } else {
+        continue;  // 无法识别（坏链接 / 权限）→ 跳过该项
+      }
+    }
+    e.isDir = knownDir;
+    e.size = 0;
+    if (knownFile) {
+      struct stat st;
+      if (::stat(e.fullPath.c_str(), &st) == 0) e.size = (uint64_t)st.st_size;
+    }
     out.push_back(std::move(e));
   }
+  closedir(d);
+#endif
   std::sort(out.begin(), out.end(), [](const DirEntry& a, const DirEntry& b) {
     if (a.isDir != b.isDir) return a.isDir;  // 目录优先
     return normalizeSep(a.name) < normalizeSep(b.name);
@@ -143,11 +192,34 @@ std::vector<DirEntry> listDir(const std::string& dir) {
   return out;
 }
 
-void walkFiles(const std::string& dir, std::vector<std::string>* out, int maxDepth, int depth) {
+void walkFiles(const std::string& dir, std::vector<std::string>* out, int maxDepth,
+               int depth) {
+  walkFilesImpl(dir, out, maxDepth, depth, nullptr);
+}
+
+// 带符号链接环去重的内部实现（dev+ino 记录已访问目录）
+void walkFilesImpl(const std::string& dir, std::vector<std::string>* out, int maxDepth,
+                   int depth, std::set<std::pair<uint64_t, uint64_t>>* visitedOuter) {
   if (depth > maxDepth) return;
+  std::set<std::pair<uint64_t, uint64_t>> local;
+  std::set<std::pair<uint64_t, uint64_t>>& visited = visitedOuter ? *visitedOuter : local;
+#ifndef _WIN32
+  // 目录本身 dev+ino 入表：符号链接指回祖先目录时立即剪枝
+  {
+    struct stat st;
+    if (::stat(dir.c_str(), &st) == 0) {
+      const auto key = std::make_pair((uint64_t)st.st_dev, (uint64_t)st.st_ino);
+      if (!visited.insert(key).second) return;  // 已访问（符号环）
+    }
+  }
+#endif
   for (const auto& e : listDir(dir)) {
     if (e.isDir) {
-      walkFiles(e.fullPath, out, maxDepth, depth + 1);
+      try {
+        walkFilesImpl(e.fullPath, out, maxDepth, depth + 1, &visited);
+      } catch (...) {
+        // 单个子目录异常不影响整体扫描
+      }
     } else {
       out->push_back(e.fullPath);
     }

@@ -185,6 +185,8 @@ void InputManager::beginFrame() {
   mouseReleasedAccum_ = false;
   mouseRightPressedAccum_ = false;
   wheelAccum_ = 0;
+  mouseDxAccum_ = 0;
+  mouseDyAccum_ = 0;
 }
 
 void InputManager::endFrame(float dt) {
@@ -213,6 +215,8 @@ void InputManager::endFrame(float dt) {
   ui_.mouseHeld = mouseHeldNow_;
   ui_.mouseRightPressed = mouseRightPressedAccum_;
   ui_.wheel = wheelAccum_;
+  ui_.mouseDx = mouseDxAccum_;
+  ui_.mouseDy = mouseDyAccum_;
   pollRetroState();
 }
 
@@ -335,6 +339,8 @@ void InputManager::handleEvent(const SDL_Event& ev) {
       break;
     case SDL_MOUSEMOTION:
       ui_.mouse = Vec2((float)ev.motion.x, (float)ev.motion.y);
+      mouseDxAccum_ += (float)ev.motion.xrel;
+      mouseDyAccum_ += (float)ev.motion.yrel;
       break;
     case SDL_MOUSEBUTTONDOWN:
       ui_.mouse = Vec2((float)ev.button.x, (float)ev.button.y);
