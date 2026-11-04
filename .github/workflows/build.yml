@@ -276,6 +276,79 @@ jobs:
           path: dist/NesStation-windows-x64.zip
 
   # ==========================================================================
+  # 动态生成 emu-build 的矩阵
+  #
+  # 为什么需要这一步：GitHub Actions 在 job 级 `if` 求值时 `strategy.matrix`
+  # 尚未展开，因此 job 级 `if` 中引用 `matrix.*` 会被解析器拒绝
+  # （"Unrecognized named-value: 'matrix'"）。把 target 过滤逻辑前置到
+  # setup-matrix，用 fromJSON 注入 emu-build 的矩阵，既满足语义，
+  # 又能避免为无关平台启动 runner 空跑。
+  # ==========================================================================
+  setup-matrix:
+    name: Setup emulator matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+      has_emus: ${{ steps.set.outputs.has_emus }}
+    steps:
+      - id: set
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ github.event.inputs.target }}"
+          WITH="${{ github.event.inputs.with_emulators }}"
+
+          EMUS='[]'
+          if [ "$WITH" != "false" ]; then
+            case "$TARGET" in
+              all|emulators)
+                EMUS='[
+                  {"platform":"linux-x64","emu":"dolphin","runs":"ubuntu-22.04"},
+                  {"platform":"linux-x64","emu":"cemu","runs":"ubuntu-22.04"},
+                  {"platform":"linux-x64","emu":"eden","runs":"ubuntu-22.04"},
+                  {"platform":"linux-arm64","emu":"dolphin","runs":"ubuntu-24.04-arm","container":"debian:12"},
+                  {"platform":"linux-arm64","emu":"eden","runs":"ubuntu-24.04-arm","container":"debian:12"},
+                  {"platform":"windows-x64","emu":"dolphin","runs":"windows-2022"},
+                  {"platform":"windows-x64","emu":"cemu","runs":"windows-2022"},
+                  {"platform":"windows-x64","emu":"eden","runs":"windows-2022"}
+                ]'
+                ;;
+              linux-x64)
+                EMUS='[
+                  {"platform":"linux-x64","emu":"dolphin","runs":"ubuntu-22.04"},
+                  {"platform":"linux-x64","emu":"cemu","runs":"ubuntu-22.04"},
+                  {"platform":"linux-x64","emu":"eden","runs":"ubuntu-22.04"}
+                ]'
+                ;;
+              linux-arm64)
+                EMUS='[
+                  {"platform":"linux-arm64","emu":"dolphin","runs":"ubuntu-24.04-arm","container":"debian:12"},
+                  {"platform":"linux-arm64","emu":"eden","runs":"ubuntu-24.04-arm","container":"debian:12"}
+                ]'
+                ;;
+              windows-x64)
+                EMUS='[
+                  {"platform":"windows-x64","emu":"dolphin","runs":"windows-2022"},
+                  {"platform":"windows-x64","emu":"cemu","runs":"windows-2022"},
+                  {"platform":"windows-x64","emu":"eden","runs":"windows-2022"}
+                ]'
+                ;;
+              *)
+                EMUS='[]'
+                ;;
+            esac
+          fi
+
+          # 压缩成单行 JSON（多行值写入 GITHUB_OUTPUT 需换行转义，jq -c 更稳）
+          COMPACT=$(printf '%s' "$EMUS" | jq -c .)
+          echo "matrix={\"include\":$COMPACT}" >> "$GITHUB_OUTPUT"
+          if [ "$COMPACT" != "[]" ]; then
+            echo "has_emus=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "has_emus=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ==========================================================================
   # 三大独立模拟器（源码级构建：emulators/ 内置快照，无运行时下载）
   #
   #   · 矩阵作业：每个平台 × 每个模拟器独立构建，互不影响
@@ -288,27 +361,13 @@ jobs:
   # ==========================================================================
   emu-build:
     name: "EMU ${{ matrix.emu }} · ${{ matrix.platform }}"
-    if: ${{ github.event.inputs.with_emulators != 'false' &&
-            (github.event.inputs.target == 'all' ||
-             github.event.inputs.target == 'emulators' ||
-             github.event.inputs.target == matrix.platform) }}
+    needs: setup-matrix
+    if: ${{ needs.setup-matrix.outputs.has_emus == 'true' }}
     runs-on: ${{ matrix.runs }}
     container: ${{ matrix.container }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # —— Linux x86_64 ——
-          - { platform: linux-x64,   emu: dolphin, runs: ubuntu-22.04 }
-          - { platform: linux-x64,   emu: cemu,    runs: ubuntu-22.04 }
-          - { platform: linux-x64,   emu: eden,    runs: ubuntu-22.04 }
-          # —— Linux arm64（无 Cemu：上游不支持 ARM64）——
-          - { platform: linux-arm64, emu: dolphin, runs: ubuntu-24.04-arm, container: debian:12 }
-          - { platform: linux-arm64, emu: eden,    runs: ubuntu-24.04-arm, container: debian:12 }
-          # —— Windows x64 ——
-          - { platform: windows-x64, emu: dolphin, runs: windows-2022 }
-          - { platform: windows-x64, emu: cemu,    runs: windows-2022 }
-          - { platform: windows-x64, emu: eden,    runs: windows-2022 }
+      matrix: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
