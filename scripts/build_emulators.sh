@@ -17,7 +17,8 @@
 #   Dolphin：libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev
 #            libxi-dev libxrandr-dev libpulse-dev libasound2-dev
 #            qt6-base-dev qt6-tools-dev（或 qtbase5-dev）
-#   Cemu：libgtk-3-dev libwebkit2gtk-4.1-dev libsecret-1-dev
+#   Cemu：内置 vcpkg（首次构建需联网拉基线历史）；另需
+#         libgtk-3-dev libwebkit2gtk-4.1-dev libsecret-1-dev
 #         libgcrypt20-dev libsystemd-dev libpulse-dev
 #   Eden：libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev
 #         zlib1g-dev libzstd-dev libopus-dev libssl-dev
@@ -44,8 +45,26 @@ build_dolphin() {
 }
 
 build_cemu() {
-  echo "=== Cemu（Wii U）==="
-  cmake -S emulators/cemu -B build/cemu -DCMAKE_BUILD_TYPE=Release
+  echo "=== Cemu（Wii U，内置 vcpkg）==="
+  # vcpkg 快照不带 .git：manifest 模式解析 builtin-baseline 必须有 git 历史。
+  # 一次性修复：init + 拉取基线提交并硬对齐（需联网；基线即快照所在提交，
+  # 树内容不变，只是补上历史）。vcpkg 二进制缺失时同时 bootstrap。
+  local VCPKG_DIR="$PWD/emulators/cemu/dependencies/vcpkg"
+  local BASELINE
+  BASELINE=$(sed -n 's/.*"builtin-baseline"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' \
+              emulators/cemu/vcpkg.json)
+  if [ ! -d "$VCPKG_DIR/.git" ] && [ -n "$BASELINE" ]; then
+    echo "（vcpkg 快照无 .git：拉取基线 $BASELINE）"
+    git -C "$VCPKG_DIR" init -q
+    git -C "$VCPKG_DIR" remote add origin https://github.com/microsoft/vcpkg.git
+    git -C "$VCPKG_DIR" fetch -q --depth 1 origin "$BASELINE"
+    git -C "$VCPKG_DIR" reset -q --hard FETCH_HEAD
+  fi
+  if [ ! -x "$VCPKG_DIR/vcpkg" ] && [ ! -x "$VCPKG_DIR/vcpkg.exe" ]; then
+    bash "$VCPKG_DIR/bootstrap-vcpkg.sh"
+  fi
+  cmake -S emulators/cemu -B build/cemu -DCMAKE_BUILD_TYPE=Release \
+    -DVCPKG_INSTALL_OPTIONS="--clean-after-build"
   cmake --build build/cemu -j"$JOBS"
   mkdir -p "$OUT/cemu"
   cp -r build/cemu/bin/* "$OUT/cemu/"

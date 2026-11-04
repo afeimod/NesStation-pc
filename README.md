@@ -8,6 +8,21 @@ C++17 + SDL2 单二进制原生实现，libretro 核心进程内加载（RetroAr
 
 ---
 
+## 📦 v1.2.1 更新（2026-11-04）
+
+**修复（用户反馈）**
+
+| 问题 | 根因 | 修复 |
+| --- | --- | --- |
+| CI 报 `Invalid workflow file`（Line 291: Unrecognized named-value 'matrix'），所有目标一次都没跑起来 | GitHub Actions 的 **job 级 `if` 只能引用 `github/needs/vars/inputs`**，不能引用 `matrix`；旧版 emu-build 在 job 级 if 写了 `matrix.platform`，整个 workflow 解析失败 | `emu-build` 按平台拆成 3 个矩阵作业（`emu-build-linux-x64` / `emu-build-linux-arm64` / `emu-build-windows-x64`），平台过滤全部为静态字符串，模拟器维度保留 matrix |
+| （潜伏）Linux x64 模拟器作业 `apt-get` 无 sudo 必挂 | 旧版单作业里 arm64 腿在 debian:12 容器（root、无 sudo），x64 腿在托管 runner（必须 sudo），无法共用一条命令 | 拆分后各用各的：x64 用 `sudo apt-get`，arm64 容器内用裸 `apt-get` |
+| （潜伏）Cemu 源码构建必挂 | 快照内置的 vcpkg 无 `.git` 历史，manifest 模式解析 `builtin-baseline` 必须走 git；且无 `vcpkg`/`vcpkg.exe` 二进制 | 构建脚本自动 `git init` + 拉取基线提交对齐 + bootstrap 二进制（Linux 编译 / Windows 下载预编译），并加 `--clean-after-build` 控制磁盘占用 |
+| （潜伏）Windows Qt6 安装步骤必挂 | `aqt -m qtbase` 不是合法模块名（qtbase 本来就默认安装）；且 Eden 需要 **qtcharts** 模块 | 改为 `-m qttools qtcharts` |
+| （潜伏）arm64 deb / linux tar 里的模拟器不可执行 | ① deb 打包统一 `chmod 0644` 清掉可执行位；② artifact 上传/下载会丢失权限位 | 打包后按二进制名恢复 `0755`（dolphin-emu / dolphin-tool / Cemu / eden） |
+| Eden 编译依赖不全 | Eden 系统路线需要 Qt **Charts** 组件 + ffmpeg/nasm 等，原 apt 清单缺失 | 补充 `qt6-charts-dev`（含发行版名回退）、`nasm yasm`、`libavcodec-dev` 系列、`libasound2-dev` 等 |
+
+版本徽章同步为 **v1.2.1**（主页 Neon/FSD 双皮肤、窗口标题、关于页）。
+
 ## 📦 v1.2.0 更新（2026-11-04）
 
 **修复（用户反馈）**

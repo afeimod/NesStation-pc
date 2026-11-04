@@ -3,6 +3,11 @@ name: Build
 # 手动触发：选择构建目标；with_emulators 控制是否源码编译三大独立模拟器
 # （Dolphin/Cemu/Eden）并打入安装包。单个模拟器失败只影响该模拟器，
 # 不阻塞前端本体与其余模拟器（step 级 continue-on-error + 状态文件）。
+#
+# ★ v1.2.1 修复：GitHub Actions 的 job 级 if 只能引用 github/needs/vars/
+#   inputs 上下文，不能引用 matrix。旧版 emu-build 在 job 级 if 里写了
+#   matrix.platform 导致整个 workflow 解析失败（Invalid workflow file）。
+#   现按平台拆成 3 个矩阵作业，平台过滤全部使用静态字符串。
 on:
   workflow_dispatch:
     inputs:
@@ -162,7 +167,7 @@ jobs:
 
       - name: Package (.deb, Debian/Ubuntu)
         env:
-          DEB_VERSION: "1.2.0"
+          DEB_VERSION: "1.2.1"
         run: |
           set -eux
           PKG="dist/root"
@@ -276,107 +281,37 @@ jobs:
           path: dist/NesStation-windows-x64.zip
 
   # ==========================================================================
-  # 动态生成 emu-build 的矩阵
-  #
-  # 为什么需要这一步：GitHub Actions 在 job 级 `if` 求值时 `strategy.matrix`
-  # 尚未展开，因此 job 级 `if` 中引用 `matrix.*` 会被解析器拒绝
-  # （"Unrecognized named-value: 'matrix'"）。把 target 过滤逻辑前置到
-  # setup-matrix，用 fromJSON 注入 emu-build 的矩阵，既满足语义，
-  # 又能避免为无关平台启动 runner 空跑。
-  # ==========================================================================
-  setup-matrix:
-    name: Setup emulator matrix
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set.outputs.matrix }}
-      has_emus: ${{ steps.set.outputs.has_emus }}
-    steps:
-      - id: set
-        shell: bash
-        run: |
-          set -euo pipefail
-          TARGET="${{ github.event.inputs.target }}"
-          WITH="${{ github.event.inputs.with_emulators }}"
-
-          EMUS='[]'
-          if [ "$WITH" != "false" ]; then
-            case "$TARGET" in
-              all|emulators)
-                EMUS='[
-                  {"platform":"linux-x64","emu":"dolphin","runs":"ubuntu-22.04"},
-                  {"platform":"linux-x64","emu":"cemu","runs":"ubuntu-22.04"},
-                  {"platform":"linux-x64","emu":"eden","runs":"ubuntu-22.04"},
-                  {"platform":"linux-arm64","emu":"dolphin","runs":"ubuntu-24.04-arm","container":"debian:12"},
-                  {"platform":"linux-arm64","emu":"eden","runs":"ubuntu-24.04-arm","container":"debian:12"},
-                  {"platform":"windows-x64","emu":"dolphin","runs":"windows-2022"},
-                  {"platform":"windows-x64","emu":"cemu","runs":"windows-2022"},
-                  {"platform":"windows-x64","emu":"eden","runs":"windows-2022"}
-                ]'
-                ;;
-              linux-x64)
-                EMUS='[
-                  {"platform":"linux-x64","emu":"dolphin","runs":"ubuntu-22.04"},
-                  {"platform":"linux-x64","emu":"cemu","runs":"ubuntu-22.04"},
-                  {"platform":"linux-x64","emu":"eden","runs":"ubuntu-22.04"}
-                ]'
-                ;;
-              linux-arm64)
-                EMUS='[
-                  {"platform":"linux-arm64","emu":"dolphin","runs":"ubuntu-24.04-arm","container":"debian:12"},
-                  {"platform":"linux-arm64","emu":"eden","runs":"ubuntu-24.04-arm","container":"debian:12"}
-                ]'
-                ;;
-              windows-x64)
-                EMUS='[
-                  {"platform":"windows-x64","emu":"dolphin","runs":"windows-2022"},
-                  {"platform":"windows-x64","emu":"cemu","runs":"windows-2022"},
-                  {"platform":"windows-x64","emu":"eden","runs":"windows-2022"}
-                ]'
-                ;;
-              *)
-                EMUS='[]'
-                ;;
-            esac
-          fi
-
-          # 压缩成单行 JSON（多行值写入 GITHUB_OUTPUT 需换行转义，jq -c 更稳）
-          COMPACT=$(printf '%s' "$EMUS" | jq -c .)
-          echo "matrix={\"include\":$COMPACT}" >> "$GITHUB_OUTPUT"
-          if [ "$COMPACT" != "[]" ]; then
-            echo "has_emus=true"  >> "$GITHUB_OUTPUT"
-          else
-            echo "has_emus=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  # ==========================================================================
   # 三大独立模拟器（源码级构建：emulators/ 内置快照，无运行时下载）
   #
-  #   · 矩阵作业：每个平台 × 每个模拟器独立构建，互不影响
-  #   · step 级 continue-on-error：单个模拟器编译失败不阻塞其它目标，
+  # ★ 按平台拆成 3 个矩阵作业：job 级 if 不能引用 matrix 上下文
+  #   （GitHub Actions 限制：job 级 if 仅可用 github/needs/vars/inputs），
+  #   平台过滤必须用静态字符串写在各 job 的 if 里。
+  #   · step 级 continue-on-error：单个模拟器编译失败不阻塞其它模拟器，
   #     产物里写 _status.txt（ok / failed），打包作业据此决定是否并入
   #   · linux-arm64 不构建 Cemu：上游 Cemu v2.6 仅支持 x86_64（无 ARM64
   #     Linux 移植；ARM64 设备可经 box64 运行 x64 发行版）
-  #   · Eden 在 CI 用 CPM 联网拉依赖（EDEN_FORCE_SYSTEM=OFF），本地无网
-  #     环境仍可用系统库方案（默认 ON，见 scripts/build_emulators.sh）
+  #   · Eden 依赖经 CPM 联网拉取（CPMUTIL_FORCE_SYSTEM 默认 OFF）
+  #   · Cemu 内置 vcpkg 快照无 .git：构建脚本会先 git-init 并拉取
+  #     builtin-baseline 提交（见 scripts/build_emulators.sh / .ps1）
   # ==========================================================================
-  emu-build:
-    name: "EMU ${{ matrix.emu }} · ${{ matrix.platform }}"
-    needs: setup-matrix
-    if: ${{ needs.setup-matrix.outputs.has_emus == 'true' }}
-    runs-on: ${{ matrix.runs }}
-    container: ${{ matrix.container }}
+  emu-build-linux-x64:
+    name: "EMU ${{ matrix.emu }} · linux-x64"
+    if: ${{ github.event.inputs.with_emulators != 'false' &&
+            (github.event.inputs.target == 'all' ||
+             github.event.inputs.target == 'emulators' ||
+             github.event.inputs.target == 'linux-x64') }}
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
-
+      matrix:
+        emu: [dolphin, cemu, eden]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps (Linux)
-        if: ${{ matrix.platform != 'windows-x64' }}
+      - name: Install deps
         run: |
           set -eux
-          COMMON="build-essential cmake ninja-build pkg-config git curl ca-certificates unzip python3"
+          COMMON="build-essential cmake ninja-build pkg-config git curl ca-certificates unzip python3 nasm yasm"
           EXTRA=""
           case "${{ matrix.emu }}" in
             dolphin)
@@ -389,42 +324,31 @@ jobs:
             eden)
               EXTRA="libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
                      zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
-                     libglvnd-dev libfuse2" ;;
+                     libglvnd-dev libfuse2 libasound2-dev libpulse-dev \
+                     libavcodec-dev libavutil-dev libswscale-dev libavformat-dev libavfilter-dev" ;;
           esac
           # webkit 4.1 缺失时回退 4.0（Cemu 两者皆可）
           if [ "${{ matrix.emu }}" = "cemu" ]; then
-            apt-get update
-            apt-get install -y $COMMON $EXTRA libwebkit2gtk-4.1-dev \
-              || apt-get install -y $COMMON $EXTRA libwebkit2gtk-4.0-dev
+            sudo apt-get update
+            sudo apt-get install -y $COMMON $EXTRA libwebkit2gtk-4.1-dev \
+              || sudo apt-get install -y $COMMON $EXTRA libwebkit2gtk-4.0-dev
           else
-            apt-get update
-            apt-get install -y $COMMON $EXTRA
+            sudo apt-get update
+            sudo apt-get install -y $COMMON $EXTRA
+          fi
+          # Eden 需要系统 Qt 的 Charts 组件（包名随发行版不同）
+          if [ "${{ matrix.emu }}" = "eden" ]; then
+            sudo apt-get install -y qt6-charts-dev \
+              || sudo apt-get install -y libqt6charts6-dev \
+              || echo "::warning::qt6 charts dev 包不可用，Eden 可能编译失败"
           fi
 
-      - name: Install Qt6 (Dolphin/Eden, Windows)
-        # runner 无 Qt：aqtinstall 装到 C:\Qt，经 CMAKE_PREFIX_PATH 供 cmake 发现
-        if: ${{ matrix.platform == 'windows-x64' && (matrix.emu == 'dolphin' || matrix.emu == 'eden') }}
-        shell: pwsh
-        run: |
-          pip install aqtinstall
-          aqt install-qt windows desktop 6.7.0 win64_msvc2019_64 -O C:\Qt -m qtbase qttools
-          "CMAKE_PREFIX_PATH=C:\Qt\6.7.0\msvc2019_64" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "PATH=C:\Qt\6.7.0\msvc2019_64\bin;$env:PATH" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-
-      - name: Build emulator (Linux)
-        if: ${{ matrix.platform != 'windows-x64' }}
+      - name: Build emulator
         id: build
         continue-on-error: true
         env:
           EDEN_FORCE_SYSTEM: "OFF"   # CI 有网：CPM 拉上游锁定版本依赖
         run: bash scripts/build_emulators.sh ${{ matrix.emu }} 3
-
-      - name: Build emulator (Windows)
-        if: ${{ matrix.platform == 'windows-x64' }}
-        id: buildw
-        continue-on-error: true
-        shell: pwsh
-        run: powershell -File scripts\build_emulators.ps1 -Target ${{ matrix.emu }} -Jobs 3
 
       - name: Write status
         if: always()
@@ -461,21 +385,175 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: emu-${{ matrix.platform }}-${{ matrix.emu }}
+          name: emu-linux-x64-${{ matrix.emu }}
+          path: dist/
+
+  emu-build-linux-arm64:
+    name: "EMU ${{ matrix.emu }} · linux-arm64"
+    if: ${{ github.event.inputs.with_emulators != 'false' &&
+            (github.event.inputs.target == 'all' ||
+             github.event.inputs.target == 'emulators' ||
+             github.event.inputs.target == 'linux-arm64') }}
+    runs-on: ubuntu-24.04-arm
+    container: debian:12
+    strategy:
+      fail-fast: false
+      matrix:
+        emu: [dolphin, eden]   # Cemu 上游仅 x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          set -eux
+          COMMON="build-essential cmake ninja-build pkg-config git curl ca-certificates unzip python3 nasm yasm"
+          EXTRA=""
+          case "${{ matrix.emu }}" in
+            dolphin)
+              EXTRA="libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev libxi-dev \
+                     libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
+                     libcurl4-openssl-dev qt6-base-dev qt6-tools-dev" ;;
+            eden)
+              EXTRA="libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
+                     zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
+                     libglvnd-dev libfuse2 libasound2-dev libpulse-dev \
+                     libavcodec-dev libavutil-dev libswscale-dev libavformat-dev libavfilter-dev" ;;
+          esac
+          # debian:12 容器内以 root 运行，无需 sudo
+          apt-get update
+          apt-get install -y $COMMON $EXTRA
+          # Eden 需要系统 Qt 的 Charts 组件
+          if [ "${{ matrix.emu }}" = "eden" ]; then
+            apt-get install -y qt6-charts-dev \
+              || apt-get install -y libqt6charts6-dev \
+              || echo "::warning::qt6 charts dev 包不可用，Eden 可能编译失败"
+          fi
+
+      - name: Build emulator
+        id: build
+        continue-on-error: true
+        env:
+          EDEN_FORCE_SYSTEM: "OFF"   # CI 有网：CPM 拉上游锁定版本依赖
+        run: bash scripts/build_emulators.sh ${{ matrix.emu }} 3
+
+      - name: Write status
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p dist
+          OUT="dist/emulators/${{ matrix.emu }}"
+          BIN_OK=0
+          case "${{ matrix.emu }}" in
+            dolphin) [ -n "$(find "$OUT" -type f \( -name 'Dolphin.exe' -o -name 'dolphin-emu' \) 2>/dev/null)" ] && BIN_OK=1 ;;
+            eden)    [ -n "$(find "$OUT" -type f \( -name 'eden.exe'  -o -name 'eden' -o -name 'Eden.exe' \) 2>/dev/null)" ] && BIN_OK=1 ;;
+          esac
+          if [ "$BIN_OK" = "1" ]; then
+            echo "ok" > dist/_status.txt
+            echo "构建成功" >> dist/_status.txt
+          else
+            echo "failed: 产物二进制未生成（详见构建日志）" > dist/_status.txt
+          fi
+          cat dist/_status.txt
+          find dist -maxdepth 3 -type d || true
+
+      - name: Trim dist (only this emulator)
+        if: always()
+        shell: bash
+        run: |
+          if [ -d "dist/emulators" ]; then
+            find dist/emulators -mindepth 1 -maxdepth 1 -type d \
+              ! -name '${{ matrix.emu }}' -exec rm -rf {} + 2>/dev/null || true
+          fi
+          ls -la dist dist/emulators 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emu-linux-arm64-${{ matrix.emu }}
+          path: dist/
+
+  emu-build-windows-x64:
+    name: "EMU ${{ matrix.emu }} · windows-x64"
+    if: ${{ github.event.inputs.with_emulators != 'false' &&
+            (github.event.inputs.target == 'all' ||
+             github.event.inputs.target == 'emulators' ||
+             github.event.inputs.target == 'windows-x64') }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        emu: [dolphin, cemu, eden]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt6 (Dolphin/Eden)
+        # runner 无 Qt：aqtinstall 装到 C:\Qt，经 CMAKE_PREFIX_PATH 供 cmake 发现
+        # 注意：qtbase 属默认安装内容不能作为 -m 模块名；qtcharts 为 Eden 必需
+        if: ${{ matrix.emu == 'dolphin' || matrix.emu == 'eden' }}
+        shell: pwsh
+        run: |
+          pip install aqtinstall
+          aqt install-qt windows desktop 6.7.0 win64_msvc2019_64 -O C:\Qt -m qttools qtcharts
+          "CMAKE_PREFIX_PATH=C:\Qt\6.7.0\msvc2019_64" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "PATH=C:\Qt\6.7.0\msvc2019_64\bin;$env:PATH" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Build emulator (Windows)
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: powershell -File scripts\build_emulators.ps1 -Target ${{ matrix.emu }} -Jobs 3
+
+      - name: Write status
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p dist
+          OUT="dist/emulators/${{ matrix.emu }}"
+          BIN_OK=0
+          case "${{ matrix.emu }}" in
+            dolphin) [ -n "$(find "$OUT" -type f \( -name 'Dolphin.exe' -o -name 'dolphin-emu' \) 2>/dev/null)" ] && BIN_OK=1 ;;
+            cemu)    [ -n "$(find "$OUT" -type f \( -name 'Cemu.exe'  -o -name 'Cemu' \) 2>/dev/null)" ] && BIN_OK=1 ;;
+            eden)    [ -n "$(find "$OUT" -type f \( -name 'eden.exe'  -o -name 'eden' -o -name 'Eden.exe' \) 2>/dev/null)" ] && BIN_OK=1 ;;
+          esac
+          if [ "$BIN_OK" = "1" ]; then
+            echo "ok" > dist/_status.txt
+            echo "构建成功" >> dist/_status.txt
+          else
+            echo "failed: 产物二进制未生成（详见构建日志）" > dist/_status.txt
+          fi
+          cat dist/_status.txt
+          find dist -maxdepth 3 -type d || true
+
+      - name: Trim dist (only this emulator)
+        if: always()
+        shell: bash
+        run: |
+          if [ -d "dist/emulators" ]; then
+            find dist/emulators -mindepth 1 -maxdepth 1 -type d \
+              ! -name '${{ matrix.emu }}' -exec rm -rf {} + 2>/dev/null || true
+          fi
+          ls -la dist dist/emulators 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emu-windows-x64-${{ matrix.emu }}
           path: dist/
 
   # ==========================================================================
   # 打包合并：前端本体 + 三大模拟器 → 最终发行包
   #   linux-x64   → NesStation-linux-x64-full.tar.gz
-  #   linux-arm64 → nesstation_1.2.0_arm64_full.deb（注入 /opt/nesstation/emulators）
+  #   linux-arm64 → nesstation_1.2.1_arm64_full.deb（注入 /opt/nesstation/emulators）
   #   windows-x64 → NesStation-windows-x64-full.zip
-  # 某模拟器状态为 failed / 缺失时自动跳过该模拟器，其余照常打包。
+  # 某模拟器状态为 failed / 缺失时自动跳过该模拟器，其余照常打包；
+  # needs 里 emu-build-* 为 skipped（with_emulators=false）时本作业一并跳过。
   # ==========================================================================
   bundle-linux-x64:
     name: Bundle Linux x64 (+emulators)
-    needs: [linux-x64, emu-build]
-    if: ${{ !cancelled() && needs.linux-x64.result == 'success' &&
-            github.event.inputs.with_emulators != 'false' &&
+    needs: [linux-x64, emu-build-linux-x64]
+    if: ${{ !cancelled() &&
+            needs.linux-x64.result == 'success' &&
+            needs.emu-build-linux-x64.result != 'skipped' &&
             (github.event.inputs.target == 'all' || github.event.inputs.target == 'linux-x64') }}
     runs-on: ubuntu-22.04
     steps:
@@ -507,6 +585,10 @@ jobs:
               echo "::warning::linux-x64 模拟器 $e 未成功构建，发行包跳过"
             fi
           done
+          # artifact 中转会丢失可执行位：恢复模拟器可执行文件权限
+          find app/NesStation-linux/emulators -type f \
+            \( -name 'dolphin-emu' -o -name 'dolphin-tool' -o -name 'Cemu' -o -name 'eden' \) \
+            -exec chmod 0755 {} + 2>/dev/null || true
           echo "included emulators:$INCLUDED" | tee app/NesStation-linux/模拟器清单.txt
           [ -n "$INCLUDED" ] || { echo "::error::没有任何模拟器构建成功"; exit 1; }
           cd app && tar czf ../NesStation-linux-x64-full.tar.gz NesStation-linux
@@ -518,9 +600,10 @@ jobs:
 
   bundle-linux-arm64:
     name: Bundle Linux arm64 deb (+emulators)
-    needs: [linux-arm64, emu-build]
-    if: ${{ !cancelled() && needs.linux-arm64.result == 'success' &&
-            github.event.inputs.with_emulators != 'false' &&
+    needs: [linux-arm64, emu-build-linux-arm64]
+    if: ${{ !cancelled() &&
+            needs.linux-arm64.result == 'success' &&
+            needs.emu-build-linux-arm64.result != 'skipped' &&
             (github.event.inputs.target == 'all' || github.event.inputs.target == 'linux-arm64') }}
     runs-on: ubuntu-24.04-arm
     steps:
@@ -561,10 +644,8 @@ jobs:
           # 运行库提示（可选安装）
           cat > ex/opt/nesstation/模拟器依赖.txt <<'EOF'
           内置模拟器为系统库动态链接，缺失时按需安装：
-            Dolphin: sudo apt install libqt6widgets6 libqt6gui6 libqt6core6 \
-                              libqt6dbus6 libpulse0 libasound2t64
-            Eden:    sudo apt install libboost-locale1.74+ libfmt9 liblz4-1 \
-                              libopus0 libzstd1 zlib1g
+            Dolphin: sudo apt install libqt6widgets6 libqt6gui6 libqt6core6 libqt6dbus6 libqt6charts6 libpulse0 libasound2t64
+            Eden:    sudo apt install libboost-locale1.74+ libfmt9 liblz4-1 libopus0 libzstd1 zlib1g
           EOF
           # 重算 md5sums + 权限
           cd ex && find . -type f ! -path "./DEBIAN/*" -exec md5sum {} \; \
@@ -572,6 +653,10 @@ jobs:
           find ex -type d -exec chmod 0755 {} \;
           find ex -type f -exec chmod 0644 {} \;
           chmod 0755 ex/opt/nesstation/nesstation
+          # 恢复模拟器可执行位（上面统一 chmod 0644 会清掉）
+          find ex/opt/nesstation/emulators -type f \
+            \( -name 'dolphin-emu' -o -name 'dolphin-tool' -o -name 'eden' \) \
+            -exec chmod 0755 {} + 2>/dev/null || true
           # 重新版本号（+emu 后缀区分）
           NEWVER=$(grep -m1 '^Version:' ex/DEBIAN/control | awk '{print $2}')+emu
           sed -i "s/^Version:.*/Version: $NEWVER/" ex/DEBIAN/control
@@ -589,9 +674,10 @@ jobs:
 
   bundle-windows-x64:
     name: Bundle Windows x64 (+emulators)
-    needs: [windows-x64, emu-build]
-    if: ${{ !cancelled() && needs.windows-x64.result == 'success' &&
-            github.event.inputs.with_emulators != 'false' &&
+    needs: [windows-x64, emu-build-windows-x64]
+    if: ${{ !cancelled() &&
+            needs.windows-x64.result == 'success' &&
+            needs.emu-build-windows-x64.result != 'skipped' &&
             (github.event.inputs.target == 'all' || github.event.inputs.target == 'windows-x64') }}
     runs-on: windows-2022
     steps:
@@ -622,7 +708,7 @@ jobs:
               Copy-Item -Path "emu/$e/emulators/$e" -Destination "$out/emulators/$e" -Recurse -Force
               $included += $e
             } else {
-              Write-Warning "::warning::windows-x64 模拟器 $e 未成功构建，发行包跳过"
+              Write-Output "::warning::windows-x64 模拟器 $e 未成功构建，发行包跳过"
             }
           }
           if ($included.Count -eq 0) { throw "没有任何模拟器构建成功" }
