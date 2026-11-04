@@ -1,5 +1,19 @@
 // NesStation PC — 设置：外观 / 核心 / 按键 / 路径 / 模拟器 / BIOS / 数据
 #include <algorithm>
+#include <cmath>
+
+#if defined(__has_include)
+#if __has_include(<SDL_misc.h>)
+#include <SDL_misc.h>
+#define NS_HAVE_SDL_MISC 1
+#endif
+#if __has_include(<SDL_version.h>)
+#include <SDL_version.h>
+#endif
+#endif
+#if defined(SDL_MAJOR_VERSION) && SDL_VERSION_ATLEAST(2, 0, 14)
+#define NS_HAVE_SDL_OPENURL 1
+#endif
 
 #include "ui/Scenes.h"
 #include "ui/Widgets.h"
@@ -7,6 +21,24 @@
 
 namespace ns {
 namespace {
+
+// 打开浏览器（对齐 Android Desktop.browse；SDL 2.0.14+ 的 SDL_OpenURL）
+void openUrl(const std::string& url) {
+#if defined(NS_HAVE_SDL_OPENURL)
+  SDL_OpenURL(url.c_str());
+#elif defined(_WIN32)
+  std::string cmd = "start \"\" \"" + url + "\"";
+  std::system(cmd.c_str());
+#else
+  std::string cmd = "xdg-open '" + url + "'";
+  std::system(cmd.c_str());
+#endif
+}
+
+// 简易圆角矩形填充（行卡片用）
+void d_roundRect(App& app, const Rect& rc, float r, Color8 c) {
+  app.draw.roundRect(rc, r, c);
+}
 
 class SettingsScene : public Scene {
  public:
@@ -25,6 +57,20 @@ class SettingsScene : public Scene {
       app.popScene();
       return;
     }
+    // 内容区滚动：滚轮始终可用（鼠标直接交互）；键盘上下需内容区焦点
+    {
+      const float viewH = (float)app.draw.H - 150 - 110;
+      const float maxScroll = contentH_ > viewH ? contentH_ - viewH : 0;
+      if (maxScroll > 0) {
+        if (in.wheel != 0) scroll_ -= (float)in.wheel * 56.0f;
+        if (focusArea_ == 1) {
+          if (in.pressed[(int)Btn::Up]) scroll_ -= 48;
+          if (in.pressed[(int)Btn::Down]) scroll_ += 48;
+        }
+      }
+      if (scroll_ < 0) scroll_ = 0;
+      if (scroll_ > maxScroll) scroll_ = maxScroll;
+    }
     // 左侧分类
     if (focusArea_ == 0) {
       if (in.pressed[(int)Btn::Down]) catSel_ = (catSel_ + 1) % kCats;
@@ -32,6 +78,11 @@ class SettingsScene : public Scene {
       if (in.pressed[(int)Btn::Right] || in.pressed[(int)Btn::Ok]) focusArea_ = 1;
     } else if (in.pressed[(int)Btn::Left]) {
       focusArea_ = 0;
+    }
+    // 切换分类时回到顶部
+    if (lastCat_ != catSel_) {
+      lastCat_ = catSel_;
+      scroll_ = 0;
     }
   }
 
@@ -62,9 +113,10 @@ class SettingsScene : public Scene {
       y += 54;
     }
 
-    // 内容区
-    d.pushClip(Rect(270, 110, app.draw.W - 270 - 20, app.draw.H - 150));
-    float cy = 120;
+    // 内容区（可滚动：滚轮 / 方向键；长页（核心 / 独立模拟器）不截断）
+    const float viewTop = 110, viewH = (float)app.draw.H - 150 - 110;
+    d.pushClip(Rect(270, viewTop, app.draw.W - 270 - 20, viewH));
+    float cy = 120 - scroll_;
     switch (catSel_) {
       case 0: drawAppearance(app, cy); break;
       case 1: drawCores(app, cy); break;
@@ -75,7 +127,13 @@ class SettingsScene : public Scene {
       case 6: drawPerformance(app, cy); break;
       case 7: drawData(app, cy); break;
     }
+    contentH_ = cy + scroll_ - 120;
     d.popClip();
+    // 滚动条指示（内容超出时）
+    if (contentH_ > viewH) {
+      const Rect track(app.draw.W - 18, viewTop, 6, viewH);
+      w::scrollIndicator(app, track, viewH / contentH_, scroll_ / (contentH_ - viewH));
+    }
 
     w::keyHintBar(app, {{"A", "修改"}, {"←→", "切换选项"}, {"B / Esc", "返回"}});
   }
@@ -199,28 +257,49 @@ class SettingsScene : public Scene {
     app.font.draw(app.sdlRenderer(),
                   "点击「✗ 缺失」的平台行可直接下载；也可运行 scripts/fetch_cores.sh(.ps1)",
                   270, y, 13, sk.textDim);
+    y += 20;
+    app.font.draw(app.sdlRenderer(),
+                  "页面可滚动（滚轮 / ↑↓）：下方「外置核心」区块含 Ishiiruka（Dolphin 系）/ Cemu / "
+                  "Eden 等 8 个独立模拟器，支持自动下载。",
+                  270, y, 13, sk.textDim);
     y += 34;
 
     for (GamePlatform p : allPlatforms()) {
       const PlatformCore pc = platformCore(p);
       Rect rc(270, y, app.draw.W - 300, 46);
       std::string status;
+      std::string title = std::string(platformShortName(p)) + " · " + pc.coreTitle;
+      if (pc.experimental) title += "（实验性）";
       if (pc.kind == CoreKind::Libretro) {
         if (app.cores.libretroCoreAvailable(p)) {
           const PlatformCore inUse = app.cores.resolveCore(p);
           status = std::string(inUse.coreFile) == std::string(pc.coreFile)
                        ? "✓ 已安装"
                        : std::string("✓ 用替代 ") + inUse.coreTitle;
+          // 同平台外置独立核心已就绪 → 补充提示（对齐 Android 双核心平台）
+          if (app.externals.availableCount(p) > 0)
+            status += " · 独立核心已就绪";
+        } else if (app.externals.availableCount(p) > 0) {
+          status = "✓ 独立核心已就绪";
         } else {
           status = app.cores.coreDownloadRunning() ? "… 下载中" : "✗ 缺失 · 点击下载";
         }
       } else {
-        status = app.externals.available(p) ? "✓ 已探测" : "✗ 未找到";
+        // Standalone 平台（Ishiiruka / Cemu / Eden）：外置独立核心
+        const auto exts = app.externals.forPlatform(p);
+        bool ready = app.externals.availableCount(p) > 0;
+        if (ready) {
+          status = "✓ 已就绪（独立核心）";
+        } else if (!exts.empty() && !exts[0]->githubApi.empty()) {
+          status = app.externals.downloadRunning() ? "… 下载中" : "✗ 未安装 · 点击下载";
+        } else {
+          status = "✗ 未安装 · 点击打开官网";
+        }
       }
-      if (w::listRow(app, rc, std::string(platformShortName(p)) + " · " + pc.coreTitle,
-                     status, focusArea_ == 1, pc.biosNote)) {
+      if (w::listRow(app, rc, title, status, focusArea_ == 1, pc.biosNote)) {
         if (pc.kind == CoreKind::Libretro) {
-          if (!app.cores.libretroCoreAvailable(p)) {
+          if (!app.cores.libretroCoreAvailable(p) &&
+              app.externals.availableCount(p) == 0) {
             if (app.cores.coreDownloadRunning()) {
               app.toast("正在下载，请稍候");
             } else {
@@ -232,7 +311,77 @@ class SettingsScene : public Scene {
             app.pushScene(createCoreOptionsScene(p));
           }
         } else {
-          app.toast("请在「独立模拟器」页配置 " + std::string(pc.coreTitle));
+          // 独立核心：未安装 → 自动下载（GitHub）/ 官网；已就绪 → 跳转外置核心页
+          const auto exts = app.externals.forPlatform(p);
+          if (!app.externals.available(p) && !exts.empty()) {
+            const ExternalCore* e = exts[0];
+            if (!e->githubApi.empty()) {
+              if (app.externals.downloadRunning()) {
+                app.toast("正在下载，请稍候");
+              } else {
+                app.externals.startDownload(e->id);
+                app.toast("开始自动下载 " + e->name);
+              }
+            } else {
+              openUrl(e->downloadPage);
+              app.toast("已打开 " + e->name + " 官网下载页");
+            }
+          } else {
+            catSel_ = 4;  // 跳转「独立模拟器」页
+            app.toast("已切换到「独立模拟器」页");
+          }
+        }
+      }
+      y += 52;
+    }
+
+    // ===== 外置核心（独立模拟器 · GitHub 官方发布）=====
+    // 对齐 Android CoreManagerScreen 的双区块结构：进程内核心之后列外置核心，
+    // 行内直达「自动下载 / 打开官网」；手动选择与移除在「独立模拟器」页
+    y += 14;
+    w::sectionLabel(app, 270, y, "外置核心（独立模拟器 · GitHub 官方发布）");
+    y += 30;
+    {
+      const auto pr = app.externals.progress();
+      if (pr.running || pr.finished) {
+        app.font.draw(app.sdlRenderer(), pr.label, 270, y, 13, pr.ok ? sk.green : sk.accent);
+        y += 22;
+        if (pr.finished) {
+          Rect rc(270, y, 220, 30);
+          if (w::button(app, rc, "知道了", false, 12, false))
+            app.externals.clearFinishFlag();
+          y += 36;
+        }
+      }
+    }
+    for (const auto& e : app.externals.all()) {
+      const bool ready = !e.foundPath.empty();
+      std::string status;
+      if (ready) {
+        status = "✓ 已就绪";
+      } else if (!e.githubApi.empty()) {
+        status = app.externals.downloadRunning() ? "… 下载中" : "✗ 未安装 · 点击下载";
+      } else {
+        status = "✗ 未安装 · 点击打开官网";
+      }
+      const Rect rc(270, y, app.draw.W - 300, 46);
+      if (w::listRow(app, rc, e.name + " · " + platformShortName(e.platform), status,
+                     false, e.notes)) {
+        if (!ready) {
+          if (!e.githubApi.empty()) {
+            if (app.externals.downloadRunning()) {
+              app.toast("正在下载，请稍候");
+            } else {
+              app.externals.startDownload(e.id);
+              app.toast("开始自动下载 " + e.name);
+            }
+          } else {
+            openUrl(e.downloadPage);
+            app.toast("已打开 " + e.name + " 下载页");
+          }
+        } else {
+          catSel_ = 4;  // 已就绪 → 跳「独立模拟器」页查看路径 / 移除
+          app.toast("已切换到「独立模拟器」页");
         }
       }
       y += 52;
@@ -341,38 +490,144 @@ class SettingsScene : public Scene {
     }
   }
 
-  // —— 独立模拟器 ——
+  // —— 独立模拟器（外置核心管理，对齐 Android CoreManagerScreen 外置核心区）——
   void drawEmulators(App& app, float& y) {
     const Skin& sk = Theme::skin();
     app.font.draw(app.sdlRenderer(),
-                  "NGC/Wii（Dolphin）、Wii U（Cemu）、Switch（Eden）以独立模拟器形态接入。",
-                  270, y, 13, sk.textDim);
-    y += 24;
+                  "外置 PC 核心独立模拟器（GitHub 官方发布）",
+                  270, y, 16, sk.accent, true);
+    y += 26;
     app.font.draw(app.sdlRenderer(),
-                  "推荐：把模拟器放至应用目录 emulators/<名称>/，或在此配置安装路径。",
+                  "自动检测安装位置；支持 GitHub Release 自动下载，也可手动选择可执行文件。",
                   270, y, 13, sk.textDim);
-    y += 34;
+    y += 22;
+    app.font.draw(app.sdlRenderer(),
+                  "把模拟器放至应用目录 emulators/<名称>/ 也会被自动识别。",
+                  270, y, 13, sk.textDim);
+    y += 32;
 
-    for (auto& e : app.externals.all()) {
-      Rect rc(270, y, app.draw.W - 300, 50);
-      const std::string status =
-          e.foundPath.empty() ? "✗ 未找到" : "✓ " + e.foundPath;
-      if (w::listRow(app, rc, e.title, status, focusArea_ == 1)) {
+    // 下载进度条（对齐 Android CoreManagerScreen 顶部进度）
+    {
+      const auto pr = app.externals.progress();
+      if (pr.running || pr.finished) {
+        app.font.draw(app.sdlRenderer(), pr.label, 270, y, 13,
+                      pr.finished && !pr.ok ? (pr.ok ? sk.green : sk.gold) : sk.accent);
+        y += 20;
+        const Rect bar(270, y, app.draw.W - 300, 6);
+        d_roundRect(app, bar, 3, sk.bgDeep);
+        if (pr.running) {
+          // 不确定进度动画（20% 宽滑块往返）
+          static float t = 0;
+          t += 0.02f;
+          const float off = 0.5f + 0.5f * sinf(t);
+          const Rect fill(bar.x + (bar.w - bar.w * 0.25f) * off, bar.y, bar.w * 0.25f,
+                          bar.h);
+          d_roundRect(app, fill, 3, sk.accent);
+        } else {
+          d_roundRect(app, bar, 3, pr.ok ? sk.green : sk.gold);
+        }
+        y += 16;
+        if (pr.finished) {
+          // 结束提示后自动清旗（下一帧不再显示）
+          Rect rc(270, y, app.draw.W - 300, 34);
+          if (w::button(app, rc, pr.ok ? "知道了" : "知道了（可手动选择路径）",
+                        false, 13, false)) {
+            app.externals.clearFinishFlag();
+          }
+          y += 40;
+        }
+      }
+    }
+
+    for (const auto& e : app.externals.all()) {
+      const bool ready = !e.foundPath.empty();
+      // 行卡片：名称 + 平台徽章 / 说明 / 已解析路径
+      const Rect rc(270, y, app.draw.W - 300, 78);
+      const bool hov = w::hovered(app, rc);
+      d_roundRect(app, rc, 8, hov ? sk.bgPanelHi : sk.bgPanel);
+      app.font.draw(app.sdlRenderer(), e.name, rc.x + 16, rc.y + 10, 16, sk.textHi, true);
+      {
+        const std::string plat = platformShortName(e.platform);
+        const float pw = app.font.textWidth(plat, 12) + 16;
+        const Rect brc(rc.x + 16 + app.font.textWidth(e.name, 16) + 10, rc.y + 12, pw, 20);
+        d_roundRect(app, brc, 4, Color8(sk.accent.r, sk.accent.g, sk.accent.b, 40));
+        app.font.draw(app.sdlRenderer(), plat,
+                      brc.x + (brc.w - app.font.textWidth(plat, 12)) / 2, brc.y + 3, 12,
+                      sk.accent);
+      }
+      app.font.draw(app.sdlRenderer(), e.notes, rc.x + 16, rc.y + 34, 12, sk.textDim);
+      if (ready) {
+        app.font.draw(app.sdlRenderer(), "→ " + e.foundPath, rc.x + 16, rc.y + 56, 11,
+                      sk.green);
+      } else if (!e.userPath.empty()) {
+        app.font.draw(app.sdlRenderer(), "⚠ 配置的路径无效：" + e.userPath, rc.x + 16,
+                      rc.y + 56, 11, sk.red);
+      }
+
+      // 右侧操作按钮（对齐 Android ExternalCoreRow：自动下载 / 官网 / 手动选择 / 移除）
+      const float bw = 96, bh = 30;
+      float bx = rc.right() - bw - 14;
+      const Rect pickRc(bx, rc.y + 24, bw, bh);
+      if (w::button(app, pickRc, "手动选择", false, 12, false)) {
         BrowserRequest req;
-        req.title = "选择 " + e.title + " 可执行文件";
+        req.title = "选择 " + e.name + " 可执行文件（exe / AppImage / jar）";
         req.mode = 1;
         req.startDir = fsutil::exeDir();
-        std::string key = e.key;
-        req.onPick = [&app, key](const std::string& exe) {
-          app.externals.setUserPath(key, exe);
-          app.config.emulatorPaths[key] = exe;
+        std::string id = e.id;
+        req.onPick = [&app, id](const std::string& exe) {
+          app.externals.setUserPath(id, exe);
+          app.config.emulatorPaths[id] = exe;
           app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          app.toast("已配置 " + key);
+          app.toast("已配置 " + id);
         };
         app.pushScene(createFileBrowser(req));
       }
-      y += 56;
+      bx -= bw + 8;
+      if (!e.githubApi.empty()) {
+        // GitHub 自动下载（对齐 Android「自动下载」/ 已安装「已就绪」）
+        if (ready) {
+          const Rect st(bx, rc.y + 24, bw, bh);
+          app.font.draw(app.sdlRenderer(), "已就绪",
+                        st.x + (st.w - app.font.textWidth("已就绪", 13)) / 2, st.y + 7,
+                        13, sk.green, true);
+        } else {
+          const Rect dl(bx, rc.y + 24, bw, bh);
+          if (w::button(app, dl, app.externals.downloadRunning() ? "下载中…" : "自动下载",
+                        false, 12, true)) {
+            if (app.externals.downloadRunning()) {
+              app.toast("正在下载，请稍候");
+            } else {
+              app.externals.startDownload(e.id);
+              app.toast("开始自动下载 " + e.name);
+            }
+          }
+        }
+      } else {
+        // 无自动下载 → 打开官网（对齐 Android OpenInNew）
+        const Rect wp(bx, rc.y + 24, bw, bh);
+        if (w::button(app, wp, "打开官网", false, 12, false)) {
+          openUrl(e.downloadPage);
+          app.toast("已打开 " + e.name + " 下载页");
+        }
+      }
+      bx -= bw + 8;
+      if (ready) {
+        // 移除（对齐 Android Delete：清安装目录 + 用户路径）
+        const Rect rm(bx, rc.y + 24, 64, bh);
+        if (w::button(app, rm, "移除", false, 12, false)) {
+          std::string id = e.id;
+          app.externals.clearUserPath(id);
+          app.config.emulatorPaths.erase(id);
+          app.config.save(fsutil::join(app.dataDir(), "config.json"));
+          app.toast("已移除 " + e.name);
+        }
+      }
+      y += 86;
     }
+    y += 6;
+    app.font.draw(app.sdlRenderer(),
+                  "说明：独立模拟器使用其原生 GPU 渲染与存档系统；启动参数已按各官方推荐配置。",
+                  270, y, 12, sk.textDim);
   }
 
   // —— BIOS / 系统 ——
@@ -512,6 +767,9 @@ class SettingsScene : public Scene {
   static constexpr int kCats = 8;
   int catSel_ = 0;
   int focusArea_ = 0;
+  int lastCat_ = -1;        // 检测分类切换 → 回顶
+  float scroll_ = 0;        // 内容区滚动偏移
+  float contentH_ = 0;      // 上一帧内容高度（滚动范围）
 };
 
 }  // namespace

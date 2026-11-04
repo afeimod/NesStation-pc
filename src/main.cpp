@@ -64,6 +64,9 @@ void applyStep(ns::App& app, const std::string& name) {
     app.pushScene(ns::createSettingsScene(6));  // 性能 tab（快进倍速）
   } else if (name == "cores") {
     app.pushScene(ns::createSettingsScene(1));  // 核心 tab（应用内下载）
+  } else if (name == "ext") {
+    // 独立模拟器 tab（外置核心管理：自动下载 / 手动选择 / 打开官网 / 移除）
+    app.pushScene(ns::createSettingsScene(4));
   } else if (name == "about") {
     app.pushScene(ns::createAboutScene());
   } else if (name == "browser") {
@@ -79,6 +82,19 @@ void applyStep(ns::App& app, const std::string& name) {
     const ns::GameEntry* pick = nullptr;
     for (const auto& g : games)
       if (app.cores.installedCoresFor(g.platform).size() > 1) { pick = &g; break; }
+    if (pick)
+      app.pushScene(ns::createCorePickerScene(*pick, [](const std::string&) {}));
+  } else if (name == "pickerext") {
+    // 双形态平台选择器（进程内 libretro + 已就绪外置独立核心并存）
+    const auto games = app.library.games();
+    const ns::GameEntry* pick = nullptr;
+    for (const auto& g : games) {
+      if (app.cores.installedCoresFor(g.platform).size() > 0 &&
+          app.externals.availableCount(g.platform) > 0) {
+        pick = &g;
+        break;
+      }
+    }
     if (pick)
       app.pushScene(ns::createCorePickerScene(*pick, [](const std::string&) {}));
   } else if (name == "ctxmenu") {

@@ -30,6 +30,9 @@ games = [
     ("最终幻想 VII", "PSX", (149, 165, 166), 900, 2600, False),
     ("勇者斗恶龙 Monsters", "NDS", (175, 122, 197), 72, 700, False),
     ("铁拳 3", "PSX", (149, 165, 166), 800, 300, False),
+    # 3DS 游戏：进程内 azahar/citra 核心 + 外置 Azahar 独立核心并存
+    # → 触发「双形态平台」核心选择器（pickerext 步骤）
+    ("塞尔达传说 时之笛 3D", "3DS", (196, 90, 122), 10, 150, False),
 ]
 
 # 测试 ROM（GameLibrary.load 要求 romPath 真实存在才会入库）
@@ -72,7 +75,15 @@ _core_dir = f"{DATA}/cores"
 os.makedirs(_core_dir, exist_ok=True)
 for _c in ("fceumm_libretro.so", "nestopia_libretro.so", "quicknes_libretro.so",
            "snes9x_libretro.so", "bsnes_libretro.so",
-           "mgba_libretro.so", "vba_next_libretro.so"):
+           "mgba_libretro.so", "vba_next_libretro.so",
+           "azahar_libretro.so", "citra_libretro.so"):
     open(f"{_core_dir}/{_c}", "w").close()
+
+# 假外置核心安装（azahar → 触发「独立模拟器」页「已就绪 / 移除」状态截图；
+# ExternalEmulators.detect 查 <dataDir>/external/<id>/<exeNames>）
+_ext_dir = f"{DATA}/external/azahar"
+os.makedirs(_ext_dir, exist_ok=True)
+open(f"{_ext_dir}/azahar-qt", "w").close()
+os.chmod(f"{_ext_dir}/azahar-qt", 0o755)
 
 print("fixture ready:", len(entries), "games")

@@ -547,7 +547,10 @@ class NeonHome : public Scene {
       app.covers.requestFetch(g);
       app.toast("已重新排队获取封面");
     }});
-    if (app.cores.installedCoresFor(g.platform).size() > 1) {
+    // 平台多核心（进程内 + 已就绪外置独立核心）→ 重新选择入口
+    if (app.cores.installedCoresFor(g.platform).size() +
+            (size_t)app.externals.availableCount(g.platform) >
+        1) {
       items.push_back({16, "重新选择核心", "", false, [&app, g]() {
         if (GameEntry* e = app.library.find(g.id)) {
           e->preferredCore.clear();

@@ -21,7 +21,7 @@ C++17 + SDL2 单二进制原生实现，libretro 核心进程内加载（RetroAr
 > NDS 由 melonDS（PC 版）继续支持；3DS 由 Azahar 官方 libretro PC 核心继续支持，
 > 双平台均可游玩 —— 只有那两个 Android 专属核心被移除。
 
-## 🎮 支持平台（18 平台 · 15 libretro 核心 + 3 独立模拟器）
+## 🎮 支持平台（18 平台 · 15 libretro 核心 + 8 外置独立核心）
 
 | 平台 | PC 核心 | 形态 | 文件扩展名 | BIOS |
 | --- | --- | --- | --- | --- |
@@ -35,19 +35,26 @@ C++17 + SDL2 单二进制原生实现，libretro 核心进程内加载（RetroAr
 | **MD / SEGA** | Genesis-Plus-GX | libretro | `.md` `.sms` `.gg` `.sg` `.cue` | Mega-CD 需 `bios_CD_*.zip` |
 | **NDS** | melonDS | libretro | `.nds` `.ids` `.dsi` | 否（FreeBIOS） |
 | **PSX** | PCSX-ReARMed | libretro | `.cue` `.pbp` `.chd` `.m3u` | 可选 |
-| **PS2** | PCSX2 | libretro | `.iso` `.cso` `.chd` | 推荐 |
+| **PS2** | PCSX2（实验性） | libretro + 外置 **PCSX2**（推荐） | `.iso` `.cso` `.chd` | 需正版 BIOS |
 | **DC** | Flycast | libretro | `.gdi` `.cdi` `.chd` `.lst` | `dc_boot.bin`+`dc_flash.bin` |
-| **PSP** | PPSSPP | libretro | `.iso` `.cso` `.pbp` | 否 |
+| **PSP** | PPSSPP（实验性） | libretro + 外置 **PPSSPP**（推荐） | `.iso` `.cso` `.pbp` | 否 |
 | **3DS** | **Azahar**（官方 libretro PC 核心） | libretro | `.3ds` `.cci` `.cxi` `.cia` | 加密游戏需 `aes_keys.txt` |
 | **Java ME** | SquirrelJME | libretro | `.jar` | 否 |
-| **NGC / Wii** | **Dolphin 2512** | 独立模拟器（源码集成 / 外部探测） | `.gcm` `.rvz` `.wbfs` `.gcz` | 大部分免 BIOS |
-| **Wii U** | **Cemu 2.6** | 独立模拟器（源码集成 / 外部探测） | `.wud` `.wux` `.wua` `.rpx` | 免（WUD 解密需 otp.bin） |
-| **Switch** | **Eden 0.2.1** | 独立模拟器（源码集成 / 外部探测） | `.xci` `.nsp` `.nro` | 需 `prod.keys` |
+| **NGC / Wii** | **Ishiiruka（Dolphin 系）** | 外置独立核心 | `.gcm` `.rvz` `.wbfs` `.gcz` | 大部分免 BIOS |
+| **Wii U** | **Cemu** | 外置独立核心（GitHub 自动下载） | `.wud` `.wux` `.wua` `.rpx` | 免（WUD 解密需 otp.bin） |
+| **Switch** | **Eden** | 外置独立核心 | `.xci` `.nsp` `.nro` | 需 `prod.keys` |
 
 > - libretro 核心来自 **libretro 官方 buildbot**（nightly，与 RetroArch 同源）：Windows x64 / Linux x86_64 / **Linux arm64（aarch64）**，`scripts/fetch_cores.sh / .ps1` 自动识别架构一键下载。
 > - **核心回退链**：部分架构无某核心预编译包时自动改用替代核心（如 3DS：Azahar → Citra；NES：FCEUmm → Nestopia → QuickNES；PS1：PCSX-ReARMed → SwanStation 等）。核心缺失时启动游戏会弹出提示框列出全部候选与获取方式。
-> - NGC/Wii、Wii U、Switch 与 Android 版 Cemu-AZ / Eden 源码级集成同构：`-DNESSTATION_SUPERBUILD=ON` 从官方源码树编译（ExternalProject），产物进 `emulators/`；也可以直接使用已安装的官方 PC 版（设置页配置路径即可）。
-> - Ishiiruka 原仓库（TinobIshiiruka）已停止维护且无后续版本，PC 版采用其上游 **Dolphin**（Ishiiruka 的画质增强选项大部分已被上游吸收）。
+> - **外置独立核心（8 个，对齐 Android CoreRegistry.EXTERNAL）**：PCSX2 / PPSSPP / Flycast / Azahar / **Ishiiruka（Dolphin 系）** / **Cemu** / **Eden** / FreeJ2ME。
+>   设置 → 核心页可直接**自动下载**（GitHub Releases，带进度）或**打开官网**；
+>   也可手动选择可执行文件。探测顺序：配置路径 → `数据目录/external/<id>/` →
+>   `emulators/<id>/` → 常见安装位置（Program Files / /usr/bin / /opt 等）。
+> - **双形态平台（PS2 / PSP / DC / 3DS / Java）**：进程内 libretro 与外置独立核心并存，
+>   启动时弹核心选择器（外置「推荐」绿徽章 / 进程内「实验性」金徽章，
+>   对齐 Android CorePickerDialog），可勾选「记住此游戏的选择」。
+> - NGC/Wii 的外置核心为 **Ishiiruka（Dolphin 系）**（对齐 Android 注册表）；
+>   标准 Dolphin 同参数兼容（`-e` 启动），探测时同时认 Ishiiruka.exe / Dolphin.exe。
 
 ## 🚀 快速开始
 
@@ -100,15 +107,18 @@ exe 旁放 `portable.flag` 即转便携模式（全部数据进 `UserData/`）�
 - 封面自动从 libretro 官方缩略图库获取（`thumbnails.libretro.com` + jsDelivr 镜像）
 - BIOS 放 `~/.config/NesStation/system/`（详见设置 → BIOS / 系统）
 
-### 4. NGC/Wii · Wii U · Switch（独立模拟器）
+### 4. NGC/Wii · Wii U · Switch 及外置独立核心
 
-两种方式任选：
-1. **外部安装**：装好官方 PC 版后，设置 → 独立模拟器 → 配置路径（或放 `emulators/<名称>/`，前端自动探测常见安装位置）
-2. **源码集成**（对齐 Android 版 Cemu-AZ/Eden 模式）：
-   ```bash
-   ./scripts/build.sh --superbuild    # 需 vcpkg（Cemu）、系统依赖见下
-   ```
-   编译产物自动进 `emulators/`，前端直接接管启动。
+设置 → **核心** / **独立模拟器** 页三种方式任选：
+1. **自动下载**（Cemu / PCSX2 / PPSSPP / Flycast / Azahar）：点击「自动下载」，
+   从 GitHub Releases 拉取官方包并自动安装到 `数据目录/external/<id>/`
+2. **打开官网**（Ishiiruka / Eden / FreeJ2ME）：点击「打开官网」到官方发布页下载，
+   解压后「手动选择」可执行文件
+3. **自动探测**：已安装的官方版放 `emulators/<名称>/`（或装在 Program Files /
+   /usr/bin 等常见位置）会被自动识别
+
+启动参数已按各官方推荐配置（Ishiiruka `-e` / Cemu `-g … -f` / Eden 直启等），
+双形态平台（PS2/PSP/DC/3DS/Java）启动时可在进程内与外置核心间选择。
 
 ### 5. CI 构建（GitHub Actions，手动触发）
 

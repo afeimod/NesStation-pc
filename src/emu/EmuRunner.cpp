@@ -14,10 +14,29 @@ std::string EmuRunner::start(App& app, const GameEntry& game) {
   game_ = game;
   const PlatformCore pc = platformCore(game.platform);
 
-  // —— Standalone 平台：外部启动 ——
+  // —— 记忆的外置核心（preferredCore 以 "-ext" 结尾，对齐 Android
+  //    EngineFactory.CoreChoice.External 的 id 规则："pcsx2-ext"）——
+  if (game.preferredCore.size() > 4 &&
+      game.preferredCore.compare(game.preferredCore.size() - 4, 4, "-ext") == 0) {
+    const std::string id =
+        game.preferredCore.substr(0, game.preferredCore.size() - 4);
+    if (const ExternalCore* c = app.externals.find(id)) {
+      std::string err;
+      if (app.externals.launch(*c, game.romPath, &err)) {
+        app.library.recordPlay(game.id, 0);
+        app.library.save();
+        app.toast(std::string("已启动 ") + c->name + "：" + game.displayTitle());
+        return "";
+      }
+      return std::string("启动失败：") + err;
+    }
+    // 记忆的外置核心已不存在 → 回退常规解析
+  }
+
+  // —— Standalone 平台：外置独立核心启动 ——
   if (pc.kind == CoreKind::Standalone) {
     std::string err;
-    if (!app.externals.launch(game.platform, game.romPath, &err)) {
+    if (!app.externals.launchPlatform(game.platform, game.romPath, &err)) {
       return std::string("启动失败：") + err;
     }
     app.library.recordPlay(game.id, 0);
@@ -34,6 +53,19 @@ std::string EmuRunner::start(App& app, const GameEntry& game) {
   const std::string corePath =
       app.cores.corePathForPreferred(game.platform, game.preferredCore);
   if (!fsutil::isFile(corePath)) {
+    // libretro 核心缺失但外置独立核心已就绪 → 外置回退
+    //（对齐 Android：PS2/PSP 外置为推荐配置）
+    const auto exts = app.externals.forPlatform(game.platform);
+    for (const auto* c : exts) {
+      if (!app.externals.available(c->id)) continue;
+      std::string err;
+      if (app.externals.launch(*c, game.romPath, &err)) {
+        app.library.recordPlay(game.id, 0);
+        app.library.save();
+        app.toast(std::string("进程内核心缺失，已改用外置 ") + c->name + " 启动");
+        return "";
+      }
+    }
     return app.cores.availabilityHint(game.platform);
   }
   if (resolved.kind == CoreKind::Libretro && resolved.coreFile != pc.coreFile) {

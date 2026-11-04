@@ -166,8 +166,9 @@ PlatformCore platformCore(GamePlatform p) {
       return {CoreKind::Libretro, "pcsx_rearmed_libretro", nullptr, "PCSX-ReARMed",
               "无需 BIOS（HLE）；部分游戏推荐 BIOS"};
     case GamePlatform::PS2:
+      // 实验性进程内核心（软件渲染）；推荐外置 PCSX2（对齐 Android 注册表标记）
       return {CoreKind::Libretro, "pcsx2_libretro", nullptr, "PCSX2",
-              "无需 BIOS（内置）；推荐放 system/pcsx2/bios"};
+              "需要正版 PS2 BIOS（system/pcsx2/bios/）", true};
     case GamePlatform::JAVA:
       return {CoreKind::Libretro, "squirreljme_libretro", nullptr, "SquirrelJME",
               "无需 BIOS"};
@@ -178,16 +179,17 @@ PlatformCore platformCore(GamePlatform p) {
       return {CoreKind::Libretro, "azahar_libretro", nullptr, "Azahar",
               "加密游戏需 aes_keys.txt；部分游戏需系统档案"};
     case GamePlatform::NGCWII:
-      return {CoreKind::Standalone, nullptr, "dolphin", "Dolphin",
-              "大部分游戏免 BIOS（DSP LLE 需 DSP ROM）"};
+      return {CoreKind::Standalone, nullptr, "ishiiruka", "Ishiiruka（Dolphin 系）",
+              "GC/Wii（Dolphin 优化分支，PC 版原生构建；标准 Dolphin 同参数兼容）"};
     case GamePlatform::WIIU:
       return {CoreKind::Standalone, nullptr, "cemu", "Cemu",
-              "免 BIOS（WUD 解密需 otp.bin）"};
+              "Wii U（官方开源 PC 版，Vulkan 全速）。WUD 解密需 otp.bin"};
     case GamePlatform::PSP:
-      return {CoreKind::Libretro, "ppsspp_libretro", nullptr, "PPSSPP", "无需 BIOS"};
+      return {CoreKind::Libretro, "ppsspp_libretro", nullptr, "PPSSPP",
+              "实验性进程内核心；推荐外置 PPSSPP（原生 GPU 全速）", true};
     case GamePlatform::NSWITCH:
       return {CoreKind::Standalone, nullptr, "eden", "Eden",
-              "加密游戏需 prod.keys；固件 zip 在模拟器内安装"};
+              "Switch（yuzu 系社区延续版）。加密游戏需 prod.keys（核心设置内导入）"};
   }
   return {CoreKind::Libretro, "fceumm_libretro", nullptr, "FCEUmm", ""};
 }
@@ -270,7 +272,7 @@ std::vector<PlatformCore> platformCoreChain(GamePlatform p) {
     case GamePlatform::PS2:
       return {
           {CoreKind::Libretro, "pcsx2_libretro", nullptr, "PCSX2",
-           "无需 BIOS（内置）；推荐放 system/pcsx2/bios"},
+           "需要正版 PS2 BIOS（system/pcsx2/bios/）", true},
       };
     case GamePlatform::JAVA:
       return {
@@ -290,18 +292,19 @@ std::vector<PlatformCore> platformCoreChain(GamePlatform p) {
            "加密游戏需 aes_keys.txt；部分游戏需系统档案"},
       };
     case GamePlatform::NGCWII:
-      return {{CoreKind::Standalone, nullptr, "dolphin", "Dolphin",
-               "大部分游戏免 BIOS（DSP LLE 需 DSP ROM）"}};
+      return {{CoreKind::Standalone, nullptr, "ishiiruka", "Ishiiruka（Dolphin 系）",
+               "GC/Wii（Dolphin 优化分支，PC 版原生构建；标准 Dolphin 同参数兼容）"}};
     case GamePlatform::WIIU:
       return {{CoreKind::Standalone, nullptr, "cemu", "Cemu",
-               "免 BIOS（WUD 解密需 otp.bin）"}};
+               "Wii U（官方开源 PC 版，Vulkan 全速）。WUD 解密需 otp.bin"}};
     case GamePlatform::PSP:
       return {
-          {CoreKind::Libretro, "ppsspp_libretro", nullptr, "PPSSPP", "无需 BIOS"},
+          {CoreKind::Libretro, "ppsspp_libretro", nullptr, "PPSSPP",
+           "实验性进程内核心；推荐外置 PPSSPP（原生 GPU 全速）", true},
       };
     case GamePlatform::NSWITCH:
       return {{CoreKind::Standalone, nullptr, "eden", "Eden",
-               "加密游戏需 prod.keys；固件 zip 在模拟器内安装"}};
+               "Switch（yuzu 系社区延续版）。加密游戏需 prod.keys（核心设置内导入）"}};
   }
   return {};
 }

@@ -59,6 +59,13 @@ jobs:
           SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./smoke/test \
             smoke/cores/fceumm_libretro.so smoke/test.nes smoke
 
+      - name: External cores registry test
+        run: |
+          g++ -std=c++17 -w -I src -I third_party $(sdl2-config --cflags) \
+              tests/test_externals.cpp src/util/Fs.cpp src/util/Log.cpp \
+              $(sdl2-config --libs) -ldl -lpthread -o smoke/test_ext
+          ./smoke/test_ext
+
       - name: Bundle cores (buildbot x86_64)
         run: |
           mkdir -p dist/NesStation-linux/cores

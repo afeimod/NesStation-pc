@@ -442,8 +442,57 @@ class CorePickerScene : public Scene {
                   std::function<void(const std::string&)> onPick)
       : game_(game), onPick_(std::move(onPick)) {}
 
+  // 选择项：libretro 进程内核心 / 外置独立核心（对齐 Android
+  // EngineFactory.CoreChoice：libretro 在前、外置在后，id 规则 "<id>-ext"）
+  enum Badge { BadgeNone = 0, BadgeRecommended, BadgeAlt, BadgeExperimental };
+  struct Choice {
+    std::string title;       // "PCSX2（进程内核心）" / "PCSX2（独立核心）"
+    std::string note;        // 副文
+    std::string pickValue;   // libretro: 核心文件名；外置: "<id>-ext"
+    std::string fileName;    // 右下角小字：核心文件 / 官网域名
+    bool isExternal = false;
+    Badge badge = BadgeNone;  // 徽章（对齐 Android CorePickerDialog：
+                             // 外置=推荐绿；双形态平台进程内=实验性金；
+                             // 纯 libretro 平台链首=推荐，其余=备选）
+  };
+
   void onEnter(App& app) override {
-    installed_ = app.cores.installedCoresFor(game_.platform);
+    choices_.clear();
+    const auto libs = app.cores.installedCoresFor(game_.platform);
+    const auto exts = app.externals.forPlatform(game_.platform);
+    // 已就绪的外置核心（未安装的不列出，避免选后启动失败）
+    std::vector<const ExternalCore*> extReady;
+    for (const auto* c : exts)
+      if (app.externals.available(c->id)) extReady.push_back(c);
+    const bool hasExternal = !extReady.empty();
+    for (size_t i = 0; i < libs.size(); i++) {
+      const PlatformCore& c = libs[i];
+      Choice ch;
+      ch.title = std::string(c.coreTitle) + "（进程内核心）";
+      ch.note = hasExternal
+                    ? "进程内 libretro · 软件渲染 · NesStation 统一菜单/快存"
+                    : c.biosNote;
+      ch.pickValue = c.coreFile;
+      ch.fileName = c.coreFile;
+      ch.isExternal = false;
+      ch.badge = hasExternal ? BadgeExperimental
+                             : (i == 0 ? BadgeRecommended : BadgeAlt);
+      choices_.push_back(std::move(ch));
+    }
+    // 仅列出已就绪的外置核心
+    for (const auto* c : extReady) {
+      Choice ch;
+      ch.title = c->name + "（独立核心）";
+      ch.note = "原生 PC 版 · GPU 全速 · 原生存档系统";
+      ch.pickValue = c->id + "-ext";
+      const size_t slash = c->downloadPage.find("//");
+      ch.fileName = slash == std::string::npos
+                        ? c->downloadPage
+                        : c->downloadPage.substr(slash + 2);
+      ch.isExternal = true;
+      ch.badge = BadgeRecommended;  // 外置核心为推荐配置（对齐 Android）
+      choices_.push_back(std::move(ch));
+    }
   }
 
   void update(App& app, float dt, const InputState& in) override {
@@ -452,7 +501,7 @@ class CorePickerScene : public Scene {
       app.popScene();
       return;
     }
-    const int N = (int)installed_.size();
+    const int N = (int)choices_.size();
     if (N == 0) {
       app.popScene();
       return;
@@ -465,17 +514,17 @@ class CorePickerScene : public Scene {
   }
 
   void pick(App& app, int idx) {
-    if (idx < 0 || idx >= (int)installed_.size()) return;
-    const std::string coreFile = installed_[(size_t)idx].coreFile;
+    if (idx < 0 || idx >= (int)choices_.size()) return;
+    const std::string value = choices_[(size_t)idx].pickValue;
     if (remember_) {
       if (GameEntry* e = app.library.find(game_.id)) {
-        e->preferredCore = coreFile;
+        e->preferredCore = value;
         app.library.save();
       }
     }
     auto cb = onPick_;
     app.popScene();
-    if (cb) cb(coreFile);
+    if (cb) cb(value);
   }
 
   void draw(App& app) override {
@@ -500,17 +549,25 @@ class CorePickerScene : public Scene {
                   std::string("选择 ") + platformShortName(game_.platform) + " 核心",
                   panel_.x + 28, y, 22, sk.textHi, true);
     y += 34;
-    app.font.draw(app.sdlRenderer(),
-                  "该平台有多个已安装核心可用 —— 首选为核心链推荐，备选为候选核心。",
-                  panel_.x + 28, y, 13, sk.textDim);
+    // 副文：对齐 Android CorePickerDialog 双核心平台文案；纯 libretro 平台用候选链文案
+    {
+      const bool hasExternal =
+          !choices_.empty() && choices_.back().isExternal;
+      app.font.draw(app.sdlRenderer(),
+                    hasExternal
+                        ? "该平台有两个 PC 核心可用 —— 外置核心为推荐配置（原生 GPU 全速），libretro 核心进程内运行（软件渲染，兼容实验性）。"
+                        : "该平台有多个已安装核心可用 —— 首选为核心链推荐，备选为候选核心。",
+                    panel_.x + 28, y, 13, sk.textDim);
+    }
     y += 14;
     d.line(panel_.x + 24, y, panel_.right() - 24, y, sk.line, 1);
     y += 16;
 
     const InputState& in = app.input.input();
     hoverRow_ = false;
-    for (size_t i = 0; i < installed_.size() && i < 4; i++) {
-      const PlatformCore& c = installed_[i];
+    const size_t maxRows = choices_.size() < 4 ? choices_.size() : 4;
+    for (size_t i = 0; i < maxRows; i++) {
+      const Choice& c = choices_[i];
       const Rect rc(panel_.x + 20, y, pw - 40, 64);
       const bool focused = sel_ == (int)i;
       // 点击（按下沿）选中；hover 仅做视觉（无按下）
@@ -525,19 +582,26 @@ class CorePickerScene : public Scene {
         sel_ = (int)i;
         hoverRow_ = true;
       }
-      // 标题 + 徽章
-      app.font.draw(app.sdlRenderer(), c.coreTitle, rc.x + 16, rc.y + 10, 18,
+      // 标题 + 徽章（推荐绿 / 备选金 / 实验性金）
+      app.font.draw(app.sdlRenderer(), c.title, rc.x + 16, rc.y + 10, 18,
                     sk.textHi, true);
-      const bool first = i == 0;
-      const std::string badge = first ? "推荐" : "备选";
-      const Color8 bc = first ? sk.green : sk.gold;
-      const Rect brc(rc.right() - 96, rc.y + 10, 80, 24);
-      d.roundRect(brc, 5, bc.withA(48));
-      app.font.draw(app.sdlRenderer(), badge, brc.x + (brc.w - app.font.textWidth(badge, 13)) / 2,
-                    brc.y + 5, 13, bc, true);
-      // 副文（BIOS 提示）+ 核心文件名
-      app.font.draw(app.sdlRenderer(), c.biosNote, rc.x + 16, rc.y + 38, 12, sk.textDim);
-      app.font.draw(app.sdlRenderer(), c.coreFile, rc.right() - 16 - app.font.textWidth(c.coreFile, 12),
+      if (c.badge != BadgeNone) {
+        const std::string badge =
+            c.badge == BadgeRecommended
+                ? "推荐"
+                : (c.badge == BadgeExperimental ? "实验性" : "备选");
+        const Color8 bc = c.badge == BadgeRecommended ? sk.green : sk.gold;
+        const float bw = app.font.textWidth(badge, 13) + 20;
+        const Rect brc(rc.right() - bw - 12, rc.y + 10, bw, 24);
+        d.roundRect(brc, 5, bc.withA(48));
+        app.font.draw(app.sdlRenderer(), badge,
+                      brc.x + (brc.w - app.font.textWidth(badge, 13)) / 2,
+                      brc.y + 5, 13, bc, true);
+      }
+      // 副文 + 右下角小字（核心文件 / 官网域名）
+      app.font.draw(app.sdlRenderer(), c.note, rc.x + 16, rc.y + 38, 12, sk.textDim);
+      app.font.draw(app.sdlRenderer(), c.fileName,
+                    rc.right() - 16 - app.font.textWidth(c.fileName, 12),
                     rc.y + 38, 12, sk.textDim);
       y += 72;
     }
@@ -571,7 +635,7 @@ class CorePickerScene : public Scene {
  private:
   GameEntry game_;
   std::function<void(const std::string&)> onPick_;
-  std::vector<PlatformCore> installed_;
+  std::vector<Choice> choices_;
   Rect panel_;
   int sel_ = 0;
   bool remember_ = true;   // 对齐 Android 版默认勾选

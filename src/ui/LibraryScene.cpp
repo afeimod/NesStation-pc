@@ -400,8 +400,11 @@ class LibraryScene : public Scene {
       app.covers.requestFetch(g);
       app.toast("已重新排队获取封面");
     }});
-    // 平台有多个已安装核心 → 提供重新选择入口（对齐 CorePickerDialog 的「重新询问」）
-    if (app.cores.installedCoresFor(g.platform).size() > 1) {
+    // 平台多核心（进程内 + 已就绪外置独立核心）→ 提供重新选择入口
+    //（对齐 CorePickerDialog 的「重新询问」）
+    if (app.cores.installedCoresFor(g.platform).size() +
+            (size_t)app.externals.availableCount(g.platform) >
+        1) {
       std::string hint;
       if (GameEntry* e = app.library.find(g.id); e && !e->preferredCore.empty()) {
         hint = "已记忆";

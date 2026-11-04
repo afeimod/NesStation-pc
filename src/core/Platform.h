@@ -22,10 +22,10 @@ enum class GamePlatform : int {
   JAVA,    // Java ME           — SquirrelJME（libretro PC）
   DC,      // Dreamcast/NAOMI   — Flycast（libretro PC）
   N3DS,    // Nintendo 3DS      — Azahar（官方 libretro PC 核心）
-  NGCWII,  // GameCube / Wii    — Dolphin（源码集成，独立模拟器形态）
-  WIIU,    // Wii U             — Cemu（源码集成，独立模拟器形态）
-  PSP,     // PSP               — PPSSPP（libretro PC）
-  NSWITCH, // Switch            — Eden（源码集成，独立模拟器形态）
+  NGCWII,  // GameCube / Wii    — Ishiiruka（Dolphin 系，外置独立模拟器形态）
+  WIIU,    // Wii U             — Cemu（外置独立模拟器形态，GitHub 自动下载）
+  PSP,     // PSP               — PPSSPP（libretro PC；外置 PPSSPP 推荐）
+  NSWITCH, // Switch            — Eden（外置独立模拟器形态）
 };
 
 using PlatformList = std::vector<GamePlatform>;
@@ -39,15 +39,17 @@ const char* platformEra(GamePlatform p);         // "1983 · 8-BIT"
 uint32_t platformAccent(GamePlatform p);         // 0xRRGGBB 主题色（沿用原配色语言）
 
 // —— PC 核心矩阵 ——————————————————————————————————————————————
-// kind = Libretro（进程内 .dll/.so）| Standalone（源码集成的独立模拟器）
+// kind = Libretro（进程内 .dll/.so）| Standalone（外置独立模拟器形态）
 enum class CoreKind { Libretro, Standalone };
 
 struct PlatformCore {
   CoreKind kind;
   const char* coreFile;     // libretro: "fceumm_libretro"（运行时按平台拼扩展名）
-  const char* emulatorKey;  // Standalone: "dolphin" | "cemu" | "eden"
-  const char* coreTitle;    // "FCEUmm"
-  const char* biosNote;     // BIOS 提示（照搬原 README 表）
+  const char* emulatorKey;  // Standalone: "ishiiruka" | "cemu" | "eden"
+  const char* coreTitle;    // "FCEUmm" / "Ishiiruka（Dolphin 系）"
+  const char* biosNote;     // 说明（照搬 Android CoreRegistry 中文文案）
+  bool experimental = false;  // 实验性标记（对齐 Android LibretroCoreDef.experimental：
+                             // PS2/PSP 进程内核心软件渲染，推荐外置独立核心）
 };
 
 PlatformCore platformCore(GamePlatform p);

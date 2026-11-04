@@ -133,8 +133,13 @@ bool App::init() {
 
   cores.init(dataDir_);
   library.load(dataDir_);
-  externals.init();
-  for (const auto& [k, v] : config.emulatorPaths) externals.setUserPath(k, v);
+  externals.init(dataDir_);
+  for (const auto& [k, v] : config.emulatorPaths) {
+    // 旧版本键名兼容：dolphin → ishiiruka（对齐 Android CoreRegistry id）
+    std::string key = k;
+    if (key == "dolphin") key = "ishiiruka";
+    externals.setUserPath(key, v);
+  }
 
   input.init();
   audio.start(48000);
@@ -314,11 +319,13 @@ void App::launchGame(const GameEntry& gameIn) {
   GameEntry game = gameIn;
   if (GameEntry* live = library.find(gameIn.id)) game = *live;
 
-  // 平台有多个已安装核心且该游戏未记忆选择 → 先弹核心选择器
-  //（对齐 Android 版 CorePickerDialog：双核心平台启动时询问 + 记住选择）
-  if (platformCore(game.platform).kind == CoreKind::Libretro &&
-      game.preferredCore.empty() &&
-      cores.installedCoresFor(game.platform).size() > 1) {
+  // 平台可用核心选择 = 已安装 libretro + 已就绪外置独立核心
+  //（对齐 Android EngineFactory.coreChoices：libretro 在前 / 外置在后，
+  //  多于一个且未记忆选择 → 弹核心选择器）
+  if (game.preferredCore.empty() &&
+      cores.installedCoresFor(game.platform).size() +
+              (size_t)externals.availableCount(game.platform) >
+          1) {
     pushScene(createCorePickerScene(
         game, [this, game](const std::string&) { launchGame(game); }));
     return;

@@ -104,8 +104,11 @@ bool CoreManager::libretroCoreAvailable(GamePlatform p) const {
 std::string CoreManager::availabilityHint(GamePlatform p) const {
   const PlatformCore c = platformCore(p);
   if (c.kind == CoreKind::Standalone) {
-    return std::string("需要 PC 版 ") + c.coreTitle +
-           "：放在应用目录 emulators/ 下或到设置页配置安装路径";
+    std::string hint = std::string("需要外置独立核心 ") + c.coreTitle + "，可任选其一：\n";
+    hint += "① 设置 → 核心 / 独立模拟器 → 自动下载（GitHub Release）或打开官网\n";
+    hint += "② 已安装的模拟器放在应用目录 emulators/<名称>/ 会自动识别\n";
+    hint += "③ 设置 → 独立模拟器 → 手动选择可执行文件";
+    return hint;
   }
   if (libretroCoreAvailable(p)) return "";
   const std::vector<PlatformCore> chain = platformCoreChain(p);
