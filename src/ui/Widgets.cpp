@@ -43,8 +43,13 @@ void gesturePump(App& app) {
     g_gesture.travel = 0;
   } else if (in.mouseHeld && g_gesture.down) {
     g_gesture.travel += std::fabs(in.mouseDx) + std::fabs(in.mouseDy);
+  } else if (in.mouseReleased) {
+    // ★释放帧不清除手势：activated() 本帧仍能凭 travel>10 判定「这是拖拽
+    //   不是点击」；下一帧（无按下无释放）才真正复位。旧实现在释放帧立即
+    //   down=false → 拖拽列表结束的瞬间被当作点击，误进目录。
   } else if (!in.mouseHeld) {
     g_gesture.down = false;
+    g_gesture.travel = 0;
   }
 }
 }  // namespace
@@ -477,12 +482,37 @@ void keyHintBar(App& app, const std::vector<KeyHint>& hints) {
   }
 }
 
-void scrollIndicator(App& app, const Rect& track, float visible01, float offset01) {
+// —— 滚动条（绘制 + ★直接拖拽交互）——
+// 返回调整后的 offset01（未交互时原样返回）。调用方：
+//   scroll_ = w::scrollIndicator(app, rc, visible01, scroll_ / maxScroll) * maxScroll;
+// 交互：点击轨道任意位置跳转；按住滑块（或轨道）持续跟手 —— 桌面滚动条
+// 惯例 + 触屏跟手。命中区横向外扩 10px，细条也好点中。
+float scrollIndicator(App& app, const Rect& track, float visible01, float offset01) {
   const Skin& sk = Theme::skin();
+  const InputState& in = app.input.input();
   const float h = std::max(24.0f, track.h * visible01);
-  const float maxOffset = std::max(0.0f, track.h - h);
+  const float maxOffset = std::max(1.0f, track.h - h);
+  auto clamp01 = [](float v) { return v < 0 ? 0.0f : (v > 1 ? 1.0f : v); };
+
+  static bool s_barHeld = false;
+  const Rect hit(track.x - 10, track.y - 6, track.w + 20, track.h + 12);
+  if (in.mousePressed && hit.contains(in.mouse)) {
+    s_barHeld = true;
+    // 点击轨道：滑块中心跳到指针位置
+    offset01 = clamp01((in.mouse.y - h * 0.5f - track.y) / maxOffset);
+  }
+  if (!in.mouseHeld) s_barHeld = false;
+  if (s_barHeld) offset01 = clamp01((in.mouse.y - h * 0.5f - track.y) / maxOffset);
+
+  offset01 = clamp01(offset01);
   const float y = track.y + maxOffset * offset01;
-  app.draw.roundRect(Rect(track.x, y, track.w, h), track.w / 2, sk.accentDim);
+  // 拖拽中高亮 + 轻微加宽
+  app.draw.roundRect(Rect(track.x, y, track.w, h), track.w / 2,
+                     s_barHeld ? sk.accent : sk.accentDim);
+  if (s_barHeld)
+    app.draw.glowRect(Rect(track.x - 4, y, track.w + 8, h), 8,
+                      Color8(sk.accent.r, sk.accent.g, sk.accent.b, 60), 10);
+  return offset01;
 }
 
 // —— 图标 ——

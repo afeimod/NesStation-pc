@@ -132,7 +132,10 @@ static GamePlatform sniffDisc(const std::string& path) {
   if (startsWithAt(head, 0x10, "SEGADISCSYSTEM")) return GamePlatform::MD;
   if (startsWithAt(head, 0x10, "SEGA SEGAKATANA")) return GamePlatform::DC;
   // ISO9660 PVD：扇区 16（0x8000）处 "\x01CD001"
-  if (startsWithAt(head, 0x8000, "\x01CD001")) {
+  // ★C7744 修复："\x01CD001" 的十六进制转义贪婪消费 CD001（均合法十六进制
+  //   字符）→ MSVC 报 escape sequence out of range（GCC 仅截断告警被 -w
+  //   吞掉）。拆分字符串字面量，转义解析在引号处截止，两编译器语义一致。
+  if (startsWithAt(head, 0x8000, "\x01" "CD001")) {
     // 系统标识符在 0x8008（32 字节）：PS1/PS2 为 "PLAYSTATION"
     if (startsWithAt(head, 0x8008, "PLAYSTATION")) {
       // PS1 CD < 700MB，PS2 DVD 通常 > 700MB

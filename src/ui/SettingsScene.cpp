@@ -197,8 +197,11 @@ class SettingsScene : public Scene {
       d.popClip();
       // 滚动条指示（内容超出时）
       if (contentH_ > viewH) {
-        w::scrollIndicator(app, Rect((float)d.W - 14, viewTop, 6, viewH),
-                           viewH / contentH_, scroll_ / (contentH_ - viewH));
+        // ★滚动条可直接拖拽：返回新位置回写 scroll
+        scroll_ = w::scrollIndicator(app, Rect((float)d.W - 14, viewTop, 6, viewH),
+                                     viewH / contentH_,
+                                     scroll_ / (contentH_ - viewH)) *
+                  (contentH_ - viewH);
       }
     } else {
       // —— FSD 经典：单页分节滚动（对齐 SettingsScreen.kt SettingsSection）——
@@ -232,8 +235,11 @@ class SettingsScene : public Scene {
       }
       d.popClip();
       if (contentH_ > viewH) {
-        w::scrollIndicator(app, Rect((float)d.W - 14, viewTop, 6, viewH),
-                           viewH / contentH_, scroll_ / (contentH_ - viewH));
+        // ★滚动条可直接拖拽：返回新位置回写 scroll
+        scroll_ = w::scrollIndicator(app, Rect((float)d.W - 14, viewTop, 6, viewH),
+                                     viewH / contentH_,
+                                     scroll_ / (contentH_ - viewH)) *
+                  (contentH_ - viewH);
       }
     }
 
@@ -881,7 +887,8 @@ class SettingsScene : public Scene {
       const float rw = (float)app.draw.W - cx_ - 50;
       {
         const Rect rc(cx_ + 12, y, rw, 38);
-        w::blockRow(app, rc, "版本", "1.1 · 多平台复古游戏站（Windows / Linux）",
+        w::blockRow(app, rc, "版本",
+                    std::string(appVersionText()).append(" · 多平台复古游戏站（Windows / Linux）").c_str(),
                     rowFocus());
         const Rect btn(rc.right() - 100, rc.y + 5, 92, 28);
         if (w::button(app, btn, "详情", false, 13, false)) app.pushScene(createAboutScene());

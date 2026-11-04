@@ -75,7 +75,8 @@ struct KeyHint {
 void keyHintBar(App& app, const std::vector<KeyHint>& hints);
 
 // 底部滚动条
-void scrollIndicator(App& app, const Rect& track, float visible01, float offset01);
+// 滚动条：绘制 + 可直接拖拽；返回调整后的 offset01（未交互原样返回）
+float scrollIndicator(App& app, const Rect& track, float visible01, float offset01);
 
 // 平台徽章（Android PlatformBadge：平台色 22% 底 + 平台色文字，圆角 4）
 // 返回徽章宽度

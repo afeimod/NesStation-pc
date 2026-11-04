@@ -316,7 +316,7 @@ class NeonHome : public Scene {
       neonBackdrop(d);
     }
 
-    // —— NeonClockBar：品牌徽标 + 游戏数 + 时钟 ——
+    // —— NeonClockBar：品牌徽标 + 版本徽章 + 游戏数 + 时钟 ——
     {
       const float by = 18;
       const std::string brand = "NES·STATION";
@@ -325,6 +325,9 @@ class NeonHome : public Scene {
       d.chamferRect(badge, 14, sk.accent);
       app.font.drawVCentered(app.sdlRenderer(), brand, badge.x + 10, badge.cy(), 15,
                              sk.bgDeep, true);
+      // ★版本徽章（紧贴品牌右侧）：一眼确认所跑构建 —— 旧版无此元素
+      app.font.draw(app.sdlRenderer(), appVersionText(), badge.right() + 14, by + 8, 12,
+                    sk.textDim, true);
       const std::string count = std::to_string(games_.size()) + " GAMES";
       const float cw = app.font.textWidth(count, 12, true);
       const std::string tm = clockText();
@@ -867,6 +870,10 @@ class FsdHome : public Scene {
       float x = 30;
       app.font.draw(app.sdlRenderer(), "NesStation", x, 20, 22, white, true);
       x += app.font.textWidth("NesStation", 22, true) + 8;
+      // ★版本徽章：一眼确认所跑构建
+      app.font.draw(app.sdlRenderer(), appVersionText(), x, 30, 12,
+                    Color8(255, 255, 255, 235), true);
+      x += app.font.textWidth(appVersionText(), 12, true) + 10;
       app.font.draw(app.sdlRenderer(), "GameBox for PC", x, 30, 12,
                     Color8(255, 255, 255, 235), true);
       const std::string right =

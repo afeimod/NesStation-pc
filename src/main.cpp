@@ -6,6 +6,8 @@
 //   截图输出目录: NESSTATION_SHOT_DIR（默认 /tmp/nesstation-shots）
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -47,9 +49,43 @@ struct SelftestState {
   int stepIdx = 0;
   int framesLeft = 0;
   int saved = 0;
+  bool started = false;
+
+  // —— 合成输入（拖拽/点击模拟）——
+  // synthFrame >= 0 时启用：帧号 → 待推送事件（在帧末推送，下一帧被泵入）
+  int synthFrame = -1;
+  std::map<int, std::vector<SDL_Event>> synth;
 };
 
-void applyStep(ns::App& app, const std::string& name) {
+// 合成鼠标事件工具
+SDL_Event synthMotion(int x, int y, int dx, int dy) {
+  SDL_Event e;
+  SDL_zero(e);
+  e.type = SDL_MOUSEMOTION;
+  e.motion.windowID = 1;
+  e.motion.which = 0;
+  e.motion.x = x;
+  e.motion.y = y;
+  e.motion.xrel = dx;
+  e.motion.yrel = dy;
+  return e;
+}
+SDL_Event synthButton(bool down, int x, int y) {
+  SDL_Event e;
+  SDL_zero(e);
+  e.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+  e.button.windowID = 1;
+  e.button.button = SDL_BUTTON_LEFT;
+  e.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+  e.button.clicks = 1;
+  e.button.x = x;
+  e.button.y = y;
+  return e;
+}
+
+void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
+  st.synthFrame = -1;
+  st.synth.clear();
   if (name == "fsd") {
     ns::Theme::setStyle(ns::UiStyle::Fsd);
     app.replaceScene(ns::createHomeScene());
@@ -76,6 +112,83 @@ void applyStep(ns::App& app, const std::string& name) {
     req.mode = 0;
     req.onPick = [](const std::string&) {};
     app.pushScene(ns::createFileBrowser(req));
+  } else if (name == "browserdrag") {
+    // ★拖拽滚动验证：进入浏览器（40 个子目录保证列表溢出）→ 按住列表中部
+    //   上划 400px → 截图应看到列表已滚动（旧版焦点行跟随每帧把 scroll 拉回
+    //   选中行，截图停在顶部 = 回归）
+    const std::string many = "/tmp/nesstation-selftest-roms/many";
+    fsutil::makeDirs(many);
+    for (int i = 0; i < 40; i++)
+      fsutil::makeDirs(many + "/游戏目录_" + std::to_string(i + 1));
+    ns::BrowserRequest req;
+    req.title = "选择 ROM 目录";
+    req.mode = 0;
+    req.startDir = many;
+    req.onPick = [](const std::string&) {};
+    app.pushScene(ns::createFileBrowser(req));
+    st.synthFrame = 0;
+    st.synth[3].push_back(synthMotion(400, 500, 0, 0));
+    st.synth[4].push_back(synthButton(true, 400, 500));
+    for (int k = 1; k <= 16; k++)
+      st.synth[4 + k].push_back(synthMotion(400, 500 - k * 25, 0, -25));
+    st.synth[21].push_back(synthButton(false, 400, 100));
+  } else if (name == "browserbar") {
+    // ★滚动条拖拽验证：按住右侧滚动条滑块下拽 → 截图应看到列表滚动且滑块高亮
+    const std::string many = "/tmp/nesstation-selftest-roms/many";
+    fsutil::makeDirs(many);
+    for (int i = 0; i < 40; i++)
+      fsutil::makeDirs(many + "/游戏目录_" + std::to_string(i + 1));
+    ns::BrowserRequest req;
+    req.title = "选择 ROM 目录";
+    req.mode = 0;
+    req.startDir = many;
+    req.onPick = [](const std::string&) {};
+    app.pushScene(ns::createFileBrowser(req));
+    st.synthFrame = 0;
+    st.synth[3].push_back(synthMotion(1271, 160, 0, 0));
+    st.synth[4].push_back(synthButton(true, 1271, 160));
+    for (int k = 1; k <= 12; k++)
+      st.synth[4 + k].push_back(synthMotion(1271, 160 + k * 30, 0, 30));
+    st.synth[17].push_back(synthButton(false, 1271, 520));
+  } else if (name == "browsertap") {
+    // ★「选择此目录」点击验证：弹栈+回调路径（use-after-free 回归测试；
+    //   截图应回到主页并弹出 toast，进程不崩溃）
+    ns::BrowserRequest req;
+    req.title = "选择 ROM 目录";
+    req.mode = 0;
+    req.onPick = [](const std::string&) {};
+    app.pushScene(ns::createFileBrowser(req));
+    st.synthFrame = 0;
+    st.synth[3].push_back(synthMotion(1140, 53, 0, 0));
+    st.synth[4].push_back(synthButton(true, 1140, 53));
+    st.synth[6].push_back(synthButton(false, 1140, 53));
+  } else if (name == "scan") {
+    // ★扫描验证：生成临时 ROM（含 NES 魔数/各平台扩展名）→ 扫描入库 →
+    //   库页截图应显示新增游戏；随后的 home 步骤应显示 N GAMES
+    const std::string dir = "/tmp/nesstation-selftest-roms";
+    fsutil::makeDirs(dir);
+    fsutil::makeDirs(fsutil::join(dir, "sub"));  // 验证递归扫描
+    {
+      std::ofstream f(fsutil::join(dir, "超级马力欧.nes"), std::ios::binary);
+      f << "NES\x1A" << std::string(64, '\0');
+    }
+    {
+      std::ofstream f(fsutil::join(dir, "恶魔城.nes"), std::ios::binary);
+      f << "NES\x1A" << std::string(64, '\0');
+    }
+    {
+      std::ofstream f(fsutil::join(dir, "sub", "超级马里奥世界.sfc"), std::ios::binary);
+      f << std::string(512, '\xAB');
+    }
+    {
+      std::ofstream f(fsutil::join(dir, "sub", "俄罗斯方块.gb"), std::ios::binary);
+      f << std::string(512, '\xCD');
+    }
+    app.library.addRomDir(dir);
+    const int n = app.library.scanDirectory(dir, ns::GamePlatform::NES, false, true);
+    app.library.save();
+    SDL_Log("SELFTEST scan added=%d total=%d", n, (int)app.library.games().size());
+    app.pushScene(ns::createLibraryScene(-1));
   } else if (name == "picker") {
     // 核心选择器（首个多核心已安装平台的游戏）
     const auto games = app.library.games();
@@ -128,6 +241,18 @@ int main(int argc, char** argv) {
 
     ns::App app;
     app.setTestHook([st](ns::App& a, Uint32) {
+      // 首帧：应用第一步（否则 scan 等需要主动初始化的首步不生效）
+      if (!st->started) {
+        st->started = true;
+        if (!st->steps.empty()) applyStep(a, st->steps[(size_t)st->stepIdx].first, *st);
+      }
+      // 合成输入：帧末推送，下一帧被 SDL_PollEvent 泵入
+      if (st->synthFrame >= 0) {
+        st->synthFrame++;
+        auto it = st->synth.find(st->synthFrame);
+        if (it != st->synth.end())
+          for (auto& e : it->second) SDL_PushEvent(&e);
+      }
       if (st->framesLeft > 0) {
         st->framesLeft--;
         if (st->framesLeft == 0) {
@@ -141,7 +266,7 @@ int main(int argc, char** argv) {
           if (st->stepIdx < (int)st->steps.size()) {
             const auto& next = st->steps[(size_t)st->stepIdx];
             st->framesLeft = next.second;
-            applyStep(a, next.first);
+            applyStep(a, next.first, *st);
           } else {
             a.requestExit();
           }

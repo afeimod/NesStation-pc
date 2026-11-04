@@ -97,7 +97,8 @@ bool App::init() {
 
   const Uint32 flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
                        (config.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-  window_ = SDL_CreateWindow("NesStation", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+  window_ = SDL_CreateWindow(std::string("NesStation ").append(appVersionText()).c_str(),
+                             SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                              winW_, winH_, flags);
   if (!window_) {
     LOGE("创建窗口失败：%s", SDL_GetError());

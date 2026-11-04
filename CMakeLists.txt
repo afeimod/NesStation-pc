@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(NesStation VERSION 1.1.0 LANGUAGES C CXX
+project(NesStation VERSION 1.2.0 LANGUAGES C CXX
         DESCRIPTION "NesStation PC - Multi-platform retro game station for Windows/Linux")
 
 # ---------------------------------------------------------------------------
@@ -56,6 +56,9 @@ endif()
 
 set_target_properties(nesstation PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+# ★版本号注入（主页徽章 / 窗口标题 / 关于页 —— 供用户确认所跑构建）
+target_compile_definitions(nesstation PRIVATE NESSTATION_VERSION="${PROJECT_VERSION}")
 
 if(MSVC)
   # Release: GUI subsystem; Debug keeps console for log output.

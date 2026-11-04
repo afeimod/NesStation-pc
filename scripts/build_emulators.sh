@@ -53,9 +53,13 @@ build_cemu() {
 }
 
 build_eden() {
-  echo "=== Eden（Switch，Linux 使用系统库离线构建）==="
+  echo "=== Eden（Switch）==="
+  # EDEN_FORCE_SYSTEM=ON：用发行版系统库离线构建（默认，适配无网环境）；
+  # OFF：由 CPM 在配置期联网拉取上游锁定版本的依赖（CI 推荐，依赖更精确）
+  EDEN_FORCE_SYSTEM="${EDEN_FORCE_SYSTEM:-ON}"
+  echo "（CPMUTIL_FORCE_SYSTEM=$EDEN_FORCE_SYSTEM）"
   cmake -S emulators/eden -B build/eden \
-    -DCMAKE_BUILD_TYPE=Release -DCPMUTIL_FORCE_SYSTEM=ON \
+    -DCMAKE_BUILD_TYPE=Release -DCPMUTIL_FORCE_SYSTEM="$EDEN_FORCE_SYSTEM" \
     -DCMAKE_INSTALL_PREFIX="$OUT/eden"
   cmake --build build/eden -j"$JOBS"
   mkdir -p "$OUT/eden"

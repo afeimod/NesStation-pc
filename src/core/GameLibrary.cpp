@@ -218,11 +218,18 @@ int GameLibrary::scanDirectory(const std::string& dir, GamePlatform platformHint
                                bool useHint, bool recursive) {
   if (!fsutil::isDir(dir)) return 0;
   std::vector<std::string> files;
-  if (recursive) {
-    files = fsutil::listFilesRecursive(dir);
-  } else {
-    for (const auto& e : fsutil::listDir(dir))
-      if (!e.isDir) files.push_back(e.fullPath);
+  // ★目录枚举全程异常防护（PRoot/挂载点/权限异常的 filesystem_error 在此兜底，
+  //   不再向上传播到 UI 层导致闪退）
+  try {
+    if (recursive) {
+      files = fsutil::listFilesRecursive(dir);
+    } else {
+      for (const auto& e : fsutil::listDir(dir))
+        if (!e.isDir) files.push_back(e.fullPath);
+    }
+  } catch (...) {
+    LOGE("扫描目录异常（跳过）：%s", dir.c_str());
+    return 0;
   }
   int added = 0;
   try {

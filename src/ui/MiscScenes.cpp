@@ -73,8 +73,10 @@ class CoreOptionsScene : public Scene {
     }
     const int N = (int)c->options().size();
     if (N > 0) {
-      if (in.pressed[(int)Btn::Up]) sel_ = (sel_ + N - 1) % N;
-      if (in.pressed[(int)Btn::Down]) sel_ = (sel_ + 1) % N;
+      // ★焦点跟随仅在键盘/手柄移动选择时执行一次（每帧执行会把拖拽滚动
+      //   强行拉回选中行 —— 滑动条/列表拉不动的根因）
+      if (in.pressed[(int)Btn::Up]) { sel_ = (sel_ + N - 1) % N; followSel_ = true; }
+      if (in.pressed[(int)Btn::Down]) { sel_ = (sel_ + 1) % N; followSel_ = true; }
     }
   }
 
@@ -113,12 +115,12 @@ class CoreOptionsScene : public Scene {
     if (listRc.contains(app.input.input().mouse)) {
       scroll_ = std::max(0.0f, scroll_ - (float)app.input.input().wheel * 56.0f);
     }
-    // 焦点行跟随滚动可见
-    {
+    // 焦点行跟随滚动可见（仅键盘移动选择时执行一次，不与拖拽滚动打架）
+    if (followSel_) {
+      followSel_ = false;
       const float rowY = 116 + (float)sel_ * 56 - scroll_;
       if (rowY < listRc.y) scroll_ -= (listRc.y - rowY);
       if (rowY > listRc.bottom() - 56) scroll_ += (rowY - (listRc.bottom() - 56));
-      if (scroll_ < 0) scroll_ = 0;
     }
     d.pushClip(listRc);
     float y = 116 - scroll_;
@@ -159,13 +161,19 @@ class CoreOptionsScene : public Scene {
       y += 56;
     }
     d.popClip();
-    // 滚动条
+    // 滚动边界钳制 + 滚动条
     {
       const float total = 116 + (float)opts.size() * 56;
       const float viewH = listRc.h;
+      const float maxScroll = std::max(0.0f, total - 116 - viewH);
+      if (scroll_ > maxScroll) scroll_ = maxScroll;
+      if (scroll_ < 0) scroll_ = 0;
       if (total > viewH) {
-        w::scrollIndicator(app, Rect(app.draw.W - 12, listRc.y, 6, listRc.h),
-                           viewH / (total - 116), scroll_ / (total - 116 - viewH));
+        // ★滚动条可直接拖拽：返回新位置回写 scroll
+        scroll_ = w::scrollIndicator(app, Rect(app.draw.W - 12, listRc.y, 6, listRc.h),
+                                     viewH / (total - 116),
+                                     scroll_ / (total - 116 - viewH)) *
+                  (total - 116 - viewH);
       }
     }
 
@@ -178,6 +186,7 @@ class CoreOptionsScene : public Scene {
   std::unique_ptr<LibretroCore> temp_;
   int sel_ = 0;
   float scroll_ = 0;
+  bool followSel_ = false;  // 键盘移动选择时置位 → 绘制期跟随一次
 };
 
 // ==================== 文件浏览器 ====================
@@ -210,9 +219,9 @@ class FileBrowserScene : public Scene {
     if (dirty_) rebuild(app);
     const int N = (int)entries_.size();
     if (N == 0) return;
-    // 上下移动跳过分区标签行
-    if (in.pressed[(int)Btn::Up]) sel_ = step(sel_, N - 1);
-    if (in.pressed[(int)Btn::Down]) sel_ = step(sel_, 1);
+    // 上下移动跳过分区标签行（★置位 followSel_：仅键盘移动时跟随滚动）
+    if (in.pressed[(int)Btn::Up]) { sel_ = step(sel_, N - 1); followSel_ = true; }
+    if (in.pressed[(int)Btn::Down]) { sel_ = step(sel_, 1); followSel_ = true; }
     if (in.pressed[(int)Btn::Ok]) activate(app, entries_[(size_t)sel_]);
   }
 
@@ -239,7 +248,9 @@ class FileBrowserScene : public Scene {
   void rebuild(App& app) {
     dirty_ = false;
     entries_.clear();
-    builtFor_ = drivesMode_ ? std::string("\x01drives") : cur_;
+    // 转义修复："\x01drives" 在 MSVC/GCC 下 \x01d 会被当作十六进制贪婪解析
+    // (0x01D + "rives")，拆分字面量确保语义为 0x01 + "drives"
+    builtFor_ = drivesMode_ ? std::string("\x01" "drives") : cur_;
 #ifdef _WIN32
     if (drivesMode_) {
       entries_.push_back({"存储位置", "", false, true});
@@ -354,8 +365,13 @@ class FileBrowserScene : public Scene {
       return;
     }
     if (req_.mode == 0) return;  // 目录选择模式点文件无动作
+    // ★闪退修复：popScene() 会立即析构本场景（unique_ptr 弹栈），随后再访问
+    //   成员 req_.onPick 即 use-after-free —— x64 偶尔侥幸、arm64 必崩。
+    //   先把回调和参数拷到栈上再弹栈调用。
+    auto onPick = req_.onPick;
+    const std::string picked = e.path;
     app.popScene();
-    if (req_.onPick) req_.onPick(e.path);
+    if (onPick) onPick(picked);
   }
 
   void draw(App& app) override {
@@ -364,9 +380,10 @@ class FileBrowserScene : public Scene {
     d.rect(Rect(0, 0, app.draw.W, app.draw.H), sk.bgDeep);
     if (w::header(app, req_.title, fsutil::pathDisplay(drivesMode_ ? "此电脑" : cur_),
                   true)) {
-      // 返回 = 取消
+      // 返回 = 取消（★先拷贝回调再弹栈 —— 避免 use-after-free）
+      auto onCancel = req_.onCancel;
       app.popScene();
-      if (req_.onCancel) req_.onCancel();
+      if (onCancel) onCancel();
       return;
     }
 
@@ -374,8 +391,11 @@ class FileBrowserScene : public Scene {
     if (req_.mode == 0 && !drivesMode_ && !cur_.empty() && fsutil::isDir(cur_)) {
       const Rect pickRc(app.draw.W - 240, 30, 200, 46);
       if (w::primaryButton(app, pickRc, "选择此目录", 4)) {
+        // ★先拷贝回调与路径再弹栈 —— 「添加目录就闪退」的 use-after-free 修复
+        auto onPick = req_.onPick;
+        const std::string picked = cur_;
         app.popScene();
-        if (req_.onPick) req_.onPick(cur_);
+        if (onPick) onPick(picked);
         return;
       }
     }
@@ -386,12 +406,13 @@ class FileBrowserScene : public Scene {
     if (listRc.contains(app.input.input().mouse)) {
       scroll_ = std::max(0.0f, scroll_ - (float)app.input.input().wheel * 48.0f);
     }
-    // 焦点行跟随可见
-    {
+    // ★焦点行跟随仅在键盘/手柄移动选择时执行一次 —— 旧实现每帧强制把
+    //   scroll 拉回选中行，任何拖拽/滚轮立刻被弹回（滑动条拉不动的根因）
+    if (followSel_) {
+      followSel_ = false;
       const float rowY = 116 + (float)sel_ * 48 - scroll_;
       if (rowY < listRc.y) scroll_ -= (listRc.y - rowY);
       if (rowY > listRc.bottom() - 48) scroll_ += (rowY - (listRc.bottom() - 48));
-      if (scroll_ < 0) scroll_ = 0;
     }
     d.pushClip(listRc);
     float y = 116 - scroll_;
@@ -415,12 +436,18 @@ class FileBrowserScene : public Scene {
       y += 48;
     }
     d.popClip();
-    // 滚动条
+    // 滚动边界钳制 + 滚动条（拖拽/滚轮不越界）
     {
       const float total = 116 + (float)entries_.size() * 48;
+      const float maxScroll = std::max(0.0f, total - 116 - listRc.h);
+      if (scroll_ > maxScroll) scroll_ = maxScroll;
+      if (scroll_ < 0) scroll_ = 0;
       if (total > listRc.h) {
-        w::scrollIndicator(app, Rect(app.draw.W - 12, listRc.y, 6, listRc.h),
-                           listRc.h / (total - 116), scroll_ / (total - 116 - listRc.h));
+        // ★滚动条可直接拖拽：返回新位置回写 scroll
+        scroll_ = w::scrollIndicator(app, Rect(app.draw.W - 12, listRc.y, 6, listRc.h),
+                                     listRc.h / (total - 116),
+                                     scroll_ / (total - 116 - listRc.h)) *
+                  (total - 116 - listRc.h);
       }
     }
 
@@ -436,6 +463,7 @@ class FileBrowserScene : public Scene {
   float scroll_ = 0;
   bool drivesMode_ = false;
   bool dirty_ = false;
+  bool followSel_ = false;  // 键盘移动选择时置位 → 绘制期跟随一次
 };
 
 // ==================== 核心选择器（对齐 Android 版 CorePickerDialog）====================
@@ -760,7 +788,8 @@ class AboutScene : public Scene {
     app.font.draw(app.sdlRenderer(), "NESSTATION", cx - app.font.textWidth("NESSTATION", 52, true) / 2,
                   app.draw.H * 0.16f, 52, sk.textHi, true);
     d.rect(Rect(cx - 40, app.draw.H * 0.16f + 66, 80, 4), sk.accent);
-    const std::string v = "PC EDITION · v1.1 · 多平台复古游戏站（Windows / Linux）";
+    const std::string v = std::string("PC EDITION · ") + appVersionText() +
+                          " · 多平台复古游戏站（Windows / Linux）";
     app.font.draw(app.sdlRenderer(), v, cx - app.font.textWidth(v, 16) / 2,
                   app.draw.H * 0.16f + 86, 16, sk.text);
 

@@ -626,8 +626,11 @@ class LibraryScene : public Scene {
       }
       d.popClip();
       if (totalH > grid.h) {
-        w::scrollIndicator(app, Rect((float)d.W - 14, grid.y, 6, grid.h), grid.h / totalH,
-                           scroll_ / (totalH - grid.h));
+        // ★滚动条可直接拖拽：返回新位置回写 scroll
+        scroll_ = w::scrollIndicator(app, Rect((float)d.W - 14, grid.y, 6, grid.h),
+                                     grid.h / totalH,
+                                     scroll_ / (totalH - grid.h)) *
+                  (totalH - grid.h);
       }
     }
     w::keyHintBar(app, {{"双击", "开始"}, {"F", "收藏"}, {"右键", "快捷菜单"},

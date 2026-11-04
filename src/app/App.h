@@ -26,6 +26,12 @@ namespace ns {
 class App;
 class EmuRunner;
 
+// —— 版本号（CMake 注入；本地直编 g++ 时回退）——
+#ifndef NESSTATION_VERSION
+#define NESSTATION_VERSION "1.2.0-dev"
+#endif
+inline const char* appVersionText() { return "v" NESSTATION_VERSION; }
+
 // —— 配置（<dataDir>/config.json）——
 struct Config {
   int uiStyle = 0;             // 0=Neon 1=FSD
