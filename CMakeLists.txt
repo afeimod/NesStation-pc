@@ -1,12 +1,15 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(NesStation VERSION 1.0.0 LANGUAGES C CXX
+project(NesStation VERSION 1.1.0 LANGUAGES C CXX
         DESCRIPTION "NesStation PC - Multi-platform retro game station for Windows/Linux")
 
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
 option(NESSTATION_USE_SYSTEM_SDL2 "Use system-installed SDL2 instead of FetchContent" AUTO)
+# 构建完成后自动下载 libretro 官方预编译核心到 build/bin/cores/（exe 同目录，
+# CoreManager 自动识别），源码构建开箱即玩。离线/CI 环境传 OFF。
+option(NESSTATION_FETCH_CORES     "Download libretro cores next to the built binary (needs network)" ON)
 option(NESSTATION_SUPERBUILD      "Build standalone emulators (Dolphin/Cemu/Eden) from source" OFF)
 option(NESSTATION_BUILD_DOLPHIN   "Superbuild: Nintendo GameCube / Wii (Dolphin ${NESSTATION_DOLPHIN_TAG})" ON)
 option(NESSTATION_BUILD_CEMU      "Superbuild: Nintendo Wii U (Cemu)" ON)
@@ -80,6 +83,30 @@ target_link_libraries(nesstation PRIVATE SDL2::SDL2)
 
 # stb 单头库实现聚合单元
 target_sources(nesstation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/stb_impl.cpp)
+
+# ---------------------------------------------------------------------------
+# 核心自动下载（默认开）：构建完成后从 libretro 官方 buildbot 下载当前架构
+# 全部可用核心到 $<TARGET_FILE_DIR>/cores（即 build/bin/cores，exe 同目录，
+# CoreManager 的 bundledCoreDir 自动识别）。增量构建时脚本跳过已下载平台，
+# 只做存在性检查，不会重复下载。核心缺失/断网不会使构建失败（脚本软退出）。
+# ---------------------------------------------------------------------------
+if(NESSTATION_FETCH_CORES)
+  set(NESSTATION_CORES_DEST "$<TARGET_FILE_DIR:nesstation>/cores")
+  if(WIN32)
+    add_custom_command(TARGET nesstation POST_BUILD
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File ${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_cores.ps1
+              -Dest "${NESSTATION_CORES_DEST}"
+      COMMENT "Downloading libretro cores (buildbot) -> bin/cores/"
+      VERBATIM)
+  else()
+    add_custom_command(TARGET nesstation POST_BUILD
+      COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetch_cores.sh
+              --dest "${NESSTATION_CORES_DEST}"
+      COMMENT "Downloading libretro cores (buildbot) -> bin/cores/"
+      VERBATIM)
+  endif()
+endif()
 
 # Embed resources: fonts + app icon
 

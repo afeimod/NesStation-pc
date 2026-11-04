@@ -81,21 +81,26 @@ std::string sdlPadButtonName(SDL_GameControllerButton b) {
 
 PadMapping PadMapping::defaults() {
   PadMapping m;
-  auto K = [&](int btn, SDL_Keycode k) { m.binds[0][btn].key = k; };
-  K(RP_UP, SDLK_UP);
-  K(RP_DOWN, SDLK_DOWN);
-  K(RP_LEFT, SDLK_LEFT);
-  K(RP_RIGHT, SDLK_RIGHT);
-  K(RP_A, SDLK_x);
-  K(RP_B, SDLK_z);
-  K(RP_X, SDLK_s);
-  K(RP_Y, SDLK_a);
-  K(RP_L, SDLK_q);
-  K(RP_R, SDLK_w);
-  K(RP_L2, SDLK_d);
-  K(RP_R2, SDLK_f);
-  K(RP_START, SDLK_RETURN);
-  K(RP_SELECT, SDLK_LSHIFT);
+  // 键码 + 物理扫描码双存：扫描码与布局无关（非美式键盘 / 部分 arm64
+  // 设备 evdev/Wine 环境下 keysym 翻译失败时仍能正确识别）
+  auto K = [&](int btn, SDL_Keycode k, SDL_Scancode sc) {
+    m.binds[0][btn].key = k;
+    m.binds[0][btn].scan = sc;
+  };
+  K(RP_UP, SDLK_UP, SDL_SCANCODE_UP);
+  K(RP_DOWN, SDLK_DOWN, SDL_SCANCODE_DOWN);
+  K(RP_LEFT, SDLK_LEFT, SDL_SCANCODE_LEFT);
+  K(RP_RIGHT, SDLK_RIGHT, SDL_SCANCODE_RIGHT);
+  K(RP_A, SDLK_x, SDL_SCANCODE_X);
+  K(RP_B, SDLK_z, SDL_SCANCODE_Z);
+  K(RP_X, SDLK_s, SDL_SCANCODE_S);
+  K(RP_Y, SDLK_a, SDL_SCANCODE_A);
+  K(RP_L, SDLK_q, SDL_SCANCODE_Q);
+  K(RP_R, SDLK_w, SDL_SCANCODE_W);
+  K(RP_L2, SDLK_d, SDL_SCANCODE_D);
+  K(RP_R2, SDLK_f, SDL_SCANCODE_F);
+  K(RP_START, SDLK_RETURN, SDL_SCANCODE_RETURN);
+  K(RP_SELECT, SDLK_LSHIFT, SDL_SCANCODE_LSHIFT);
 
   auto P = [&](int btn, SDL_GameControllerButton b) { m.binds[0][btn].padBtn = b; };
   P(RP_UP, SDL_CONTROLLER_BUTTON_DPAD_UP);
@@ -211,15 +216,40 @@ void InputManager::endFrame(float dt) {
   pollRetroState();
 }
 
+void InputManager::setMapping(const PadMapping& m) {
+  mapping_ = m;
+  // 配置只持久化键码；加载后补齐物理扫描码（当前布局下同名键的位置）
+  for (int p = 0; p < 2; p++) {
+    for (int b = 0; b < RP_COUNT; b++) {
+      KeyBind& kb = mapping_.binds[p][b];
+      if (kb.key != SDLK_UNKNOWN && kb.scan == SDL_SCANCODE_UNKNOWN)
+        kb.scan = SDL_GetScancodeFromKey(kb.key);
+    }
+  }
+}
+
+void InputManager::resetMapping() { mapping_ = PadMapping::defaults(); }
+
+// —— 键盘事件匹配：键码或扫描码命中均算（部分 arm64 设备/非美式布局下
+// keysym 翻译失败，但 scancode 始终有效；反之亦然）——
+static inline bool keyIs(const SDL_Keysym& k, SDL_Keycode sym, SDL_Scancode sc) {
+  return k.sym == sym || k.scancode == sc;
+}
+
 void InputManager::pollRetroState() {
   const Uint8* kbd = SDL_GetKeyboardState(nullptr);
   for (int port = 0; port < 2; port++) {
     for (int btn = 0; btn < RP_COUNT; btn++) {
       bool v = false;
       const KeyBind& kb = mapping_.binds[port][btn];
-      if (port == 0 && kb.key != SDLK_UNKNOWN) {
-        const SDL_Scancode sc = SDL_GetScancodeFromKey(kb.key);
-        if (sc != SDL_SCANCODE_UNKNOWN && kbd[sc]) v = true;
+      if (port == 0) {
+        // 优先物理扫描码（布局无关）；无扫描码时回退键码转换
+        if (kb.scan != SDL_SCANCODE_UNKNOWN) {
+          if (kbd[kb.scan]) v = true;
+        } else if (kb.key != SDLK_UNKNOWN) {
+          const SDL_Scancode sc = SDL_GetScancodeFromKey(kb.key);
+          if (sc != SDL_SCANCODE_UNKNOWN && kbd[sc]) v = true;
+        }
       }
       if (kb.padBtn != SDL_CONTROLLER_BUTTON_INVALID && pads_[port]) {
         if (SDL_GameControllerGetButton(pads_[port], kb.padBtn)) v = true;
@@ -243,15 +273,19 @@ void InputManager::handleEvent(const SDL_Event& ev) {
       if (ev.key.repeat) break;
       const SDL_Keysym& k = ev.key.keysym;
 
-      if (isCapturing() && k.sym != SDLK_ESCAPE) {
+      if (isCapturing() && k.sym != SDLK_ESCAPE && k.scancode != SDL_SCANCODE_ESCAPE) {
+        // 同时存键码与扫描码：扫描码保证非美式布局/arm64 设备上稳定
         mapping_.binds[capturePort_][captureBtn_].key = k.sym;
+        mapping_.binds[capturePort_][captureBtn_].scan = k.scancode;
         mapping_.binds[capturePort_][captureBtn_].padBtn = SDL_CONTROLLER_BUTTON_INVALID;
         cancelCapture();
         break;
       }
 
       // 文本输入模式：退格删字符，其余交给 UI
-      if (textEditing_ && k.sym == SDLK_BACKSPACE && !textBuf_.empty()) {
+      if (textEditing_ &&
+          (k.sym == SDLK_BACKSPACE || k.scancode == SDL_SCANCODE_BACKSPACE) &&
+          !textBuf_.empty()) {
         // 删除最后一个 UTF-8 字符：从末尾回溯到非延续字节
         size_t s = textBuf_.size() - 1;
         while (s > 0 && ((uint8_t)textBuf_[s] & 0xC0) == 0x80) s--;
@@ -261,33 +295,39 @@ void InputManager::handleEvent(const SDL_Event& ev) {
 
       feedCoreKey(true, k);
 
-      if (k.sym == SDLK_UP) setUiBtn(Btn::Up, true);
-      else if (k.sym == SDLK_DOWN) setUiBtn(Btn::Down, true);
-      else if (k.sym == SDLK_LEFT) setUiBtn(Btn::Left, true);
-      else if (k.sym == SDLK_RIGHT) setUiBtn(Btn::Right, true);
-      else if (k.sym == SDLK_RETURN || k.sym == SDLK_KP_ENTER) setUiBtn(Btn::Ok, true);
-      else if (k.sym == SDLK_ESCAPE) setUiBtn(Btn::Back, true);
-      else if (k.sym == SDLK_F1) setUiBtn(Btn::Menu, true);
-      else if (k.sym == SDLK_e) setUiBtn(Btn::Option, true);
-      else if (k.sym == SDLK_f) setUiBtn(Btn::Fav, true);
-      else if (k.sym == SDLK_PAGEUP) setUiBtn(Btn::PageUp, true);
-      else if (k.sym == SDLK_PAGEDOWN) setUiBtn(Btn::PageDown, true);
+      // UI 导航：键码或扫描码任一命中（修复 arm64 设备 keysym 翻译失败
+      // 导致方向键无法控制菜单的问题）
+      if (keyIs(k, SDLK_UP, SDL_SCANCODE_UP)) setUiBtn(Btn::Up, true);
+      else if (keyIs(k, SDLK_DOWN, SDL_SCANCODE_DOWN)) setUiBtn(Btn::Down, true);
+      else if (keyIs(k, SDLK_LEFT, SDL_SCANCODE_LEFT)) setUiBtn(Btn::Left, true);
+      else if (keyIs(k, SDLK_RIGHT, SDL_SCANCODE_RIGHT)) setUiBtn(Btn::Right, true);
+      else if (k.sym == SDLK_RETURN || k.sym == SDLK_KP_ENTER ||
+               k.scancode == SDL_SCANCODE_RETURN || k.scancode == SDL_SCANCODE_KP_ENTER)
+        setUiBtn(Btn::Ok, true);
+      else if (keyIs(k, SDLK_ESCAPE, SDL_SCANCODE_ESCAPE)) setUiBtn(Btn::Back, true);
+      else if (keyIs(k, SDLK_F1, SDL_SCANCODE_F1)) setUiBtn(Btn::Menu, true);
+      else if (keyIs(k, SDLK_e, SDL_SCANCODE_E)) setUiBtn(Btn::Option, true);
+      else if (keyIs(k, SDLK_f, SDL_SCANCODE_F)) setUiBtn(Btn::Fav, true);
+      else if (keyIs(k, SDLK_PAGEUP, SDL_SCANCODE_PAGEUP)) setUiBtn(Btn::PageUp, true);
+      else if (keyIs(k, SDLK_PAGEDOWN, SDL_SCANCODE_PAGEDOWN)) setUiBtn(Btn::PageDown, true);
       break;
     }
     case SDL_KEYUP: {
       const SDL_Keysym& k = ev.key.keysym;
       feedCoreKey(false, k);
-      if (k.sym == SDLK_UP) setUiBtn(Btn::Up, false);
-      else if (k.sym == SDLK_DOWN) setUiBtn(Btn::Down, false);
-      else if (k.sym == SDLK_LEFT) setUiBtn(Btn::Left, false);
-      else if (k.sym == SDLK_RIGHT) setUiBtn(Btn::Right, false);
-      else if (k.sym == SDLK_RETURN || k.sym == SDLK_KP_ENTER) setUiBtn(Btn::Ok, false);
-      else if (k.sym == SDLK_ESCAPE) setUiBtn(Btn::Back, false);
-      else if (k.sym == SDLK_F1) setUiBtn(Btn::Menu, false);
-      else if (k.sym == SDLK_e) setUiBtn(Btn::Option, false);
-      else if (k.sym == SDLK_f) setUiBtn(Btn::Fav, false);
-      else if (k.sym == SDLK_PAGEUP) setUiBtn(Btn::PageUp, false);
-      else if (k.sym == SDLK_PAGEDOWN) setUiBtn(Btn::PageDown, false);
+      if (keyIs(k, SDLK_UP, SDL_SCANCODE_UP)) setUiBtn(Btn::Up, false);
+      else if (keyIs(k, SDLK_DOWN, SDL_SCANCODE_DOWN)) setUiBtn(Btn::Down, false);
+      else if (keyIs(k, SDLK_LEFT, SDL_SCANCODE_LEFT)) setUiBtn(Btn::Left, false);
+      else if (keyIs(k, SDLK_RIGHT, SDL_SCANCODE_RIGHT)) setUiBtn(Btn::Right, false);
+      else if (k.sym == SDLK_RETURN || k.sym == SDLK_KP_ENTER ||
+               k.scancode == SDL_SCANCODE_RETURN || k.scancode == SDL_SCANCODE_KP_ENTER)
+        setUiBtn(Btn::Ok, false);
+      else if (keyIs(k, SDLK_ESCAPE, SDL_SCANCODE_ESCAPE)) setUiBtn(Btn::Back, false);
+      else if (keyIs(k, SDLK_F1, SDL_SCANCODE_F1)) setUiBtn(Btn::Menu, false);
+      else if (keyIs(k, SDLK_e, SDL_SCANCODE_E)) setUiBtn(Btn::Option, false);
+      else if (keyIs(k, SDLK_f, SDL_SCANCODE_F)) setUiBtn(Btn::Fav, false);
+      else if (keyIs(k, SDLK_PAGEUP, SDL_SCANCODE_PAGEUP)) setUiBtn(Btn::PageUp, false);
+      else if (keyIs(k, SDLK_PAGEDOWN, SDL_SCANCODE_PAGEDOWN)) setUiBtn(Btn::PageDown, false);
       break;
     }
     case SDL_TEXTINPUT:

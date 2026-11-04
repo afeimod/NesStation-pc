@@ -17,10 +17,20 @@ struct GameEntry {
   GamePlatform platform = GamePlatform::NES;
   int64_t lastPlayedAt = 0;   // epoch 秒
   int64_t playTimeSec = 0;
+  int playCount = 0;          // 游玩次数（APK playCount）
   bool favorite = false;
+  // 核心选择的记忆（核心选择器「记住此游戏的选择」）：
+  // "" 未定 / 候选链上的核心文件名（如 "snes9x_libretro"）
+  std::string preferredCore;
 
   const std::string& displayTitle() const { return customTitle.empty() ? title : customTitle; }
 };
+
+// —— APK GamePlatform.kt 格式化（文案 1:1）——
+// "—" / "N分钟" / "N.N小时"
+std::string formatPlayTime(int64_t sec);
+// "未游玩" / "刚刚" / "N分钟前" / "N小时前" / "N天前" / "很久以前"
+std::string formatLastPlayed(int64_t epoch);
 
 // 文件名 → 展示标题：去扩展名、下划线换空格、去常见标签 [xxx] (Rev A) 尾部留白
 std::string prettifyTitle(const std::string& filename);

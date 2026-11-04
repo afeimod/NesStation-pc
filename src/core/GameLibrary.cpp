@@ -92,6 +92,7 @@ void GameLibrary::load(const std::string& dataDir) {
             e.id = g.value("id", "");
             e.title = g.value("title", "");
             e.customTitle = g.value("customTitle", "");
+            e.preferredCore = g.value("preferredCore", "");  // 核心选择器「记住选择」
             e.romPath = g.value("romPath", "");
             e.coverPath = g.value("coverPath", "");
             e.platform = platformFromString(g.value("platform", "NES"));
@@ -124,6 +125,7 @@ void GameLibrary::save() {
     g["id"] = e.id;
     g["title"] = e.title;
     g["customTitle"] = e.customTitle;
+    g["preferredCore"] = e.preferredCore;
     g["romPath"] = e.romPath;
     g["coverPath"] = e.coverPath;
     g["platform"] = platformShortName(e.platform);

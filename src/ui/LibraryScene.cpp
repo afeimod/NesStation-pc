@@ -54,6 +54,22 @@ class LibraryScene : public Scene {
     std::sort(games_.begin(), games_.end(), [](const GameEntry& a, const GameEntry& b) {
       return a.displayTitle() < b.displayTitle();
     });
+    // 搜索过滤（对齐 Android NeonLibraryScreen：标题不区分大小写包含）
+    if (!searchBuf_.empty()) {
+      std::string q = searchBuf_;
+      std::transform(q.begin(), q.end(), q.begin(),
+                     [](unsigned char c) { return (char)std::tolower(c); });
+      games_.erase(std::remove_if(games_.begin(), games_.end(),
+                                  [&q](const GameEntry& g) {
+                                    std::string t = g.displayTitle();
+                                    std::transform(t.begin(), t.end(), t.begin(),
+                                                   [](unsigned char c) {
+                                                     return (char)std::tolower(c);
+                                                   });
+                                    return t.find(q) == std::string::npos;
+                                  }),
+                   games_.end());
+    }
     if (gridSel_ >= (int)games_.size()) gridSel_ = 0;
     // 封面排队（可见范围）
     const int cols = columns(app);
@@ -70,6 +86,27 @@ class LibraryScene : public Scene {
 
   void update(App& app, float dt, const InputState& in) override {
     (void)dt;
+    // —— 搜索框编辑态 ——
+    if (searching_) {
+      searchBuf_ = app.input.textBuffer();
+      if (in.pressed[(int)Btn::Back]) {  // Esc：退出编辑（保留过滤词）
+        stopEditing(app);
+        return;
+      }
+      if (in.pressed[(int)Btn::Ok]) {  // Enter：确认退出编辑
+        stopEditing(app);
+        return;
+      }
+      static std::string lastBuf;
+      if (searchBuf_ != lastBuf) {
+        lastBuf = searchBuf_;
+        refreshGames(app);
+      }
+      return;  // 编辑中不导航
+    }
+    static std::string lastBuf;  // 清理共享静态（退出编辑后复位）
+    lastBuf.clear();
+
     if (in.pressed[(int)Btn::Back]) {
       if (renaming_) {
         // 重命名中：Esc 仅取消重命名，不关详情/不退出场景
@@ -77,6 +114,9 @@ class LibraryScene : public Scene {
         app.input.textInputStop();
       } else if (detailOpen_) {
         detailOpen_ = false;
+      } else if (!searchBuf_.empty()) {
+        searchBuf_.clear();  // 第二次 Esc：清空搜索词
+        refreshGames(app);
       } else {
         app.popScene();
       }
@@ -218,8 +258,29 @@ class LibraryScene : public Scene {
       return;
     }
 
-    // —— 左侧过滤列表 ——
-    float y = 120;
+    // —— 左侧：搜索框 + 过滤列表 ——
+    {
+      const Skin& sk = Theme::skin();
+      const Rect src(24, 108, 240, 44);
+      const bool hov = src.contains(app.input.input().mouse) || searching_;
+      d.roundRect(src, sk.panelRadius, hov ? sk.bgPanelHi : sk.bgPanel);
+      d.roundRectOutline(src, sk.panelRadius, searching_ ? sk.accent : sk.line, 1.4f);
+      w::iconSearch(app, Rect(src.x + 10, src.y + 12, 20, 20), sk.textDim);
+      const std::string& shown =
+          searchBuf_.empty() && !searching_ ? std::string("搜索游戏…") : searchBuf_;
+      app.font.drawVCentered(
+          app.sdlRenderer(), shown.empty() && searching_ ? "|" : shown, src.x + 40,
+          src.cy(), 15,
+          searchBuf_.empty() && !searching_ ? sk.textDim : sk.text);
+      if (src.contains(app.input.input().mouse) && app.input.input().mousePressed) {
+        if (!searching_) {
+          searching_ = true;
+          app.input.textClear();
+          app.input.textInputStart();
+        }
+      }
+    }
+    float y = 170;
     for (size_t i = 0; i < cats_.size(); i++) {
       const Rect rc(24, y, 240, 44);
       const bool focused = focusArea_ == 0 && catSel_ == (int)i;
@@ -256,13 +317,16 @@ class LibraryScene : public Scene {
       const Rect rc(gx, gy, cw, ch);
       const bool focused = focusArea_ == 1 && gridSel_ == idx;
       w::coverCard(app, rc, games_[(size_t)idx], focused);
-      // 鼠标
+      // 鼠标：hover 选中 + 左键详情 + 右键快捷菜单（对齐 Android「长按卡片」）
       if (rc.contains(app.input.input().mouse)) {
         gridSel_ = idx;
         focusArea_ = 1;
         if (app.input.input().mousePressed) {
           detailOpen_ = true;
           detailSel_ = 0;
+        }
+        if (app.input.input().mouseRightPressed) {
+          openCardMenu(app, idx, Vec2(app.input.input().mouse));
         }
       }
     }
@@ -283,8 +347,8 @@ class LibraryScene : public Scene {
     if (detailOpen_) drawDetail(app);
     if (renaming_) drawRename(app);
 
-    w::keyHintBar(app, {{"A", "详情"}, {"X / F", "收藏"}, {"B / Esc", "返回"},
-                        {"Start", "设置"}});
+    w::keyHintBar(app, {{"A", "详情"}, {"X / F", "收藏"}, {"右键 / E", "快捷菜单"},
+                        {"B / Esc", "返回"}, {"Start", "设置"}});
   }
 
   void startAddRomDir(App& app) {
@@ -299,6 +363,69 @@ class LibraryScene : public Scene {
       app.toast("ROM 目录已添加并扫描");
     };
     app.pushScene(createFileBrowser(req));
+  }
+
+  void stopEditing(App& app) {
+    searching_ = false;
+    app.input.textInputStop();
+    refreshGames(app);
+  }
+
+  // —— 右键快捷菜单（Android 版「长按卡片」的 PC 等价交互）——
+  // 操作集对齐详情面板 + 核心选择器入口
+  void openCardMenu(App& app, int idx, Vec2 at) {
+    if (idx < 0 || idx >= (int)games_.size()) return;
+    gridSel_ = idx;
+    const GameEntry& g = games_[(size_t)idx];
+    std::vector<ContextMenuItem> items;
+    items.push_back({1, "启动游戏", "Enter", false, [this, &app, g]() {
+      detailOpen_ = false;
+      app.launchGame(g);
+    }});
+    items.push_back({2, g.favorite ? "取消收藏" : "加入收藏", "F", false,
+                     [this, &app, g]() {
+                       app.library.toggleFavorite(g.id);
+                       app.library.save();
+                       refreshGames(app);
+                     }});
+    items.push_back({0, "重命名（显示名）", "", false, [this, &app, g]() {
+      renaming_ = true;
+      renameBuf_ = g.customTitle;
+      app.input.textClear();
+      app.input.textInputStart();
+    }});
+    items.push_back({20, "重新获取封面", "", false, [this, &app, g]() {
+      if (GameEntry* e = app.library.find(g.id)) e->coverPath.clear();
+      app.library.save();
+      app.covers.requestFetch(g);
+      app.toast("已重新排队获取封面");
+    }});
+    // 平台有多个已安装核心 → 提供重新选择入口（对齐 CorePickerDialog 的「重新询问」）
+    if (app.cores.installedCoresFor(g.platform).size() > 1) {
+      std::string hint;
+      if (GameEntry* e = app.library.find(g.id); e && !e->preferredCore.empty()) {
+        hint = "已记忆";
+      }
+      items.push_back({16, "重新选择核心", hint, false, [this, &app, g]() {
+        if (GameEntry* e = app.library.find(g.id)) {
+          e->preferredCore.clear();  // 清除记忆 → 下次启动重新询问
+          app.library.save();
+        }
+        app.launchGame(g);  // 触发核心选择器
+      }});
+    }
+    items.push_back({0, "从库中移除", "", true, [this, &app, g]() {
+      app.library.remove(g.id);
+      app.library.save();
+      detailOpen_ = false;
+      refreshGames(app);
+      app.toast("已从库中移除：" + g.displayTitle());
+    }});
+    pushContextMenu(app, at, g.displayTitle(),
+                    std::string(platformShortName(g.platform)) + " · " +
+                        platformFullName(g.platform) +
+                        (g.favorite ? " · ★ 已收藏" : ""),
+                    std::move(items));
   }
 
   void drawDetail(App& app) {
@@ -443,6 +570,8 @@ class LibraryScene : public Scene {
   bool renaming_ = false;
   std::string renameBuf_;
   float scroll_ = 0;
+  bool searching_ = false;      // 搜索框编辑态（对齐 Neon 库搜索）
+  std::string searchBuf_;
 };
 
 }  // namespace

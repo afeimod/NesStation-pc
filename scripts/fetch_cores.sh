@@ -170,4 +170,6 @@ echo " 提示：NGC/Wii、Wii U、Switch 为独立模拟器"
 echo "       （Dolphin / Cemu / Eden），放 emulators/ 目录"
 echo "       或到设置页配置路径。"
 echo "=========================================="
-exit $miss
+# 软失败：缺核心是正常情况（运行时候选链会自动回退/提示），
+# 永远不因平台缺失或网络问题中断 CMake 构建
+exit 0

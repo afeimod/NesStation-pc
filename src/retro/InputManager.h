@@ -24,10 +24,12 @@ extern const char* retroPadName(int btn);  // "B" "A" "L2" "Start" ...
 
 // 单个键位绑定（键盘或手柄）
 struct KeyBind {
-  SDL_Keycode key = SDLK_UNKNOWN;                                    // 键盘键
+  SDL_Keycode key = SDLK_UNKNOWN;                                    // 键盘键（布局相关，持久化用）
+  SDL_Scancode scan = SDL_SCANCODE_UNKNOWN;                           // 物理扫描码（布局无关）
   SDL_GameControllerButton padBtn = SDL_CONTROLLER_BUTTON_INVALID;   // 手柄键
   bool valid() const {
-    return key != SDLK_UNKNOWN || padBtn != SDL_CONTROLLER_BUTTON_INVALID;
+    return key != SDLK_UNKNOWN || scan != SDL_SCANCODE_UNKNOWN ||
+           padBtn != SDL_CONTROLLER_BUTTON_INVALID;
   }
 };
 
@@ -68,8 +70,8 @@ class InputManager {
   void cancelCapture() { capturePort_ = -1; }
 
   const PadMapping& mapping() const { return mapping_; }
-  void setMapping(const PadMapping& m) { mapping_ = m; }
-  void resetMapping() { mapping_ = PadMapping::defaults(); }
+  void setMapping(const PadMapping& m);
+  void resetMapping();
 
   int gamepadCount() const;
   std::string gamepadName(int idx) const;

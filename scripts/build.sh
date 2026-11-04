@@ -24,6 +24,7 @@ for arg in "$@"; do
     --no-cemu)      ARGS+=(-DNESSTATION_BUILD_CEMU=OFF) ;;
     --no-eden)      ARGS+=(-DNESSTATION_BUILD_EDEN=OFF) ;;
     --system-sdl)   ARGS+=(-DNESSTATION_USE_SYSTEM_SDL2=ON) ;;
+    --no-cores)     ARGS+=(-DNESSTATION_FETCH_CORES=OFF) ;;
     *)              ARGS+=("$arg") ;;
   esac
 done
@@ -37,4 +38,6 @@ cmake --build "$BUILD" -j"$(nproc)"
 
 echo ""
 echo "==> 完成：$BUILD/bin/nesstation"
-echo "    下一步：./scripts/fetch_cores.sh 下载核心"
+echo "    核心已自动下载到 $BUILD/bin/cores/（构建时联网，默认开）"
+echo "    离线构建：./scripts/build.sh --no-cores"
+echo "    更新/补齐核心：./scripts/fetch_cores.sh"

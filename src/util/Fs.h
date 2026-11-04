@@ -24,6 +24,8 @@ std::string extOf(const std::string& path);            // 小写扩展名（无�
 bool exists(const std::string& path);
 bool isDir(const std::string& path);
 bool isFile(const std::string& path);
+// 目录是否可读（区分「空目录」与「无权限」，文件浏览器提示用）
+bool canReadDir(const std::string& path);
 bool makeDirs(const std::string& path);                // 递归建目录
 bool readFile(const std::string& path, std::string* out);
 bool writeFile(const std::string& path, const std::string& data);
@@ -38,6 +40,13 @@ void walkFiles(const std::string& dir, std::vector<std::string>* out,
 
 // 执行文件所在目录（用于 exe 同目录的 cores/、emulators/、assets/ 探测）
 std::string exeDir();
+
+// 用户主目录（HOME / USERPROFILE；取不到返回空串）
+std::string homeDir();
+
+// 可移动/外置存储位置（Linux：/media/*、/run/media/*/*、/mnt/*、/storage/*、
+// /sdcard、/data；Windows 返回空）。文件浏览器“存储位置”书签用。
+std::vector<std::string> storageMounts();
 
 // 用户数据目录：<config>/NesStation；便携模式（exe 旁 portable.flag）则为
 // <exeDir>/UserData

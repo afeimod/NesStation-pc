@@ -55,8 +55,9 @@ C++17 + SDL2 单二进制原生实现，libretro 核心进程内加载（RetroAr
 
 **Linux**
 ```bash
-./scripts/build.sh                 # 自动 FetchContent SDL2（无需系统依赖）
+./scripts/build.sh                 # 自动 FetchContent SDL2 + 构建后自动下载核心
 # 或系统 SDL2：sudo apt install libsdl2-dev && ./scripts/build.sh --system-sdl
+# 离线构建：./scripts/build.sh --no-cores
 ```
 
 **Windows**（VS2022 x64 Native Tools）
@@ -66,16 +67,18 @@ scripts\build.bat                  # 自动 FetchContent SDL2
 
 产物：`build/bin/nesstation`（Linux）/ `build/bin/Release/nesstation.exe`（Windows）。
 
-### 2. 核心（发布包已内置，开箱即玩）
+### 2. 核心（构建时自动下载 / 发布包已内置）
 
-**官方发布包（CI 产物）已内置当前架构全部可用核心**（exe 同目录 `cores/`，自动识别，15 平台基本全覆盖）
-：Windows zip → `NesStation-windows/cores/*.dll`；Linux tar.gz → `cores/*.so`；
-arm64 deb → `/opt/nesstation/cores/*.so`。解压/安装后无需任何额外步骤即可游玩。
+**为什么不把核心塞进源码包？** 核心是 libretro 官方 buildbot 的**预编译二进制**（每架构 15 个、共 400+ MB，nightly 每日更新，各自遵循上游许可证 GPLv2 / 非商业 / MPL 等）。源码仓库只放源码，核心从官方渠道拉取——与 RetroArch 同源同版本，永远拿到最新安全构建，也避免仓库膨胀。因此源码 zip 里没有核心，但**不需要你手动找**：
 
-源码自行编译、或想更新/补齐核心时才需要手动下载：
+| 获取方式 | 说明 |
+| --- | --- |
+| **① 构建时自动下载（默认）** | `./scripts/build.sh` 编译完成后自动从 buildbot 下载本架构全部可用核心到 `build/bin/cores/`（exe 同目录，启动即识别），源码构建**开箱即玩**；离线构建加 `--no-cores` |
+| **② 直接下发布包** | CI 产物已内置全部可用核心：Windows zip → `cores/*.dll`；Linux tar.gz → `cores/*.so`；arm64 deb → `/opt/nesstation/cores/*.so`，解压/安装即玩 |
+| **③ 手动补齐/更新** | 脚本一键下载（见下），已有平台自动跳过 |
 
 ```bash
-# Linux（自动识别 x86_64 / aarch64 架构，逐平台下载，404 自动回退替代核心）
+# 手动下载（自动识别 x86_64 / aarch64 架构，逐平台下载，404 自动回退替代核心）
 bash scripts/fetch_cores.sh                     # 全部 15 个平台
 bash scripts/fetch_cores.sh nes psx 3ds         # 只下载指定平台
 # Windows
@@ -86,9 +89,10 @@ powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1
 `%APPDATA%\NesStation\cores\`（Windows），**优先级高于包内内置核心**（可覆盖升级）。
 exe 旁放 `portable.flag` 即转便携模式（全部数据进 `UserData/`）。
 
-> libretro 预编译核心并非所有架构都提供（如 azahar 无 linux/aarch64 包，
-> 打包/下载/运行时都会自动回退到 citra）；脚本、CI 打包与应用内启动使用同一条
-> 候选链，某个核心缺失时自动选用链上已安装的替代核心。
+> - 构建时断网/部分平台无预编译包**不会使构建失败**（脚本软退出，运行时会提示缺失平台与获取方式）。
+> - libretro 预编译核心并非所有架构都提供（如 azahar 无 linux/aarch64 包，
+>   会自动回退 citra）；下载/打包/运行时使用同一条候选链，某个核心缺失时
+>   自动选用链上已安装的替代核心。
 
 ### 3. 放入 ROM
 
@@ -113,13 +117,13 @@ Actions 页面 → **Build** → **Run workflow** → 选择构建目标：
 | 目标 | 产物 | 说明 |
 | --- | --- | --- |
 | `linux-x64` | `NesStation-linux-x64.tar.gz` | 便携包（含字体），Ubuntu 22.04 基线 |
-| `linux-arm64` | `nesstation_1.0.0_arm64.deb` | **Debian / Ubuntu 安装包**，Debian 12+ / Ubuntu 22.04+ |
+| `linux-arm64` | `nesstation_1.1.0_arm64.deb` | **Debian / Ubuntu 安装包**，Debian 12+ / Ubuntu 22.04+ |
 | `windows-x64` | `NesStation-windows-x64.zip` | 便携包（SDL2 静态链接，FetchContent） |
 | `all` | 以上全部 | — |
 
 > - arm64 deb 在 arm64 runner 的 **debian:12 容器**内原生构建（glibc 2.36 基线 +
 >   libstdc++ 静态链接），运行时仅依赖 `libc6` + `libsdl2-2.0-0`，
->   `sudo apt install ./nesstation_1.0.0_arm64.deb` 即装（含桌面图标）。
+>   `sudo apt install ./nesstation_1.1.0_arm64.deb` 即装（含桌面图标）。
 > - Linux 任务含真实核心冒烟测试（buildbot fceumm + 假视频驱动跑 240 帧 + 快速存读档）。
 > - 构建不随 push / PR 自动触发，完全手动。
 
@@ -218,7 +222,7 @@ NesStation-PC/
 │   └── util/                   # 日志 / 文件系统
 ├── third_party/                # stb · nlohmann/json · libretro.h（全部单头内嵌）
 ├── assets/fonts/               # Noto Sans SC（中文字体内嵌分发）
-├── scripts/                    # build.sh/.bat · fetch_cores.sh/.ps1（架构自适应+回退链）
+├── scripts/                    # build.sh/.bat（构建后自动下核心）· fetch_cores.sh/.ps1（架构自适应+回退链）· seed_selftest.py（无头测试数据）
 ├── tests/smoke_libretro.cpp    # 真实核心链路冒烟测试
 └── .github/workflows/build.yml # CI（手动触发：linux-x64 / linux-arm64(deb) / windows-x64）
 ```
@@ -234,6 +238,7 @@ g++ -std=c++17 -I src -I third_party -I third_party/stb -I third_party/libretro 
     $(sdl2-config --libs) -ldl -lpthread -o smoke && ./smoke
 
 # 无头 UI 自检（dummy 视频驱动渲染各场景并截图，验证两套主题视觉）
+python3 scripts/seed_selftest.py           # 先造测试 ROM + 游戏库（到 /tmp/roms）
 NESSTATION_SELFTEST="home:90,fsd:120,library:40,settings:40,about:20,exit:1" \
 NESSTATION_SHOT_DIR=/tmp/shots ./build/bin/nesstation
 ```

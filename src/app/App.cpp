@@ -33,6 +33,7 @@ void Config::load(const std::string& file) {
     fullscreen = j.value("fullscreen", false);
     showFps = j.value("showFps", false);
     autoSaveState = j.value("autoSaveState", true);
+    fastForwardSpeed = j.value("fastForwardSpeed", 4);  // 0关/2/4/6/8/16（对齐 Android SettingsStore）
     scanRecursive = j.value("scanRecursive", true);
     if (j.contains("emulatorPaths") && j["emulatorPaths"].is_object()) {
       for (auto it = j["emulatorPaths"].begin(); it != j["emulatorPaths"].end(); ++it)
@@ -67,6 +68,7 @@ void Config::save(const std::string& file) const {
   j["fullscreen"] = fullscreen;
   j["showFps"] = showFps;
   j["autoSaveState"] = autoSaveState;
+  j["fastForwardSpeed"] = fastForwardSpeed;
   j["scanRecursive"] = scanRecursive;
   j["emulatorPaths"] = json::object();
   for (const auto& [k, v] : emulatorPaths) j["emulatorPaths"][k] = v;
@@ -307,7 +309,20 @@ void App::replaceScene(std::unique_ptr<Scene> s) {
   scenes_.push_back(std::move(s));
 }
 
-void App::launchGame(const GameEntry& game) {
+void App::launchGame(const GameEntry& gameIn) {
+  // 统一取库内最新条目（含核心选择器写入的 preferredCore / 收藏 / 重命名）
+  GameEntry game = gameIn;
+  if (GameEntry* live = library.find(gameIn.id)) game = *live;
+
+  // 平台有多个已安装核心且该游戏未记忆选择 → 先弹核心选择器
+  //（对齐 Android 版 CorePickerDialog：双核心平台启动时询问 + 记住选择）
+  if (platformCore(game.platform).kind == CoreKind::Libretro &&
+      game.preferredCore.empty() &&
+      cores.installedCoresFor(game.platform).size() > 1) {
+    pushScene(createCorePickerScene(
+        game, [this, game](const std::string&) { launchGame(game); }));
+    return;
+  }
   if (!emu_) emu_.reset(new EmuRunner());
   const std::string err = emu_->start(*this, game);
   if (err.empty()) {

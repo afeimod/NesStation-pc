@@ -38,6 +38,7 @@ struct Config {
   bool showFps = false;
   bool autoSaveState = true;   // 退出游戏自动存 slot 0
   bool scanRecursive = true;
+  int fastForwardSpeed = 4;    // 快进倍速：0 关 / 2 / 4 / 6 / 8 / 16（对齐 Android SettingsStore）
   std::map<std::string, std::string> emulatorPaths;  // dolphin/cemu/eden → exe
   PadMapping padMapping = PadMapping::defaults();
 

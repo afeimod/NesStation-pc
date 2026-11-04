@@ -24,6 +24,7 @@ if /i "%~1"=="--superbuild" set SUPERBUILD=ON
 if /i "%~1"=="--no-dolphin" set ARGS=%ARGS% -DNESSTATION_BUILD_DOLPHIN=OFF
 if /i "%~1"=="--no-cemu" set ARGS=%ARGS% -DNESSTATION_BUILD_CEMU=OFF
 if /i "%~1"=="--no-eden" set ARGS=%ARGS% -DNESSTATION_BUILD_EDEN=OFF
+if /i "%~1"=="--no-cores" set ARGS=%ARGS% -DNESSTATION_FETCH_CORES=OFF
 shift
 goto parse
 :after
@@ -38,5 +39,7 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo ==^> 完成：%BUILD%\bin\Release\nesstation.exe
-echo     下一步：powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1
+echo     核心已自动下载到 %BUILD%\bin\Release\cores\（构建时联网，默认开）
+echo     离线构建：scripts\build.bat --no-cores
+echo     更新/补齐核心：powershell -ExecutionPolicy Bypass -File scripts\fetch_cores.ps1
 endlocal

@@ -9,6 +9,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include "util/Log.h"
@@ -72,6 +75,17 @@ bool isDir(const std::string& path) {
 bool isFile(const std::string& path) {
   std::error_code ec;
   return stdfs::is_regular_file(path, ec);
+}
+
+bool canReadDir(const std::string& path) {
+#ifdef _WIN32
+  std::error_code ec;
+  return stdfs::is_directory(path, ec);  // Windows 枚举不受 POSIX R_OK 语义限制
+#else
+  struct ::stat st;
+  return ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode) &&
+         ::access(path.c_str(), R_OK) == 0;
+#endif
 }
 
 bool makeDirs(const std::string& path) {
@@ -157,6 +171,55 @@ std::string exeDir() {
   if (!ec) return p.parent_path().string();
   return ".";
 #endif
+}
+
+std::string homeDir() {
+#ifdef _WIN32
+  const char* p = std::getenv("USERPROFILE");
+  if (p && *p) return p;
+  const char* hd = std::getenv("HOMEDRIVE");
+  const char* hp = std::getenv("HOMEPATH");
+  if (hd && hp && *hd && *hp) return std::string(hd) + hp;
+  return "";
+#else
+  const char* h = std::getenv("HOME");
+  return (h && *h) ? h : "";
+#endif
+}
+
+std::vector<std::string> storageMounts() {
+  std::vector<std::string> out;
+#ifndef _WIN32
+  auto push = [&](const std::string& p) {
+    if (p.empty() || !isDir(p)) return;
+    for (const auto& e : out)
+      if (e == p) return;
+    out.push_back(p);
+  };
+  // Android Linux 环境（Termux / proot 等）
+  push("/storage/emulated/0");
+  push("/sdcard");
+  push("/storage");
+  // 桌面 Linux：U 盘 / SD 卡自动挂载
+  for (const char* base : {"/media", "/run/media", "/mnt"}) {
+    if (!isDir(base)) continue;
+    for (const auto& e : listDir(base)) {
+      if (!e.isDir) continue;
+      const std::string& p = e.fullPath;
+      // /run/media/<user>/<vol> 需再下一层
+      bool hasChild = false;
+      for (const auto& c : listDir(p)) {
+        if (c.isDir) {
+          push(c.fullPath);
+          hasChild = true;
+        }
+      }
+      if (!hasChild) push(p);
+    }
+  }
+  push("/data");  // Termux 环境共享数据
+#endif
+  return out;
 }
 
 std::string dataDir() {

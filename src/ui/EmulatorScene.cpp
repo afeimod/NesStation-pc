@@ -17,7 +17,6 @@ class EmulatorScene : public Scene {
  public:
   void onEnter(App& app) override {
     SDL_ShowCursor(SDL_DISABLE);
-    fastForwardPrev_ = false;
     app_ = &app;
   }
   void onExit(App& app) override {
@@ -34,18 +33,29 @@ class EmulatorScene : public Scene {
       return;
     }
 
-    // —— 帧驱动（按核心标称频率步进；快进 ×2）——
-    if (!menuOpen_) {
-      const double step = 1.0 / (emu->coreFps() > 1.0 ? emu->coreFps() : 60.0);
-      accum_ += (double)dt;
-      if (fastForward_) accum_ += (double)dt;  // 2 倍速
-      int guard = 0;
-      while (accum_ >= step && guard < 4) {
-        emu->runFrameOnce();
-        accum_ -= step;
-        guard++;
+    // —— 帧驱动（按核心标称频率步进；快进 ×N = 时间累加倍速）——
+    // activeMult：Tab 按住用设置倍速，否则用菜单档位 ffLevel_（0 = 关）
+    const int cfgMult = app.config.fastForwardSpeed > 1 ? app.config.fastForwardSpeed : 2;
+    const Uint8* kbd = SDL_GetKeyboardState(nullptr);
+    const bool tabHeld = kbd[SDL_SCANCODE_TAB] != 0;
+    const int activeMult = (tabHeld ? cfgMult : ffLevel_);
+    if (activeMult > 1) emu_ffMult_ = activeMult;  // HUD 显示实际生效倍数
+    {
+      const int speed = (paused_ || menuOpen_) ? 0 : (activeMult > 1 ? activeMult : 1);
+      if (speed > 0) {
+        const double step = 1.0 / (emu->coreFps() > 1.0 ? emu->coreFps() : 60.0);
+        accum_ += (double)dt * speed;
+        int guard = 0;
+        while (accum_ >= step && guard < 8) {
+          emu->runFrameOnce();
+          accum_ -= step;
+          guard++;
+        }
+        if (accum_ > step * 8) accum_ = 0;  // 防积累发散
+      } else {
+        accum_ = 0;
       }
-      if (accum_ > step * 8) accum_ = 0;  // 防积累发散
+      emu->setFastForward(activeMult > 1 && !paused_);
     }
 
     // —— 快捷键 ——
@@ -58,21 +68,20 @@ class EmulatorScene : public Scene {
         subMode_ = Sub::Main;
         SDL_ShowCursor(SDL_ENABLE);
       }
-      // Tab 快进按住 / F6 切换
-      const Uint8* kbd = SDL_GetKeyboardState(nullptr);
-      const bool tabHeld = kbd[SDL_SCANCODE_TAB] != 0;
-      if (tabHeld != fastForwardPrev_) {
-        fastForward_ = tabHeld;
-        emu->setFastForward(fastForward_ || ffToggle_);
-        fastForwardPrev_ = tabHeld;
+      // F6 循环菜单档位 0→2→4→6→8→16→0（Tab 按住快进用设置倍速）
+      if (kbd[SDL_SCANCODE_F6]) {
+        if (!f6Prev_) cycleFfLevel(app);
+        f6Prev_ = true;
+      } else {
+        f6Prev_ = false;
       }
-      const bool f6 = kbd[SDL_SCANCODE_F6] != 0;
-      if (f6 && !f6Prev_) {
-        ffToggle_ = !ffToggle_;
-        fastForward_ = ffToggle_;
-        emu->setFastForward(ffToggle_);
+      // F7 暂停/继续（对齐 Android 暂停浮层；F5 存 / F8 读保持原键位）
+      const bool f7 = kbd[SDL_SCANCODE_F7] != 0;
+      if (f7 && !f7Prev_) {
+        paused_ = !paused_;
+        app.toast(paused_ ? "已暂停" : "继续游戏");
       }
-      f6Prev_ = f6;
+      f7Prev_ = f7;
       const bool f5 = kbd[SDL_SCANCODE_F5] != 0;
       if (f5 && !f5Prev_) {
         if (emu->saveStateSlot(app, 1)) app.toast("已存档：槽位 1");
@@ -89,21 +98,41 @@ class EmulatorScene : public Scene {
       if (f11 && !f11Prev_) app.toggleFullscreen();
       f11Prev_ = f11;
       const bool f12 = kbd[SDL_SCANCODE_F12] != 0;
-      if (f12 && !f12Prev_) {
-        const std::string dir = fsutil::join(app.dataDir(), "shots");
-        fsutil::makeDirs(dir);
-        char name[64];
-        snprintf(name, sizeof(name), "%u.png", (unsigned)SDL_GetTicks());
-        const std::string path = fsutil::join(dir, name);
-        if (app.saveScreenshot(path))
-          app.toast(std::string("截图已保存：") + name);
-        else
-          app.toast("截图失败");
-      }
+      if (f12 && !f12Prev_) takeScreenshot(app);
       f12Prev_ = f12;
     }
 
     if (menuOpen_) updateMenu(app, in);
+  }
+
+  // 快进档位循环（对齐 Android 菜单：0→2→4→6→8→16→0）
+  void cycleFfLevel(App& app) {
+    static const int levels[] = {0, 2, 4, 6, 8, 16};
+    int i = 0;
+    for (int k = 0; k < 6; k++)
+      if (levels[k] == ffLevel_) { i = k; break; }
+    ffLevel_ = levels[(i + 1) % 6];
+    app.config.fastForwardSpeed = ffLevel_ > 1 ? ffLevel_ : app.config.fastForwardSpeed;
+    app.config.save(fsutil::join(app.dataDir(), "config.json"));
+    app.toast(ffLevel_ > 1 ? std::string("快进 ×") + std::to_string(ffLevel_)
+                           : std::string("快进已关闭"));
+  }
+
+  void takeScreenshot(App& app) {
+    const std::string dir = fsutil::join(app.dataDir(), "shots");
+    fsutil::makeDirs(dir);
+    char name[64];
+    time_t now = time(nullptr);
+    struct tm* t = localtime(&now);
+    if (t)
+      strftime(name, sizeof(name), "%Y%m%d_%H%M%S.png", t);
+    else
+      snprintf(name, sizeof(name), "%u.png", (unsigned)SDL_GetTicks());
+    const std::string path = fsutil::join(dir, name);
+    if (app.saveScreenshot(path))
+      app.toast(std::string("截图已保存：") + name);
+    else
+      app.toast("截图失败");
   }
 
   void updateMenu(App& app, const InputState& in) {
@@ -137,18 +166,12 @@ class EmulatorScene : public Scene {
     menuOpen_ = false;
     subMode_ = Sub::Main;
     SDL_ShowCursor(SDL_DISABLE);
-    if (app_) {
-      if (EmuRunner* emu = app_->activeEmu()) {
-        ffToggle_ = false;
-        fastForward_ = false;
-        fastForwardPrev_ = false;
-        emu->setFastForward(false);
-      }
-    }
+    // 快进档位保留（对齐 Android：菜单设置的快进状态在菜单关闭后持续生效）
   }
 
   int menuItemCount(App& app) const {
-    int n = 6;  // 继续/存档/读档/重置/画面设置/退出
+    // 继续/暂停/重置/存档/读档/快进/截图/画面设置/退出（对齐 Android 游戏内菜单）
+    int n = 9;
     EmuRunner* emu = app.activeEmu();
     if (emu && emu->core() && emu->core()->diskControl().available() &&
         emu->core()->diskControl().numImages() > 1)
@@ -173,13 +196,14 @@ class EmulatorScene : public Scene {
 
     // —— 游戏画面（帧已在 update 里步进）——
     const Skin& sk = Theme::skin();
+    Draw& d = app.draw;
     app.draw.rect(Rect(0, 0, app.draw.W, app.draw.H), sk.bgDeep);
     Rect gameArea(0, 0, (float)app.draw.W, (float)app.draw.H);
     app.video.draw(app.sdlRenderer(), gameArea, (ScalingMode)app.config.scalingMode,
                    (ScreenEffect)app.config.screenEffect, (DualLayout)app.config.dualLayout,
                    app.config.videoSmooth ? 1.0f : 0.0f);
 
-    // FPS
+    // FPS HUD（对齐 Android：右上角胶囊，快进金色 / 常态青色，追加暂停态）
     if (app.config.showFps) {
       fpsAccum_++;
       const Uint32 now = SDL_GetTicks();
@@ -188,14 +212,30 @@ class EmulatorScene : public Scene {
         fpsAccum_ = 0;
         fpsLast_ = now;
       }
-      char buf[32];
-      snprintf(buf, sizeof(buf), "FPS %.1f", fps_);
-      app.font.draw(app.sdlRenderer(), buf, 12, 10, 14, sk.accent);
+      std::string hud = "FPS " + std::to_string((int)(fps_ + 0.5f));
+      if (emu->fastForward()) hud += " · 快进 ×" + std::to_string(emu_ffMult_);
+      if (paused_) hud += " · 已暂停";
+      const float hudW = app.font.textWidth(hud, 14, true) + 24;
+      const Rect pill(app.draw.W - hudW - 14, 12, hudW, 30);
+      d.roundRect(pill, 15, Color8(0, 0, 0, 150));
+      app.font.draw(app.sdlRenderer(), hud, pill.x + 12, pill.y + 7, 14,
+                    emu->fastForward() ? sk.gold : sk.accent, true);
     }
 
-    // 快进指示
-    if (emu->fastForward()) {
-      app.font.draw(app.sdlRenderer(), "快进 ×2", app.draw.W - 80, 10, 14, sk.gold, true);
+    // 快进指示（无 FPS HUD 时也要能看到）
+    if (emu->fastForward() && !app.config.showFps) {
+      app.font.draw(app.sdlRenderer(),
+                    std::string("快进 ×") + std::to_string(emu_ffMult_),
+                    app.draw.W - 90, 18, 14, sk.gold, true);
+    }
+
+    // 暂停浮层（对齐 Android「已暂停 —— 按 Esc 呼出菜单」）
+    if (paused_ && !menuOpen_) {
+      d.rect(Rect(0, 0, app.draw.W, app.draw.H), Color8(0, 0, 0, 90));
+      const char* msg = "已暂停 —— 按 Esc 呼出菜单，F7 继续";
+      app.font.draw(app.sdlRenderer(), msg,
+                    app.draw.W / 2 - app.font.textWidth(msg, 20, true) / 2,
+                    app.draw.H / 2, 20, sk.textHi, true);
     }
 
     if (menuOpen_) drawMenu(app);
@@ -248,15 +288,32 @@ class EmulatorScene : public Scene {
       case Sub::Main: {
         int idx = 0;
         if (row("", "继续游戏", idx++)) closeMenu();
-        if (row("", "即时存档", idx++)) {
+        if (row("", paused_ ? "继续（取消暂停）" : "暂停游戏", idx++, "F7")) {
+          paused_ = !paused_;
+          closeMenu();
+        }
+        if (row("", "重置", idx++)) {
+          if (emu) emu->resetCore();
+          app.toast("已重置");
+          closeMenu();
+        }
+        if (row("", "即时存档", idx++, "F5")) {
           subMode_ = Sub::States;
           subIndex_ = 0;
           saveMode_ = true;
         }
-        if (row("", "即时读档", idx++)) {
+        if (row("", "即时读档", idx++, "F8")) {
           subMode_ = Sub::States;
           subIndex_ = 0;
           saveMode_ = false;
+        }
+        if (row("", ffLevel_ > 1 ? "快进（点击换挡）" : "快进（关）", idx++,
+                ffLevel_ > 1 ? "×" + std::to_string(ffLevel_) : "Tab")) {
+          cycleFfLevel(app);
+        }
+        if (row("", "截图", idx++, "F12")) {
+          closeMenu();
+          takeScreenshot(app);
         }
         if (emu && emu->core() && emu->core()->diskControl().available() &&
             emu->core()->diskControl().numImages() > 1) {
@@ -415,10 +472,11 @@ class EmulatorScene : public Scene {
   int menuIndex_ = 0;
   int subIndex_ = 0;
   bool saveMode_ = true;
-  bool fastForwardPrev_ = false;
-  bool fastForward_ = false;
-  bool ffToggle_ = false;
-  bool f5Prev_ = false, f6Prev_ = false, f8Prev_ = false, f11Prev_ = false;
+  bool paused_ = false;       // F7 / 菜单暂停（对齐 Android 暂停浮层）
+  int ffLevel_ = 0;           // 快进档位 0/2/4/6/8/16（0 = 关；对齐 Android 档位环）
+  int emu_ffMult_ = 2;        // 最近一次生效的快进倍数（HUD 显示用）
+  bool f5Prev_ = false, f6Prev_ = false, f7Prev_ = false, f8Prev_ = false;
+  bool f11Prev_ = false;
   bool f12Prev_ = false;
   double accum_ = 0;
   float fps_ = 0;

@@ -1,6 +1,7 @@
 #include "retro/CoreManager.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "util/Fs.h"
 #include "util/Log.h"
@@ -62,6 +63,36 @@ std::string CoreManager::corePathFor(GamePlatform p) const {
   return findCoreFile(c.coreFile);
 }
 
+PlatformCore CoreManager::resolveCorePreferred(
+    GamePlatform p, const std::string& preferredCoreFile) const {
+  if (!preferredCoreFile.empty()) {
+    for (const PlatformCore& c : platformCoreChain(p)) {
+      if (c.kind == CoreKind::Libretro && preferredCoreFile == c.coreFile &&
+          !findCoreFile(c.coreFile).empty()) {
+        return c;  // 记忆的核心已安装 → 直接采用
+      }
+    }
+  }
+  return resolveCore(p);  // 未安装 / 未记忆 → 链上首个已安装
+}
+
+std::string CoreManager::corePathForPreferred(
+    GamePlatform p, const std::string& preferredCoreFile) const {
+  const PlatformCore c = resolveCorePreferred(p, preferredCoreFile);
+  if (c.kind != CoreKind::Libretro) return "";
+  return findCoreFile(c.coreFile);
+}
+
+std::vector<PlatformCore> CoreManager::installedCoresFor(GamePlatform p) const {
+  std::vector<PlatformCore> out;
+  if (platformCore(p).kind != CoreKind::Libretro) return out;  // Standalone 平台
+  for (const PlatformCore& c : platformCoreChain(p)) {
+    if (c.kind != CoreKind::Libretro) continue;
+    if (!findCoreFile(c.coreFile).empty()) out.push_back(c);
+  }
+  return out;
+}
+
 bool CoreManager::libretroCoreAvailable(GamePlatform p) const {
   for (const PlatformCore& c : platformCoreChain(p)) {
     if (c.kind != CoreKind::Libretro) return false;  // Standalone 平台
@@ -85,8 +116,9 @@ std::string CoreManager::availabilityHint(GamePlatform p) const {
   }
   std::string hint = std::string("缺少核心（") + names + "）\n";
   hint += "libretro 预编译核心并非所有架构都提供，可任选其一：\n";
-  hint += "① 运行 scripts/fetch_cores 脚本自动下载本架构可用核心\n";
-  hint += "② 从 libretro buildbot 手动下载后放入：\n    " + coreDir_;
+  hint += "① 设置 → 核心 → 点击对应平台行 / 「一键下载」按钮，应用内直接下载\n";
+  hint += "② 运行 scripts/fetch_cores 脚本下载（候选链自动回退）\n";
+  hint += "③ 从 libretro buildbot 手动下载后放入：\n    " + coreDir_;
   if (!bundledCoreDir_.empty() && bundledCoreDir_ != coreDir_)
     hint += "\n（安装包若内置核心，位于 " + bundledCoreDir_ + "，自动识别）";
   return hint;
@@ -180,6 +212,152 @@ std::vector<std::string> CoreManager::installedCores() const {
       out.push_back(e.name);
   }
   return out;
+}
+
+// ==================== 应用内核心下载 ====================
+// 与 Android 版 CoreDownloader 同源：libretro buildbot 官方预编译核心，
+// 按当前 OS/架构拼 URL（与 scripts/fetch_cores、CI 打包同一条候选链）。
+
+static std::string buildbotBase() {
+#ifdef _WIN32
+  return "https://buildbot.libretro.com/nightly/windows/x86_64/latest";
+#else
+#if defined(__aarch64__)
+  return "https://buildbot.libretro.com/nightly/linux/aarch64/latest";
+#elif defined(__arm__)
+  return "https://buildbot.libretro.com/nightly/linux/armhf/latest";
+#else
+  return "https://buildbot.libretro.com/nightly/linux/x86_64/latest";
+#endif
+#endif
+}
+
+// 拼接 shell 引号（路径可能含空格）
+static std::string shellQuote(const std::string& s) {
+#ifdef _WIN32
+  return "\"" + s + "\"";
+#else
+  return "'" + s + "'";
+#endif
+}
+
+bool CoreManager::downloadOne(const std::string& coreFile, std::string* err) {
+  const std::string url =
+      buildbotBase() + "/" + coreFile + kLibExt + ".zip";
+  const std::string zipPath =
+      fsutil::join(coreDir_, coreFile + kLibExt + ".zip");
+  // 1) curl 下载（Windows 10+ / macOS / 各主流发行版均预装）
+  const std::string cmd =
+      std::string("curl -fSL --retry 3 --retry-delay 3 --connect-timeout 15 "
+                  "--max-time 300 -A NesStationPC/1.1 -o ") +
+      shellQuote(zipPath) + " " + shellQuote(url);
+  const int rc = std::system(cmd.c_str());
+  if (rc != 0 || !fsutil::isFile(zipPath)) {
+    fsutil::removeFile(zipPath);
+    if (err) *err = "下载失败（" + coreFile + "：本架构可能无预编译包）";
+    return false;
+  }
+  // 2) 解压：unzip → python3 → tar（bsdtar 可解 zip，Win10+ 自带）
+  const std::string dir = coreDir_;  // 静态：只在下载线程调用，coreDir_ 不变
+  const std::string extractors[] = {
+      "unzip -o -q " + shellQuote(zipPath) + " -d " + shellQuote(dir),
+      "python3 -m zipfile -e " + shellQuote(zipPath) + " " + shellQuote(dir),
+      "tar -xf " + shellQuote(zipPath) + " -C " + shellQuote(dir),
+  };
+  bool extracted = false;
+  for (const auto& ex : extractors) {
+    if (std::system(ex.c_str()) == 0) {
+      extracted = true;
+      break;
+    }
+  }
+  fsutil::removeFile(zipPath);
+  if (!extracted ||
+      !fsutil::isFile(fsutil::join(dir, coreFile + kLibExt))) {
+    if (err) *err = "解压失败（" + coreFile + "）";
+    return false;
+  }
+  return true;
+}
+
+void CoreManager::startCoreDownload(const std::vector<GamePlatform>& platforms) {
+  if (dlRunning_.load()) return;
+  std::vector<GamePlatform> targets = platforms;
+  if (targets.empty()) {
+    // 全部缺失的 libretro 平台
+    for (GamePlatform p : allPlatforms()) {
+      if (platformCore(p).kind == CoreKind::Libretro && !libretroCoreAvailable(p))
+        targets.push_back(p);
+    }
+  }
+  if (targets.empty()) return;
+  if (dlThread_.joinable()) dlThread_.join();
+  {
+    std::lock_guard<std::mutex> lk(dlMu_);
+    dl_ = DlProgress{};
+    dl_.running = true;
+    dl_.total = (int)targets.size();
+  }
+  dlRunning_ = true;
+  dlThread_ = std::thread(&CoreManager::downloadWorker, this,
+                          std::move(targets));
+}
+
+void CoreManager::downloadWorker(std::vector<GamePlatform> platforms) {
+  bool anyFail = false;
+  int done = 0;
+  for (GamePlatform p : platforms) {
+    const std::vector<PlatformCore> chain = platformCoreChain(p);
+    std::string label = std::string(platformShortName(p));
+    {
+      std::lock_guard<std::mutex> lk(dlMu_);
+      dl_.label = label;
+      dl_.done = done;
+    }
+    bool ok = false;
+    for (const PlatformCore& c : chain) {
+      if (c.kind != CoreKind::Libretro) continue;
+      // 已装则跳过
+      if (!findCoreFile(c.coreFile).empty()) {
+        ok = true;
+        break;
+      }
+      std::string err;
+      if (downloadOne(c.coreFile, &err)) {
+        ok = true;
+        break;
+      }
+      LOGI("核心下载：%s", err.c_str());
+    }
+    if (!ok) anyFail = true;
+    done++;
+    {
+      std::lock_guard<std::mutex> lk(dlMu_);
+      dl_.done = done;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lk(dlMu_);
+    dl_.running = false;
+    dl_.finished = true;
+    dl_.hadFailure = anyFail;
+    dl_.label.clear();
+  }
+  dlRunning_ = false;
+}
+
+CoreManager::DlProgress CoreManager::coreDownloadProgress() const {
+  std::lock_guard<std::mutex> lk(dlMu_);
+  return dl_;
+}
+
+void CoreManager::clearDownloadFinishFlag() {
+  std::lock_guard<std::mutex> lk(dlMu_);
+  dl_.finished = false;
+}
+
+CoreManager::~CoreManager() {
+  if (dlThread_.joinable()) dlThread_.join();
 }
 
 }  // namespace ns

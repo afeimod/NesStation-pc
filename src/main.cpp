@@ -60,8 +60,38 @@ void applyStep(ns::App& app, const std::string& name) {
     app.pushScene(ns::createLibraryScene(-1));
   } else if (name == "settings") {
     app.pushScene(ns::createSettingsScene());
+  } else if (name == "perf") {
+    app.pushScene(ns::createSettingsScene(6));  // 性能 tab（快进倍速）
+  } else if (name == "cores") {
+    app.pushScene(ns::createSettingsScene(1));  // 核心 tab（应用内下载）
   } else if (name == "about") {
     app.pushScene(ns::createAboutScene());
+  } else if (name == "browser") {
+    // 文件浏览器（存储书签 / 权限提示新 UI）
+    ns::BrowserRequest req;
+    req.title = "选择 ROM 目录";
+    req.mode = 0;
+    req.onPick = [](const std::string&) {};
+    app.pushScene(ns::createFileBrowser(req));
+  } else if (name == "picker") {
+    // 核心选择器（首个多核心已安装平台的游戏）
+    const auto games = app.library.games();
+    const ns::GameEntry* pick = nullptr;
+    for (const auto& g : games)
+      if (app.cores.installedCoresFor(g.platform).size() > 1) { pick = &g; break; }
+    if (pick)
+      app.pushScene(ns::createCorePickerScene(*pick, [](const std::string&) {}));
+  } else if (name == "ctxmenu") {
+    // 右键上下文菜单组件（Android「长按卡片」等价交互）
+    std::vector<ns::ContextMenuItem> items;
+    items.push_back({1, "启动游戏", "Enter", false, [] {}});
+    items.push_back({2, "加入收藏", "F", false, [] {}});
+    items.push_back({0, "重命名（显示名）", "", false, [] {}});
+    items.push_back({16, "重新选择核心", "已记忆", false, [] {}});
+    items.push_back({0, "从库中移除", "", true, [] {}});
+    ns::pushContextMenu(app, ns::Vec2(640, 300), "超级马力欧兄弟",
+                        "NES · Nintendo Entertainment System · ★ 已收藏",
+                        std::move(items));
   }
 }
 

@@ -440,7 +440,8 @@ class NeonHome : public Scene {
             {Rect((float)d.W / 2 - L.cardW / 2, cy - L.cardH / 2, L.cardW, L.cardH),
              sel_});
       }
-      // 本帧命中检测（后画的上层优先）：点侧卡选中，点中卡启动
+      // 本帧命中检测（后画的上层优先）：点侧卡选中，点中卡启动；
+      // 右键 = 卡片快捷菜单（Android「长按卡片」的 PC 等价交互）
       if (in.mousePressed) {
         int hit = -1;
         for (auto it = hitCards_.rbegin(); it != hitCards_.rend(); ++it) {
@@ -454,6 +455,19 @@ class NeonHome : public Scene {
             app.launchGame(games_[(size_t)sel_]);
           else
             sel_ = hit;
+        }
+      }
+      if (in.mouseRightPressed) {
+        int hit = -1;
+        for (auto it = hitCards_.rbegin(); it != hitCards_.rend(); ++it) {
+          if (it->first.contains(in.mouse)) {
+            hit = it->second;
+            break;
+          }
+        }
+        if (hit >= 0) {
+          sel_ = hit;
+          openGameMenu(app, games_[(size_t)hit], Vec2(in.mouse));
         }
       }
     }
@@ -511,6 +525,48 @@ class NeonHome : public Scene {
                         {"Enter", "开始", sk.green},
                         {"F", "收藏", sk.gold},
                         {"Esc", "返回", sk.textDim}});
+  }
+
+  // —— 封面卡右键快捷菜单（Android「长按卡片」的 PC 等价交互）——
+  // 按值捕获 GameEntry（回调执行时 games_ 可能已刷新，不能持引用）
+  void openGameMenu(App& app, const GameEntry& gIn, Vec2 at) {
+    const GameEntry g = gIn;  // 显式拷贝，防悬垂引用
+    std::vector<ContextMenuItem> items;
+    items.push_back({1, "启动游戏", "Enter", false, [&app, g]() {
+      app.launchGame(g);
+    }});
+    items.push_back({2, g.favorite ? "取消收藏" : "加入收藏", "F", false,
+                     [this, &app, g]() {
+                       app.library.toggleFavorite(g.id);
+                       app.library.save();
+                       refresh(app);
+                     }});
+    items.push_back({20, "重新获取封面", "", false, [&app, g]() {
+      if (GameEntry* e = app.library.find(g.id)) e->coverPath.clear();
+      app.library.save();
+      app.covers.requestFetch(g);
+      app.toast("已重新排队获取封面");
+    }});
+    if (app.cores.installedCoresFor(g.platform).size() > 1) {
+      items.push_back({16, "重新选择核心", "", false, [&app, g]() {
+        if (GameEntry* e = app.library.find(g.id)) {
+          e->preferredCore.clear();
+          app.library.save();
+        }
+        app.launchGame(g);
+      }});
+    }
+    items.push_back({0, "从库中移除", "", true, [this, &app, g]() {
+      app.library.remove(g.id);
+      app.library.save();
+      refresh(app);
+      app.toast("已从库中移除：" + g.displayTitle());
+    }});
+    pushContextMenu(app, at, g.displayTitle(),
+                    std::string(platformShortName(g.platform)) + " · " +
+                        platformFullName(g.platform) +
+                        (g.favorite ? " · ★ 已收藏" : ""),
+                    std::move(items));
   }
 
   void neonBackdrop(Draw& d) {

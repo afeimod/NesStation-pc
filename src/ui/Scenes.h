@@ -1,7 +1,9 @@
 // NesStation PC — 场景工厂（皮肤化主页 / 游戏库 / 设置 / 关于 / 文件浏览 / 模拟器）
 #pragma once
+#include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "app/App.h"
 
@@ -43,5 +45,24 @@ std::unique_ptr<Scene> createFileBrowser(const BrowserRequest& req);
 
 // 模拟器场景（EmuRunner 专用，由 EmuRunner 推入）
 std::unique_ptr<Scene> createEmulatorScene();
+
+// —— 右键上下文菜单（Android 版「长按卡片」的 PC 等价交互）——
+// 呼出点自动翻转避让屏幕边缘；键盘 ↑↓/Enter/Esc 与鼠标点击均可操作
+struct ContextMenuItem {
+  int iconId = 0;             // w::icon 矢量图标（0=无）
+  std::string label;
+  std::string hint;           // 行尾小字（如 "Enter"）
+  bool danger = false;        // 红色警示项（删除类）
+  std::function<void()> action;
+};
+void pushContextMenu(App& app, const Vec2& at, const std::string& title,
+                     const std::string& subtitle,
+                     std::vector<ContextMenuItem> items);
+
+// —— 核心选择器（对齐 Android 版 CorePickerDialog）——
+// game：目标游戏；installed：该平台已安装的核心（>1 时由 App::launchGame 触发）
+// 选择后写入 game.preferredCore 并回调 onPick（重新走 launchGame）
+std::unique_ptr<Scene> createCorePickerScene(const GameEntry& game,
+                                             std::function<void(const std::string&)> onPick);
 
 }  // namespace ns

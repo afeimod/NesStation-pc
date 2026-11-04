@@ -176,13 +176,22 @@ class CoreOptionsScene : public Scene {
 };
 
 // ==================== 文件浏览器 ====================
+// 逻辑对齐 Android 版 FileBrowserDialog（顶部路径栏 + 主目录/上一级 + 列表），
+// 并按 PC 场景扩展：存储位置书签（主目录/桌面/下载/文档/数据目录/文件系统根/
+// 可移动存储卷/所有盘符），无权限与空目录明确提示，目录内容按需缓存。
 class FileBrowserScene : public Scene {
  public:
   explicit FileBrowserScene(const BrowserRequest& req) : req_(req) {}
 
   void onEnter(App& app) override {
-    cur_ = req_.startDir.empty() || !fsutil::isDir(req_.startDir) ? fsutil::exeDir()
-                                                                  : req_.startDir;
+    // 起始目录：请求指定 → 主目录（对齐 APK user.home）→ exe 目录
+    if (!req_.startDir.empty() && fsutil::isDir(req_.startDir)) {
+      cur_ = req_.startDir;
+    } else {
+      const std::string home = fsutil::homeDir();
+      cur_ = !home.empty() ? home : fsutil::exeDir();
+    }
+    rebuild(app);
     (void)app;
   }
 
@@ -192,11 +201,13 @@ class FileBrowserScene : public Scene {
       app.popScene();
       return;
     }
-    entries_ = buildEntries(app);
+    // 目录变化时才重建（不再每帧扫描磁盘）
+    if (dirty_) rebuild(app);
     const int N = (int)entries_.size();
     if (N == 0) return;
-    if (in.pressed[(int)Btn::Up]) sel_ = (sel_ + N - 1) % N;
-    if (in.pressed[(int)Btn::Down]) sel_ = (sel_ + 1) % N;
+    // 上下移动跳过分区标签行
+    if (in.pressed[(int)Btn::Up]) sel_ = step(sel_, N - 1);
+    if (in.pressed[(int)Btn::Down]) sel_ = step(sel_, 1);
     if (in.pressed[(int)Btn::Ok]) activate(app, entries_[(size_t)sel_]);
   }
 
@@ -204,60 +215,137 @@ class FileBrowserScene : public Scene {
     std::string name;
     std::string path;
     bool dir = false;
+    bool label = false;   // 分区标题（不可选中）
+    bool isBookmark = false;
   };
 
-  std::vector<Entry> buildEntries(App& app) {
-    std::vector<Entry> out;
+  int step(int from, int delta) const {
+    if (entries_.empty()) return 0;
+    int i = from;
+    for (int n = 0; n < (int)entries_.size(); n++) {
+      i = (i + delta + (int)entries_.size()) % (int)entries_.size();
+      if (!entries_[(size_t)i].label) return i;
+    }
+    return from;
+  }
+
+  void markDirty() { dirty_ = true; }
+
+  void rebuild(App& app) {
+    dirty_ = false;
+    entries_.clear();
+    builtFor_ = drivesMode_ ? std::string("\x01drives") : cur_;
 #ifdef _WIN32
     if (drivesMode_) {
-      for (char c = 'C'; c <= 'Z'; c++) {
+      entries_.push_back({"存储位置", "", false, true});
+      const std::string home = fsutil::homeDir();
+      if (!home.empty()) addBookmark("主目录", home);
+      for (const auto& n : {"Desktop", "桌面"}) addBookmark("桌面", fsutil::join(home, n));
+      for (const auto& n : {"Downloads", "下载"}) addBookmark("下载", fsutil::join(home, n));
+      for (const auto& n : {"Documents", "文档"}) addBookmark("文档", fsutil::join(home, n));
+      entries_.push_back({"磁盘", "", false, true});
+      for (char c = 'A'; c <= 'Z'; c++) {
         const std::string root = std::string(1, c) + ":/";
-        if (fsutil::isDir(root)) out.push_back({root, root, true});
+        if (fsutil::isDir(root)) entries_.push_back({std::string("磁盘 ") + c + ":（" + root + "）", root, true});
       }
-      return out;
+      return;
     }
 #endif
-    if (fsutil::isDir(cur_)) {
-      const std::string parent = fsutil::dirOf(cur_);
-      if (parent != cur_ && !parent.empty()) {
-        out.push_back({".. （上一级）", parent, true});
-      }
+    // —— 存储位置书签 ——
+    entries_.push_back({"存储位置", "", false, true});
+    const std::string home = fsutil::homeDir();
+    if (!home.empty()) addBookmark("主目录", home);
 #ifdef _WIN32
-      out.push_back({"▣ 本电脑（所有磁盘）", "", true, });
-#endif
-      for (const auto& e : fsutil::listDir(cur_)) {
-        if (!e.isDir) {
-          // 选文件模式过滤
-          if (req_.mode == 0) continue;
-          if (req_.mode == 2) {
-            const std::string ext = fsutil::extOf(e.name);
-            if (ext != "dll" && ext != "so" && ext != "dylib") continue;
-          }
-        }
-        out.push_back({e.name + (e.isDir ? "/" : ""), e.fullPath, e.isDir});
-      }
+    for (const auto& n : {"Desktop", "桌面"}) addBookmark("桌面", fsutil::join(home, n));
+    for (const auto& n : {"Downloads", "下载"}) addBookmark("下载", fsutil::join(home, n));
+    for (const auto& n : {"Documents", "文档"}) addBookmark("文档", fsutil::join(home, n));
+    addBookmark("应用数据", app.dataDir());
+    // arm64 Wine（Box86/Box64 等）环境：Z: 盘映射宿主根 —— 书签直达
+    // Android 内部存储 / U 盘，解决「arm64 只能读 Z 盘（exeDir）」的入口问题
+    if (fsutil::isDir("Z:/")) {
+      addBookmark("内部存储（Android）", "Z:/storage/emulated/0");
+      addBookmark("SD 卡 / U 盘（/storage）", "Z:/storage");
+      addBookmark("可移动介质（/media）", "Z:/media");
+      addBookmark("挂载点（/mnt）", "Z:/mnt");
+      addBookmark("宿主文件系统（Z:/）", "Z:/");
     }
-    return out;
+    entries_.push_back({"磁盘", "", false, true});
+    entries_.push_back({"▣ 此电脑（所有磁盘）", "", true, false, true});
+#else
+    for (const auto& n : {"Desktop", "桌面"}) addBookmark("桌面", fsutil::join(home, n));
+    for (const auto& n : {"Downloads", "下载"}) addBookmark("下载", fsutil::join(home, n));
+    for (const auto& n : {"Documents", "文档"}) addBookmark("文档", fsutil::join(home, n));
+    addBookmark("应用数据", app.dataDir());
+    addBookmark("文件系统根 /", "/");
+    for (const std::string& m : fsutil::storageMounts()) {
+      std::string label = "存储卷 " + fsutil::baseOf(m);
+      if (m == "/storage/emulated/0" || m == "/sdcard") label = "内部存储";
+      else if (m == "/data") label = "应用数据（/data）";
+      else if (m == "/storage") label = "全部存储（/storage）";
+      addBookmark(label, m);
+    }
+#endif
+
+    // —— 当前目录 ——
+    if (!fsutil::isDir(cur_)) {
+      entries_.push_back({"（目录不存在：" + cur_ + "）", "", false, true});
+      return;
+    }
+    if (!fsutil::canReadDir(cur_)) {
+      entries_.push_back({"⛔ 无权限读取此目录 — 请从上方「存储位置」选择其他位置",
+                          "", false, true});
+      return;
+    }
+    entries_.push_back({"当前目录", "", false, true});
+    const std::string parent = fsutil::dirOf(cur_);
+    if (parent != cur_ && !parent.empty()) {
+      entries_.push_back({".. （上一级）", parent, true});
+    }
+    const auto listing = fsutil::listDir(cur_);
+    for (const auto& e : listing) {
+      if (!e.isDir) {
+        // 选文件模式过滤
+        if (req_.mode == 0) continue;
+        if (req_.mode == 2) {
+          const std::string ext = fsutil::extOf(e.name);
+          if (ext != "dll" && ext != "so" && ext != "dylib") continue;
+        }
+      }
+      entries_.push_back({e.name + (e.isDir ? "/" : ""), e.fullPath, e.isDir});
+    }
+    if (listing.empty()) entries_.push_back({"（空目录）", "", false, true});
+    if (sel_ >= (int)entries_.size()) sel_ = 0;
+  }
+
+  void addBookmark(const std::string& label, const std::string& path) {
+    if (path.empty() || !fsutil::isDir(path)) return;
+    for (const auto& e : entries_)
+      if (!e.label && e.path == path) return;  // 去重（书签间重复）
+    entries_.push_back({label, path, true, false, true});
   }
 
   void activate(App& app, const Entry& e) {
+    if (e.label || e.path.empty()) return;
 #ifdef _WIN32
-    if (e.name == "▣ 本电脑（所有磁盘）") {
+    if (e.name == "▣ 此电脑（所有磁盘）") {
       drivesMode_ = true;
       sel_ = 0;
+      markDirty();
       return;
     }
-    if (drivesMode_ && e.dir) {
+    if (drivesMode_) {
       drivesMode_ = false;
       cur_ = e.path;
       sel_ = 0;
+      markDirty();
       return;
     }
 #endif
     if (e.dir) {
       cur_ = e.path;
-      drivesMode_ = false;
       sel_ = 0;
+      scroll_ = 0;
+      markDirty();
       return;
     }
     if (req_.mode == 0) return;  // 目录选择模式点文件无动作
@@ -269,7 +357,7 @@ class FileBrowserScene : public Scene {
     const Skin& sk = Theme::skin();
     Draw& d = app.draw;
     d.rect(Rect(0, 0, app.draw.W, app.draw.H), sk.bgDeep);
-    if (w::header(app, req_.title, fsutil::pathDisplay(drivesMode_ ? "本电脑" : cur_),
+    if (w::header(app, req_.title, fsutil::pathDisplay(drivesMode_ ? "此电脑" : cur_),
                   true)) {
       // 返回 = 取消
       app.popScene();
@@ -278,7 +366,7 @@ class FileBrowserScene : public Scene {
     }
 
     // 目录模式下：选择当前目录按钮
-    if (req_.mode == 0 && !drivesMode_) {
+    if (req_.mode == 0 && !drivesMode_ && !cur_.empty() && fsutil::isDir(cur_)) {
       const Rect pickRc(app.draw.W - 240, 30, 200, 46);
       if (w::primaryButton(app, pickRc, "选择此目录", 4)) {
         app.popScene();
@@ -302,9 +390,21 @@ class FileBrowserScene : public Scene {
     d.pushClip(listRc);
     float y = 116 - scroll_;
     for (size_t i = 0; i < entries_.size(); i++) {
+      const Entry& e = entries_[i];
+      if (e.label) {
+        w::sectionLabel(app, 40, y + 14, e.name);
+        y += 48;
+        continue;
+      }
       const Rect rc(24, y, app.draw.W - 60, 42);
-      if (w::listRow(app, rc, entries_[i].name, entries_[i].dir ? "目录" : "", sel_ == (int)i)) {
-        activate(app, entries_[(size_t)i]);
+      const bool focused = sel_ == (int)i;
+      std::string value;
+      if (e.isBookmark || (e.dir && e.name.rfind("..", 0) == 0))
+        value = fsutil::pathDisplay(e.path);
+      else if (e.dir)
+        value = "目录";
+      if (w::listRow(app, rc, e.name, value, focused)) {
+        activate(app, e);
       }
       y += 48;
     }
@@ -324,10 +424,158 @@ class FileBrowserScene : public Scene {
  private:
   BrowserRequest req_;
   std::string cur_;
+  std::string builtFor_;
   std::vector<Entry> entries_;
   int sel_ = 0;
   float scroll_ = 0;
   bool drivesMode_ = false;
+  bool dirty_ = false;
+};
+
+// ==================== 核心选择器（对齐 Android 版 CorePickerDialog）====================
+// 触发条件（App::launchGame）：该平台已安装核心 > 1 且游戏未记忆选择。
+// 布局对齐 Kotlin 版：标题「选择 {平台} 核心」+ 副文 + 选项列表（徽章：链首「推荐」
+// 绿 / 其余「备选」金）+ 底部勾选 chip「✓ 记住此游戏的选择」（默认勾选）。
+class CorePickerScene : public Scene {
+ public:
+  CorePickerScene(const GameEntry& game,
+                  std::function<void(const std::string&)> onPick)
+      : game_(game), onPick_(std::move(onPick)) {}
+
+  void onEnter(App& app) override {
+    installed_ = app.cores.installedCoresFor(game_.platform);
+  }
+
+  void update(App& app, float dt, const InputState& in) override {
+    (void)dt;
+    if (in.pressed[(int)Btn::Back] || in.pressed[(int)Btn::Menu]) {
+      app.popScene();
+      return;
+    }
+    const int N = (int)installed_.size();
+    if (N == 0) {
+      app.popScene();
+      return;
+    }
+    if (in.pressed[(int)Btn::Up]) sel_ = (sel_ + N - 1) % N;
+    if (in.pressed[(int)Btn::Down]) sel_ = (sel_ + 1) % N;
+    // F / Y 切换「记住选择」
+    if (in.pressed[(int)Btn::Fav]) remember_ = !remember_;
+    if (in.pressed[(int)Btn::Ok] && !hoverRow_) pick(app, sel_);
+  }
+
+  void pick(App& app, int idx) {
+    if (idx < 0 || idx >= (int)installed_.size()) return;
+    const std::string coreFile = installed_[(size_t)idx].coreFile;
+    if (remember_) {
+      if (GameEntry* e = app.library.find(game_.id)) {
+        e->preferredCore = coreFile;
+        app.library.save();
+      }
+    }
+    auto cb = onPick_;
+    app.popScene();
+    if (cb) cb(coreFile);
+  }
+
+  void draw(App& app) override {
+    const Skin& sk = Theme::skin();
+    Draw& d = app.draw;
+    d.rect(Rect(0, 0, app.draw.W, app.draw.H), Color8(0, 0, 0, 160));
+    // 点击面板外 = 取消
+    {
+      const InputState& in = app.input.input();
+      if (in.mousePressed && !panel_.contains(in.mouse)) {
+        app.popScene();
+        return;
+      }
+    }
+
+    const float pw = 620, ph = 380;
+    panel_ = Rect(app.draw.W / 2 - pw / 2, app.draw.H / 2 - ph / 2, pw, ph);
+    skinPanel(d, panel_, true, 16);
+
+    float y = panel_.y + 26;
+    app.font.draw(app.sdlRenderer(),
+                  std::string("选择 ") + platformShortName(game_.platform) + " 核心",
+                  panel_.x + 28, y, 22, sk.textHi, true);
+    y += 34;
+    app.font.draw(app.sdlRenderer(),
+                  "该平台有多个已安装核心可用 —— 首选为核心链推荐，备选为候选核心。",
+                  panel_.x + 28, y, 13, sk.textDim);
+    y += 14;
+    d.line(panel_.x + 24, y, panel_.right() - 24, y, sk.line, 1);
+    y += 16;
+
+    const InputState& in = app.input.input();
+    hoverRow_ = false;
+    for (size_t i = 0; i < installed_.size() && i < 4; i++) {
+      const PlatformCore& c = installed_[i];
+      const Rect rc(panel_.x + 20, y, pw - 40, 64);
+      const bool focused = sel_ == (int)i;
+      // 点击（按下沿）选中；hover 仅做视觉（无按下）
+      if (rc.contains(in.mouse) && in.mousePressed) {
+        pick(app, (int)i);
+        return;
+      }
+      const bool hov = rc.contains(in.mouse);
+      if (focused || hov)
+        d.roundRect(rc, 8, sk.accent.withA(hov ? 52 : 30));
+      if (hov) {
+        sel_ = (int)i;
+        hoverRow_ = true;
+      }
+      // 标题 + 徽章
+      app.font.draw(app.sdlRenderer(), c.coreTitle, rc.x + 16, rc.y + 10, 18,
+                    sk.textHi, true);
+      const bool first = i == 0;
+      const std::string badge = first ? "推荐" : "备选";
+      const Color8 bc = first ? sk.green : sk.gold;
+      const Rect brc(rc.right() - 96, rc.y + 10, 80, 24);
+      d.roundRect(brc, 5, bc.withA(48));
+      app.font.draw(app.sdlRenderer(), badge, brc.x + (brc.w - app.font.textWidth(badge, 13)) / 2,
+                    brc.y + 5, 13, bc, true);
+      // 副文（BIOS 提示）+ 核心文件名
+      app.font.draw(app.sdlRenderer(), c.biosNote, rc.x + 16, rc.y + 38, 12, sk.textDim);
+      app.font.draw(app.sdlRenderer(), c.coreFile, rc.right() - 16 - app.font.textWidth(c.coreFile, 12),
+                    rc.y + 38, 12, sk.textDim);
+      y += 72;
+    }
+
+    // 记住选择 chip（对齐 Kotlin「✓ 记住此游戏的选择」）
+    {
+      const Rect rc(panel_.x + 28, panel_.bottom() - 74, 260, 44);
+      const bool hov = rc.contains(in.mouse);
+      if (hov && in.mousePressed) {
+        remember_ = !remember_;
+        app.toast(remember_ ? "已选择：记住此游戏的核心选择" : "本次不记忆核心选择");
+      } else if (in.pressed[(int)Btn::Fav]) {
+        remember_ = !remember_;
+      }
+      d.roundRect(rc, sk.panelRadius, hov ? sk.bgPanelHi : sk.bgPanel);
+      d.roundRectOutline(rc, sk.panelRadius, remember_ ? sk.accent : sk.line, 1.4f);
+      w::icon(app, 2, Rect(rc.x + 12, rc.y + 12, 20, 20),
+              remember_ ? sk.gold : sk.textDim);
+      app.font.draw(app.sdlRenderer(), remember_ ? "记住此游戏的选择" : "不记住选择",
+                    rc.x + 42, rc.y + 14, 14, remember_ ? sk.textHi : sk.text);
+    }
+    // 取消按钮
+    {
+      const Rect rc(panel_.right() - 120, panel_.bottom() - 74, 92, 44);
+      if (w::button(app, rc, "取消", false, 15)) app.popScene();
+    }
+
+    w::keyHintBar(app, {{"A / 点击", "用此核心启动"}, {"F", "记住选择"}, {"B / Esc", "取消"}});
+  }
+
+ private:
+  GameEntry game_;
+  std::function<void(const std::string&)> onPick_;
+  std::vector<PlatformCore> installed_;
+  Rect panel_;
+  int sel_ = 0;
+  bool remember_ = true;   // 对齐 Android 版默认勾选
+  bool hoverRow_ = false;
 };
 
 // ==================== 模态提示框 ====================
@@ -442,7 +690,7 @@ class AboutScene : public Scene {
     app.font.draw(app.sdlRenderer(), "NESSTATION", cx - app.font.textWidth("NESSTATION", 52, true) / 2,
                   app.draw.H * 0.16f, 52, sk.textHi, true);
     d.rect(Rect(cx - 40, app.draw.H * 0.16f + 66, 80, 4), sk.accent);
-    const std::string v = "PC EDITION · v1.0 · 多平台复古游戏站（Windows / Linux）";
+    const std::string v = "PC EDITION · v1.1 · 多平台复古游戏站（Windows / Linux）";
     app.font.draw(app.sdlRenderer(), v, cx - app.font.textWidth(v, 16) / 2,
                   app.draw.H * 0.16f + 86, 16, sk.text);
 
@@ -455,7 +703,9 @@ class AboutScene : public Scene {
         "已移除无 PC 版核心：DraStic（激烈）、Citra MMJ（Android 专属）",
         "应用代码 MIT · 各核心遵循其上游许可证 · 详见 assets/legal",
         "",
-        "快捷键：F1/Esc 菜单 · F5 存档 · F8 读档 · F6/Tab 快进 · F11 全屏",
+        "快捷键：F1/Esc/右键 菜单 · F5 存档 · F8 读档 · F7 暂停",
+        "　　　　Tab/F6 快进（0→2→4→6→8→16）· F11 全屏 · F12 截图",
+        "　　　　右键点击游戏卡 → 快捷菜单（启动 / 收藏 / 移除 / 核心选择）",
         "致谢：libretro / RetroArch 社区与全部上游模拟器项目",
     };
     float y = app.draw.H * 0.16f + 140;
@@ -473,6 +723,11 @@ class AboutScene : public Scene {
 
 std::unique_ptr<Scene> createCoreOptionsScene(GamePlatform platform) {
   return std::unique_ptr<Scene>(new CoreOptionsScene(platform));
+}
+
+std::unique_ptr<Scene> createCorePickerScene(const GameEntry& game,
+                                             std::function<void(const std::string&)> onPick) {
+  return std::unique_ptr<Scene>(new CorePickerScene(game, std::move(onPick)));
 }
 
 std::unique_ptr<Scene> createFileBrowser(const BrowserRequest& req) {

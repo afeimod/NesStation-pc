@@ -51,7 +51,7 @@ class SettingsScene : public Scene {
     }
 
     const char* cats[kCats] = {"外观", "核心", "按键映射", "路径与扫描",
-                               "独立模拟器", "BIOS / 系统", "数据"};
+                               "独立模拟器", "BIOS / 系统", "性能", "数据"};
     float y = 120;
     for (int i = 0; i < kCats; i++) {
       const Rect rc(24, y, 220, 48);
@@ -72,7 +72,8 @@ class SettingsScene : public Scene {
       case 3: drawPaths(app, cy); break;
       case 4: drawEmulators(app, cy); break;
       case 5: drawBios(app, cy); break;
-      case 6: drawData(app, cy); break;
+      case 6: drawPerformance(app, cy); break;
+      case 7: drawData(app, cy); break;
     }
     d.popClip();
 
@@ -144,6 +145,46 @@ class SettingsScene : public Scene {
   // —— 核心 ——
   void drawCores(App& app, float& y) {
     const Skin& sk = Theme::skin();
+    Draw& d = app.draw;
+    // 下载进度（后台线程）
+    const auto dl = app.cores.coreDownloadProgress();
+    if (dl.running) {
+      const Rect barRc(270, y, app.draw.W - 300, 8);
+      d.rect(barRc, sk.bgPanel);
+      const float t = dl.total > 0 ? (float)dl.done / dl.total : 0;
+      d.rect(Rect(barRc.x, barRc.y, std::max(8.0f, barRc.w * t), barRc.h), sk.accent);
+      char buf[96];
+      snprintf(buf, sizeof(buf), "正在下载核心 %d/%d：%s（libretro buildbot）",
+               dl.done + 1, dl.total, dl.label.c_str());
+      app.font.draw(app.sdlRenderer(), buf, 270, y + 14, 13, sk.accent);
+      y += 44;
+    } else if (dl.finished) {
+      app.font.draw(
+          app.sdlRenderer(),
+          dl.hadFailure ? "核心下载完成（部分平台本架构无预编译包，已自动回退/可稍后重试）"
+                        : "核心下载完成 ✓",
+          270, y, 13, dl.hadFailure ? sk.textDim : sk.accent);
+      y += 24;
+    }
+
+    // 一键下载全部缺失核心（对齐 APK CoreManagerScreen 的下载入口）
+    {
+      const Rect rc(270, y, app.draw.W - 300, 46);
+      bool downloading = app.cores.coreDownloadRunning();
+      if (w::primaryButton(app, rc,
+                           downloading ? "下载中…" : "⇩ 一键下载全部缺失核心（官方 buildbot）",
+                           20)) {
+        if (downloading) {
+          app.toast("正在下载，请稍候");
+        } else {
+          app.cores.clearDownloadFinishFlag();
+          app.cores.startCoreDownload({});
+          app.toast("开始下载全部缺失核心");
+        }
+      }
+      y += 56;
+    }
+
     // 说明
     app.font.draw(app.sdlRenderer(),
                   "libretro 核心位于：" + app.cores.coreDir(), 270, y, 13, sk.textDim);
@@ -156,7 +197,7 @@ class SettingsScene : public Scene {
       y += 26;
     }
     app.font.draw(app.sdlRenderer(),
-                  "缺失时运行 scripts/fetch_cores.sh(.ps1) 一键下载官方 PC 预编译核心",
+                  "点击「✗ 缺失」的平台行可直接下载；也可运行 scripts/fetch_cores.sh(.ps1)",
                   270, y, 13, sk.textDim);
     y += 34;
 
@@ -171,7 +212,7 @@ class SettingsScene : public Scene {
                        ? "✓ 已安装"
                        : std::string("✓ 用替代 ") + inUse.coreTitle;
         } else {
-          status = "✗ 缺失";
+          status = app.cores.coreDownloadRunning() ? "… 下载中" : "✗ 缺失 · 点击下载";
         }
       } else {
         status = app.externals.available(p) ? "✓ 已探测" : "✗ 未找到";
@@ -180,10 +221,13 @@ class SettingsScene : public Scene {
                      status, focusArea_ == 1, pc.biosNote)) {
         if (pc.kind == CoreKind::Libretro) {
           if (!app.cores.libretroCoreAvailable(p)) {
-            // 缺核心 → 弹提示框（部分架构无预编译核心，含替代方案）
-            app.pushScene(createMessageScene(
-                std::string(platformShortName(p)) + " 核心未安装",
-                app.cores.availabilityHint(p)));
+            if (app.cores.coreDownloadRunning()) {
+              app.toast("正在下载，请稍候");
+            } else {
+              app.cores.clearDownloadFinishFlag();
+              app.cores.startCoreDownload({p});
+              app.toast(std::string("开始下载 ") + platformShortName(p) + " 核心");
+            }
           } else {
             app.pushScene(createCoreOptionsScene(p));
           }
@@ -374,6 +418,59 @@ class SettingsScene : public Scene {
                   270, y, 12, sk.red);
   }
 
+  // —— 性能（对齐 Android 设置「性能」+「显示」分类）——
+  void drawPerformance(App& app, float& y) {
+    const Skin& sk = Theme::skin();
+    // 快进倍速（0/2/4/6/8/16，对齐 Android SpinnerRow）
+    {
+      static const int vals[] = {0, 2, 4, 6, 8, 16};
+      std::vector<std::string> opts = {"关", "2×", "4×", "6×", "8×", "16×"};
+      int idx = 2;  // 默认 4×
+      for (int i = 0; i < 6; i++)
+        if (vals[i] == app.config.fastForwardSpeed) {
+          idx = i;
+          break;
+        }
+      Rect rc(270, y, app.draw.W - 300, 52);
+      if (w::cycleRow(app, rc, "默认快进倍速", opts, idx, focusArea_ == 1,
+                      "游戏内按住 Tab 快进；F6 循环档位")) {
+        app.config.fastForwardSpeed = vals[idx];
+        saveConfig(app);
+        app.toast(std::string("快进倍速：") + opts[(size_t)idx]);
+      }
+      y += 58;
+    }
+    // 只读快捷键展示（对齐 Android「显示」分类：菜单呼出键 / 快进键）
+    {
+      Rect rc(270, y, app.draw.W - 300, 46);
+      w::listRow(app, rc, "菜单呼出键", "Esc / F1 / 右键", false, "游戏内呼出菜单；菜单中返回");
+      y += 52;
+    }
+    {
+      Rect rc(270, y, app.draw.W - 300, 46);
+      w::listRow(app, rc, "快进", "Tab 按住 / F6 换挡", false, "菜单中可点击换挡 0→2→4→6→8→16");
+      y += 52;
+    }
+    {
+      Rect rc(270, y, app.draw.W - 300, 46);
+      w::listRow(app, rc, "快存 / 快读", "F5 / F8", false, "槽位 1；菜单内共 12 槽");
+      y += 52;
+    }
+    {
+      Rect rc(270, y, app.draw.W - 300, 46);
+      w::listRow(app, rc, "暂停", "F7", false, "对齐 Android 暂停浮层");
+      y += 52;
+    }
+    {
+      Rect rc(270, y, app.draw.W - 300, 46);
+      w::listRow(app, rc, "截图", "F12", false, "存至数据目录 shots/");
+      y += 52;
+    }
+    app.font.draw(app.sdlRenderer(),
+                  "提示：右键点击游戏卡可打开快捷菜单（启动 / 收藏 / 移除 / 核心选择）",
+                  270, y + 6, 13, sk.textDim);
+  }
+
   // —— 数据 ——
   void drawData(App& app, float& y) {
     {
@@ -412,7 +509,7 @@ class SettingsScene : public Scene {
   }
 
  private:
-  static constexpr int kCats = 7;
+  static constexpr int kCats = 8;
   int catSel_ = 0;
   int focusArea_ = 0;
 };

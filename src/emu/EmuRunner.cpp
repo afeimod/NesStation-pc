@@ -27,9 +27,12 @@ std::string EmuRunner::start(App& app, const GameEntry& game) {
   }
 
   // —— libretro 平台：进程内会话 ——
-  // 候选链解析：首选核心缺失时自动落到替代核心（如 3DS：Azahar → Citra）
-  const PlatformCore resolved = app.cores.resolveCore(game.platform);
-  const std::string corePath = app.cores.corePathFor(game.platform);
+  // 候选链解析：首选核心缺失时自动落到替代核心（如 3DS：Azahar → Citra）；
+  // 若该游戏记忆了核心选择（preferredCore，核心选择器「记住选择」），优先采用
+  const PlatformCore resolved =
+      app.cores.resolveCorePreferred(game.platform, game.preferredCore);
+  const std::string corePath =
+      app.cores.corePathForPreferred(game.platform, game.preferredCore);
   if (!fsutil::isFile(corePath)) {
     return app.cores.availabilityHint(game.platform);
   }

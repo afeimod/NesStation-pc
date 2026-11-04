@@ -117,4 +117,6 @@ Write-Host " 提示：NGC/Wii、Wii U、Switch 为独立模拟器"
 Write-Host " （Dolphin / Cemu / Eden），放 emulators\ 目录"
 Write-Host " 或到设置页配置路径。"
 Write-Host "=========================================="
-exit $miss
+# 软失败：缺核心是正常情况（运行时候选链会自动回退/提示），
+# 永远不因平台缺失或网络问题中断 CMake 构建
+exit 0
