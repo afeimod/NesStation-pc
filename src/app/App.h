@@ -28,7 +28,7 @@ class EmuRunner;
 
 // —— 版本号（CMake 注入；本地直编 g++ 时回退）——
 #ifndef NESSTATION_VERSION
-#define NESSTATION_VERSION "1.2.1"
+#define NESSTATION_VERSION "1.2.2"
 #endif
 inline const char* appVersionText() { return "v" NESSTATION_VERSION; }
 

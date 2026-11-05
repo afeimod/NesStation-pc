@@ -190,9 +190,11 @@ class CoreOptionsScene : public Scene {
 };
 
 // ==================== 文件浏览器 ====================
-// 逻辑对齐 Android 版 FileBrowserDialog（顶部路径栏 + 主目录/上一级 + 列表），
-// 并按 PC 场景扩展：存储位置书签（主目录/桌面/下载/文档/数据目录/文件系统根/
-// 可移动存储卷/所有盘符），无权限与空目录明确提示，目录内容按需缓存。
+// 逻辑对齐 Android 版 FileBrowserDialog（顶部路径栏 + 主目录/上一级 + 列表）。
+// ★v1.2.2 布局重构（用户反馈：顶部一大串存储位置书签把真正目录挤到很下面）：
+//   默认进入【当前目录】纯净视图（仅「..（上一级）」+ 子目录/文件列表），
+//   书签（主目录/桌面/下载/磁盘/存储卷）收进右上「快速位置」按钮，按需展开。
+// 快速位置视图顶部有「← 返回当前目录」项；无权限与空目录明确提示。
 class FileBrowserScene : public Scene {
  public:
   explicit FileBrowserScene(const BrowserRequest& req) : req_(req) {}
@@ -250,9 +252,11 @@ class FileBrowserScene : public Scene {
     entries_.clear();
     // 转义修复："\x01drives" 在 MSVC/GCC 下 \x01d 会被当作十六进制贪婪解析
     // (0x01D + "rives")，拆分字面量确保语义为 0x01 + "drives"
-    builtFor_ = drivesMode_ ? std::string("\x01" "drives") : cur_;
+    builtFor_ = drivesMode_ ? std::string("\x01" "drives")
+                             : (quickMode_ ? cur_ + "\x01" "quick" : cur_);
 #ifdef _WIN32
     if (drivesMode_) {
+      entries_.push_back({"← 返回快速位置", "", false, false, false});
       entries_.push_back({"存储位置", "", false, true});
       const std::string home = fsutil::homeDir();
       if (!home.empty()) addBookmark("主目录", home);
@@ -267,48 +271,52 @@ class FileBrowserScene : public Scene {
       return;
     }
 #endif
-    // —— 存储位置书签 ——
-    entries_.push_back({"存储位置", "", false, true});
-    const std::string home = fsutil::homeDir();
-    if (!home.empty()) addBookmark("主目录", home);
+    // —— 快速位置（书签收藏夹，按需展开；默认视图不显示）——
+    if (quickMode_) {
+      entries_.push_back({"← 返回当前目录", "", false, false, false});
+      entries_.push_back({"存储位置", "", false, true});
+      const std::string home = fsutil::homeDir();
+      if (!home.empty()) addBookmark("主目录", home);
 #ifdef _WIN32
-    for (const auto& n : {"Desktop", "桌面"}) addBookmark("桌面", fsutil::join(home, n));
-    for (const auto& n : {"Downloads", "下载"}) addBookmark("下载", fsutil::join(home, n));
-    for (const auto& n : {"Documents", "文档"}) addBookmark("文档", fsutil::join(home, n));
-    addBookmark("应用数据", app.dataDir());
-    // arm64 Wine（Box86/Box64 等）环境：Z: 盘映射宿主根 —— 书签直达
-    // Android 内部存储 / U 盘，解决「arm64 只能读 Z 盘（exeDir）」的入口问题
-    if (fsutil::isDir("Z:/")) {
-      addBookmark("内部存储（Android）", "Z:/storage/emulated/0");
-      addBookmark("SD 卡 / U 盘（/storage）", "Z:/storage");
-      addBookmark("可移动介质（/media）", "Z:/media");
-      addBookmark("挂载点（/mnt）", "Z:/mnt");
-      addBookmark("宿主文件系统（Z:/）", "Z:/");
-    }
-    entries_.push_back({"磁盘", "", false, true});
-    entries_.push_back({"▣ 此电脑（所有磁盘）", "", true, false, true});
+      for (const auto& n : {"Desktop", "桌面"}) addBookmark("桌面", fsutil::join(home, n));
+      for (const auto& n : {"Downloads", "下载"}) addBookmark("下载", fsutil::join(home, n));
+      for (const auto& n : {"Documents", "文档"}) addBookmark("文档", fsutil::join(home, n));
+      addBookmark("应用数据", app.dataDir());
+      // arm64 Wine（Box86/Box64 等）环境：Z: 盘映射宿主根 —— 书签直达
+      // Android 内部存储 / U 盘，解决「arm64 只能读 Z 盘（exeDir）」的入口问题
+      if (fsutil::isDir("Z:/")) {
+        addBookmark("内部存储（Android）", "Z:/storage/emulated/0");
+        addBookmark("SD 卡 / U 盘（/storage）", "Z:/storage");
+        addBookmark("可移动介质（/media）", "Z:/media");
+        addBookmark("挂载点（/mnt）", "Z:/mnt");
+        addBookmark("宿主文件系统（Z:/）", "Z:/");
+      }
+      entries_.push_back({"磁盘", "", false, true});
+      entries_.push_back({"▣ 此电脑（所有磁盘）", "", true, false, true});
 #else
-    for (const auto& n : {"Desktop", "桌面"}) addBookmark("桌面", fsutil::join(home, n));
-    for (const auto& n : {"Downloads", "下载"}) addBookmark("下载", fsutil::join(home, n));
-    for (const auto& n : {"Documents", "文档"}) addBookmark("文档", fsutil::join(home, n));
-    addBookmark("应用数据", app.dataDir());
-    addBookmark("文件系统根 /", "/");
-    for (const std::string& m : fsutil::storageMounts()) {
-      std::string label = "存储卷 " + fsutil::baseOf(m);
-      if (m == "/storage/emulated/0" || m == "/sdcard") label = "内部存储";
-      else if (m == "/data") label = "应用数据（/data）";
-      else if (m == "/storage") label = "全部存储（/storage）";
-      addBookmark(label, m);
-    }
+      for (const auto& n : {"Desktop", "桌面"}) addBookmark("桌面", fsutil::join(home, n));
+      for (const auto& n : {"Downloads", "下载"}) addBookmark("下载", fsutil::join(home, n));
+      for (const auto& n : {"Documents", "文档"}) addBookmark("文档", fsutil::join(home, n));
+      addBookmark("应用数据", app.dataDir());
+      addBookmark("文件系统根 /", "/");
+      for (const std::string& m : fsutil::storageMounts()) {
+        std::string label = "存储卷 " + fsutil::baseOf(m);
+        if (m == "/storage/emulated/0" || m == "/sdcard") label = "内部存储";
+        else if (m == "/data") label = "应用数据（/data）";
+        else if (m == "/storage") label = "全部存储（/storage）";
+        addBookmark(label, m);
+      }
 #endif
+      return;
+    }
 
-    // —— 当前目录 ——
+    // —— 当前目录（默认视图：直接展示，不再被书签挤到下方）——
     if (!fsutil::isDir(cur_)) {
       entries_.push_back({"（目录不存在：" + cur_ + "）", "", false, true});
       return;
     }
     if (!fsutil::canReadDir(cur_)) {
-      entries_.push_back({"⛔ 无权限读取此目录 — 请从上方「存储位置」选择其他位置",
+      entries_.push_back({"⛔ 无权限读取此目录 — 请点右上「快速位置」选择其他位置",
                           "", false, true});
       return;
     }
@@ -346,19 +354,38 @@ class FileBrowserScene : public Scene {
     if (e.name == "▣ 此电脑（所有磁盘）") {
       drivesMode_ = true;
       sel_ = 0;
+      scroll_ = 0;
       markDirty();
       return;
     }
     if (drivesMode_) {
+      if (e.name.rfind("← 返回", 0) == 0) {
+        drivesMode_ = false;
+        sel_ = 0;
+        scroll_ = 0;
+        markDirty();
+        return;
+      }
       drivesMode_ = false;
+      quickMode_ = false;
       cur_ = e.path;
       sel_ = 0;
+      scroll_ = 0;
       markDirty();
       return;
     }
 #endif
+    // 快速位置视图的「← 返回当前目录」
+    if (quickMode_ && e.name.rfind("← 返回", 0) == 0) {
+      quickMode_ = false;
+      sel_ = 0;
+      scroll_ = 0;
+      markDirty();
+      return;
+    }
     if (e.dir) {
       cur_ = e.path;
+      quickMode_ = false;  // 从书签进入目录 → 回到纯净视图
       sel_ = 0;
       scroll_ = 0;
       markDirty();
@@ -378,7 +405,9 @@ class FileBrowserScene : public Scene {
     const Skin& sk = Theme::skin();
     Draw& d = app.draw;
     d.rect(Rect(0, 0, app.draw.W, app.draw.H), sk.bgDeep);
-    if (w::header(app, req_.title, fsutil::pathDisplay(drivesMode_ ? "此电脑" : cur_),
+    if (w::header(app, req_.title,
+                  fsutil::pathDisplay(drivesMode_ ? "此电脑"
+                                       : (quickMode_ ? "快速位置" : cur_)),
                   true)) {
       // 返回 = 取消（★先拷贝回调再弹栈 —— 避免 use-after-free）
       auto onCancel = req_.onCancel;
@@ -387,8 +416,22 @@ class FileBrowserScene : public Scene {
       return;
     }
 
-    // 目录模式下：选择当前目录按钮
-    if (req_.mode == 0 && !drivesMode_ && !cur_.empty() && fsutil::isDir(cur_)) {
+    // ★v1.2.2：快速位置开关（书签收纳，默认纯净视图）
+    if (!drivesMode_) {
+      const Rect quickRc(app.draw.W - 240 - 216, 30, 200, 46);
+      if (w::primaryButton(app, quickRc,
+                           quickMode_ ? "← 当前目录" : "▣ 快速位置", 4)) {
+        quickMode_ = !quickMode_;
+        sel_ = 0;
+        scroll_ = 0;
+        markDirty();
+        return;
+      }
+    }
+
+    // 目录模式下：选择当前目录按钮（仅纯净视图）
+    if (req_.mode == 0 && !drivesMode_ && !quickMode_ &&
+        !cur_.empty() && fsutil::isDir(cur_)) {
       const Rect pickRc(app.draw.W - 240, 30, 200, 46);
       if (w::primaryButton(app, pickRc, "选择此目录", 4)) {
         // ★先拷贝回调与路径再弹栈 —— 「添加目录就闪退」的 use-after-free 修复
@@ -462,6 +505,7 @@ class FileBrowserScene : public Scene {
   int sel_ = 0;
   float scroll_ = 0;
   bool drivesMode_ = false;
+  bool quickMode_ = false;   // ★v1.2.2：快速位置（书签）视图开关，默认纯净
   bool dirty_ = false;
   bool followSel_ = false;  // 键盘移动选择时置位 → 绘制期跟随一次
 };

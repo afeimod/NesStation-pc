@@ -106,12 +106,24 @@ void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
   } else if (name == "about") {
     app.pushScene(ns::createAboutScene());
   } else if (name == "browser") {
-    // 文件浏览器（存储书签 / 权限提示新 UI）
+    // 文件浏览器（★v1.2.2 默认纯净视图：当前目录直接置顶，无书签堆叠）
     ns::BrowserRequest req;
     req.title = "选择 ROM 目录";
     req.mode = 0;
     req.onPick = [](const std::string&) {};
     app.pushScene(ns::createFileBrowser(req));
+  } else if (name == "browserquick") {
+    // ★v1.2.2 快速位置视图：点击右上「▣ 快速位置」按钮（W-456 中心 ≈ 924,53）
+    //   → 截图应显示书签收藏夹（主目录/桌面/下载/文档/…）+ 顶部「← 返回当前目录」
+    ns::BrowserRequest req;
+    req.title = "选择 ROM 目录";
+    req.mode = 0;
+    req.onPick = [](const std::string&) {};
+    app.pushScene(ns::createFileBrowser(req));
+    st.synthFrame = 0;
+    st.synth[3].push_back(synthMotion(924, 53, 0, 0));
+    st.synth[4].push_back(synthButton(true, 924, 53));
+    st.synth[6].push_back(synthButton(false, 924, 53));
   } else if (name == "browserdrag") {
     // ★拖拽滚动验证：进入浏览器（40 个子目录保证列表溢出）→ 按住列表中部
     //   上划 400px → 截图应看到列表已滚动（旧版焦点行跟随每帧把 scroll 拉回

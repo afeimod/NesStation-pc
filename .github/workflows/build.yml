@@ -1,13 +1,28 @@
 name: Build
 
 # 手动触发：选择构建目标；with_emulators 控制是否源码编译三大独立模拟器
-# （Dolphin/Cemu/Eden）并打入安装包。单个模拟器失败只影响该模拟器，
-# 不阻塞前端本体与其余模拟器（step 级 continue-on-error + 状态文件）。
+# （Dolphin/Cemu/Eden）并打入安装包。单个模拟器失败会把该 job 标红，
+# 但不阻塞前端本体与其余模拟器（状态文件 + if:always 上传产物）。
 #
-# ★ v1.2.1 修复：GitHub Actions 的 job 级 if 只能引用 github/needs/vars/
-#   inputs 上下文，不能引用 matrix。旧版 emu-build 在 job 级 if 里写了
-#   matrix.platform 导致整个 workflow 解析失败（Invalid workflow file）。
-#   现按平台拆成 3 个矩阵作业，平台过滤全部使用静态字符串。
+# ★ v1.2.2 修复（对照三大模拟器上游官方 CI 逐一核实，v1.2.1 的 EMU job
+#   全部 30~110 秒内死于 cmake 配置阶段，产物 0 字节）：
+#   1. dolphin·linux-x64：jammy 的 cmake 3.22 < Dolphin 要求 3.25 →
+#      改用 debian:12 容器（cmake 3.25.1 / GCC 12.2 / Qt 6.4.2）
+#   2. dolphin 全平台：find_package(Qt6 COMPONENTS Svg) 必需 →
+#      补 qt6-svg-dev（Debian）/ libqt6svg6-dev（Ubuntu）/ qtsvg（aqt）
+#   3. eden·linux：jammy 无 qt6-charts → 改用 debian:12 容器 + qt6-charts-dev；
+#      Windows 用 install-qt-action 预装 Qt 6.8.3 + -DYUZU_USE_BUNDLED_QT=OFF
+#      （上游自带 CPM 下载 Qt 的路径保留为兜底）
+#   4. cemu：上游 CI 指定 clang-15 + Ninja + 固定 apt 清单 → 完全对齐；
+#      ★产物路径修正为【源码根 emulators/cemu/bin/Cemu_release(.exe)】
+#      （旧脚本从 build/cemu/bin 拷贝空目录 → 永远打包失败）
+#   5. Windows（VS 多配置生成器）：build/install 显式 --config Release
+#   6. aqt 手动安装 Qt 不稳定 → 改用 jurplel/install-qt-action@v4
+#      （内嵌锁定的 aqtinstall 3.3.*）
+#   7. 构建失败不再静默（去掉 build 步骤 continue-on-error），并把构建日志
+#      尾部存入产物（无需登录即可从 artifact 看到真实报错）
+#   8. External cores registry test 的 exeDir 断言修复（旧版硬编码 /tmp，
+#      CI 编译到 smoke/ 下必崩 → 整个 linux-x64 job 连带挂掉）
 on:
   workflow_dispatch:
     inputs:
@@ -36,12 +51,14 @@ jobs:
     name: Linux x86_64 (GCC, tar.gz)
     if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'linux-x64' }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - name: Install deps
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y build-essential cmake libsdl2-dev
 
       - name: Configure
@@ -53,6 +70,7 @@ jobs:
         run: cmake --build build -j"$(nproc)"
 
       - name: Smoke test (dummy video, real core)
+        timeout-minutes: 15
         run: |
           mkdir -p smoke/cores smoke/system smoke/saves
           curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 -o fce.zip \
@@ -73,6 +91,7 @@ jobs:
             smoke/cores/fceumm_libretro.so smoke/test.nes smoke
 
       - name: External cores registry test
+        # ★exeDir 断言已路径无关（v1.2.2）：二进制在哪编译运行都成立
         run: |
           g++ -std=c++17 -w -I src -I third_party $(sdl2-config --cflags) \
               tests/test_externals.cpp src/util/Fs.cpp src/util/Log.cpp \
@@ -80,6 +99,7 @@ jobs:
           ./smoke/test_ext
 
       - name: Bundle cores (buildbot x86_64)
+        timeout-minutes: 20
         run: |
           mkdir -p dist/NesStation-linux/cores
           # 下载本架构全部可用核心进包（azahar 等缺失时自动回退替代核心）
@@ -112,12 +132,14 @@ jobs:
     if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'linux-arm64' }}
     runs-on: ubuntu-24.04-arm
     container: debian:12
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - name: Install deps
+        timeout-minutes: 15
         run: |
-          apt-get update
+          apt-get update -qq
           # ca-certificates 必须显式安装：--no-install-recommends 会跳过
           # libcurl4 对它的 Recommends 依赖，导致 curl (77) 证书错误
           apt-get install -y --no-install-recommends \
@@ -134,6 +156,7 @@ jobs:
         run: cmake --build build -j"$(nproc)"
 
       - name: Smoke test (dummy video, real aarch64 core)
+        timeout-minutes: 15
         run: |
           mkdir -p smoke/cores smoke/system smoke/saves
           # 注意：arm64 核心位于 linux/aarch64（不是 linux/arm64）；
@@ -156,6 +179,7 @@ jobs:
             smoke/cores/fceumm_libretro.so smoke/test.nes smoke
 
       - name: Bundle cores (buildbot aarch64)
+        timeout-minutes: 20
         run: |
           # 核心进 deb：/opt/nesstation/cores（exe 同目录，CoreManager 自动识别）
           # azahar 在 aarch64 无预编译包 → 自动回退 citra
@@ -167,7 +191,7 @@ jobs:
 
       - name: Package (.deb, Debian/Ubuntu)
         env:
-          DEB_VERSION: "1.2.1"
+          DEB_VERSION: "1.2.2"
         run: |
           set -eux
           PKG="dist/root"
@@ -240,6 +264,7 @@ jobs:
     name: Windows x64 (MSVC, zip)
     if: ${{ github.event.inputs.target == 'all' || github.event.inputs.target == 'windows-x64' }}
     runs-on: windows-2022
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -251,6 +276,7 @@ jobs:
         run: cmake --build build --config Release -- -m
 
       - name: Bundle cores (buildbot windows x64)
+        timeout-minutes: 20
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "dist/NesStation-windows/cores" | Out-Null
@@ -281,101 +307,97 @@ jobs:
           path: dist/NesStation-windows-x64.zip
 
   # ==========================================================================
-  # 三大独立模拟器（源码级构建：emulators/ 内置快照，无运行时下载）
+  # 三大独立模拟器（源码级构建：emulators/ 内置快照）
   #
-  # ★ 按平台拆成 3 个矩阵作业：job 级 if 不能引用 matrix 上下文
-  #   （GitHub Actions 限制：job 级 if 仅可用 github/needs/vars/inputs），
-  #   平台过滤必须用静态字符串写在各 job 的 if 里。
-  #   · step 级 continue-on-error：单个模拟器编译失败不阻塞其它模拟器，
-  #     产物里写 _status.txt（ok / failed），打包作业据此决定是否并入
+  # ★v1.2.2 平台矩阵（对照上游 CI 核实）：
+  #   dolphin/eden · linux-x64  → debian:12 容器（cmake 3.25 ≥ Dolphin 3.25、
+  #                               GCC 12 ≥ Dolphin 12、Qt 6.4.2 + svg + charts）
+  #   cemu · linux-x64          → ubuntu-22.04 + clang-15 + Ninja（上游同款）
+  #   dolphin/eden · linux-arm64→ debian:12 容器（同 x64 清单）
+  #   三个 · windows-x64        → windows-2022；dolphin/eden 用
+  #                               install-qt-action 装 Qt 6.8.3 msvc2022
+  #                               （qtsvg+qttools+qtcharts），cemu 无需 Qt
   #   · linux-arm64 不构建 Cemu：上游 Cemu v2.6 仅支持 x86_64（无 ARM64
   #     Linux 移植；ARM64 设备可经 box64 运行 x64 发行版）
-  #   · Eden 依赖经 CPM 联网拉取（CPMUTIL_FORCE_SYSTEM 默认 OFF）
-  #   · Cemu 内置 vcpkg 快照无 .git：构建脚本会先 git-init 并拉取
-  #     builtin-baseline 提交（见 scripts/build_emulators.sh / .ps1）
+  #   · 构建失败 = job 标红（不再静默），产物附 _build_tail.log 真实报错
   # ==========================================================================
-  emu-build-linux-x64:
+  emu-dolphin-eden-linux-x64:
     name: "EMU ${{ matrix.emu }} · linux-x64"
     if: ${{ github.event.inputs.with_emulators != 'false' &&
             (github.event.inputs.target == 'all' ||
              github.event.inputs.target == 'emulators' ||
              github.event.inputs.target == 'linux-x64') }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    container: debian:12
+    timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
-        emu: [dolphin, cemu, eden]
+        emu: [dolphin, eden]
     steps:
       - uses: actions/checkout@v4
 
       - name: Install deps
+        timeout-minutes: 20
         run: |
           set -eux
-          COMMON="build-essential cmake ninja-build pkg-config git curl ca-certificates unzip python3 nasm yasm"
-          EXTRA=""
-          case "${{ matrix.emu }}" in
-            dolphin)
-              EXTRA="libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev libxi-dev \
-                     libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
-                     libcurl4-openssl-dev qt6-base-dev qt6-tools-dev" ;;
-            cemu)
-              EXTRA="libgtk-3-dev libsecret-1-dev libgcrypt20-dev libsystemd-dev \
-                     libpulse-dev zlib1g-dev libzstd-dev libzip-dev" ;;
-            eden)
-              EXTRA="libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
-                     zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
-                     libglvnd-dev libfuse2 libasound2-dev libpulse-dev \
-                     libavcodec-dev libavutil-dev libswscale-dev libavformat-dev libavfilter-dev" ;;
-          esac
-          # webkit 4.1 缺失时回退 4.0（Cemu 两者皆可）
-          if [ "${{ matrix.emu }}" = "cemu" ]; then
-            sudo apt-get update
-            sudo apt-get install -y $COMMON $EXTRA libwebkit2gtk-4.1-dev \
-              || sudo apt-get install -y $COMMON $EXTRA libwebkit2gtk-4.0-dev
-          else
-            sudo apt-get update
-            sudo apt-get install -y $COMMON $EXTRA
-          fi
-          # Eden 需要系统 Qt 的 Charts 组件（包名随发行版不同）
-          if [ "${{ matrix.emu }}" = "eden" ]; then
-            sudo apt-get install -y qt6-charts-dev \
-              || sudo apt-get install -y libqt6charts6-dev \
-              || echo "::warning::qt6 charts dev 包不可用，Eden 可能编译失败"
-          fi
+          # debian:12 容器内以 root 运行，无需 sudo。
+          # ★qt6-svg-dev（Dolphin 必需 Svg 组件）与 qt6-charts-dev（Eden 必需
+          #   Charts 组件）为 v1.2.2 新增 —— 旧清单缺这两个包，configure 秒挂
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config git curl ca-certificates \
+            unzip python3 nasm yasm ccache \
+            libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev libxi-dev \
+            libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
+            libcurl4-openssl-dev libvulkan-dev \
+            qt6-base-dev qt6-tools-dev qt6-svg-dev qt6-charts-dev \
+            libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
+            zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
+            libglvnd-dev libusb-1.0-0-dev \
+            libavcodec-dev libavutil-dev libswscale-dev libavformat-dev \
+            libavfilter-dev
+
+      - name: ccache 加速重建（dolphin）
+        if: matrix.emu == 'dolphin'
+        uses: actions/cache@v4
+        with:
+          path: /root/.cache/ccache
+          key: ccache-dolphin-linux-x64-${{ github.sha }}
+          restore-keys: ccache-dolphin-linux-x64-
 
       - name: Build emulator
-        id: build
-        continue-on-error: true
         env:
+          CCACHE_DIR: /root/.cache/ccache
           EDEN_FORCE_SYSTEM: "OFF"   # CI 有网：CPM 拉上游锁定版本依赖
-        run: bash scripts/build_emulators.sh ${{ matrix.emu }} 3
+        run: |
+          set -o pipefail
+          bash scripts/build_emulators.sh ${{ matrix.emu }} 3 2>&1 | tee build_${{ matrix.emu }}.log
 
       - name: Write status
         if: always()
-        shell: bash
         run: |
           mkdir -p dist
           OUT="dist/emulators/${{ matrix.emu }}"
           BIN_OK=0
           case "${{ matrix.emu }}" in
             dolphin) [ -n "$(find "$OUT" -type f \( -name 'Dolphin.exe' -o -name 'dolphin-emu' \) 2>/dev/null)" ] && BIN_OK=1 ;;
-            cemu)    [ -n "$(find "$OUT" -type f \( -name 'Cemu.exe'  -o -name 'Cemu' \) 2>/dev/null)" ] && BIN_OK=1 ;;
-            eden)    [ -n "$(find "$OUT" -type f \( -name 'eden.exe'  -o -name 'eden' -o -name 'Eden.exe' \) 2>/dev/null)" ] && BIN_OK=1 ;;
+            eden)    [ -n "$(find "$OUT" -type f \( -name 'eden.exe'  -o -name 'eden' \) 2>/dev/null)" ] && BIN_OK=1 ;;
           esac
           if [ "$BIN_OK" = "1" ]; then
             echo "ok" > dist/_status.txt
             echo "构建成功" >> dist/_status.txt
           else
-            echo "failed: 产物二进制未生成（详见构建日志）" > dist/_status.txt
+            echo "failed: 产物二进制未生成" > dist/_status.txt
           fi
           cat dist/_status.txt
+          # ★构建日志尾部随产物上传：无需登录 Actions 即可看到真实报错
+          tail -n 400 "build_${{ matrix.emu }}.log" > dist/_build_tail.log 2>/dev/null || true
           find dist -maxdepth 3 -type d || true
 
       - name: Trim dist (only this emulator)
         if: always()
-        shell: bash
         run: |
-          # 保险：dist 里只保留本模拟器目录 + 状态文件，避免误打包其它内容
           if [ -d "dist/emulators" ]; then
             find dist/emulators -mindepth 1 -maxdepth 1 -type d \
               ! -name '${{ matrix.emu }}' -exec rm -rf {} + 2>/dev/null || true
@@ -388,7 +410,83 @@ jobs:
           name: emu-linux-x64-${{ matrix.emu }}
           path: dist/
 
-  emu-build-linux-arm64:
+  emu-cemu-linux-x64:
+    name: "EMU cemu · linux-x64"
+    if: ${{ github.event.inputs.with_emulators != 'false' &&
+            (github.event.inputs.target == 'all' ||
+             github.event.inputs.target == 'emulators' ||
+             github.event.inputs.target == 'linux-x64') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        # ★上游 Cemu CI 官方清单（ubuntu-22.04 + clang-15 + Ninja）
+        timeout-minutes: 20
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            clang-15 cmake freeglut3-dev libgcrypt20-dev libglm-dev libgtk-3-dev \
+            libpulse-dev libsecret-1-dev libsystemd-dev libudev-dev nasm \
+            ninja-build libbluetooth-dev \
+            build-essential pkg-config git curl ca-certificates unzip python3 \
+            zip bison flex
+
+      - name: vcpkg binary cache
+        # vcpkg 每次从源码编译 ~40 个依赖需 1~2 小时；二进制缓存命中后仅数分钟
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-binary
+          key: vcpkg-bin-cemu-linux-x64-${{ hashFiles('emulators/cemu/vcpkg.json') }}
+
+      - name: Build Cemu
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-binary
+          # ★经 -D 传给 Cemu 本体（build_emulators.sh 内拼接）；不用 CC/CXX
+          #   环境变量，避免泄漏进 vcpkg 端口构建
+          CEMU_CC: /usr/bin/clang-15
+          CEMU_CXX: /usr/bin/clang++-15
+        run: |
+          set -o pipefail
+          set -eux
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          bash scripts/build_emulators.sh cemu 3 2>&1 | tee build_cemu.log
+
+      - name: Write status
+        if: always()
+        run: |
+          mkdir -p dist
+          OUT="dist/emulators/cemu"
+          BIN_OK=0
+          [ -n "$(find "$OUT" -type f \( -name 'Cemu.exe' -o -name 'Cemu' \) 2>/dev/null)" ] && BIN_OK=1
+          if [ "$BIN_OK" = "1" ]; then
+            echo "ok" > dist/_status.txt
+            echo "构建成功" >> dist/_status.txt
+          else
+            echo "failed: 产物二进制未生成" > dist/_status.txt
+          fi
+          cat dist/_status.txt
+          tail -n 400 build_cemu.log > dist/_build_tail.log 2>/dev/null || true
+          find dist -maxdepth 3 -type d || true
+
+      - name: Trim dist (only cemu)
+        if: always()
+        run: |
+          if [ -d "dist/emulators" ]; then
+            find dist/emulators -mindepth 1 -maxdepth 1 -type d \
+              ! -name 'cemu' -exec rm -rf {} + 2>/dev/null || true
+          fi
+          ls -la dist dist/emulators 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emu-linux-x64-cemu
+          path: dist/
+
+  emu-dolphin-eden-linux-arm64:
     name: "EMU ${{ matrix.emu }} · linux-arm64"
     if: ${{ github.event.inputs.with_emulators != 'false' &&
             (github.event.inputs.target == 'all' ||
@@ -396,6 +494,7 @@ jobs:
              github.event.inputs.target == 'linux-arm64') }}
     runs-on: ubuntu-24.04-arm
     container: debian:12
+    timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
@@ -404,61 +503,62 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install deps
+        timeout-minutes: 20
         run: |
           set -eux
-          COMMON="build-essential cmake ninja-build pkg-config git curl ca-certificates unzip python3 nasm yasm"
-          EXTRA=""
-          case "${{ matrix.emu }}" in
-            dolphin)
-              EXTRA="libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev libxi-dev \
-                     libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
-                     libcurl4-openssl-dev qt6-base-dev qt6-tools-dev" ;;
-            eden)
-              EXTRA="libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
-                     zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
-                     libglvnd-dev libfuse2 libasound2-dev libpulse-dev \
-                     libavcodec-dev libavutil-dev libswscale-dev libavformat-dev libavfilter-dev" ;;
-          esac
-          # debian:12 容器内以 root 运行，无需 sudo
-          apt-get update
-          apt-get install -y $COMMON $EXTRA
-          # Eden 需要系统 Qt 的 Charts 组件
-          if [ "${{ matrix.emu }}" = "eden" ]; then
-            apt-get install -y qt6-charts-dev \
-              || apt-get install -y libqt6charts6-dev \
-              || echo "::warning::qt6 charts dev 包不可用，Eden 可能编译失败"
-          fi
+          # 与 linux-x64 相同清单（debian:12 双架构通用；qt6-charts-dev 有 arm64）
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config git curl ca-certificates \
+            unzip python3 nasm yasm ccache \
+            libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev libxi-dev \
+            libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
+            libcurl4-openssl-dev libvulkan-dev \
+            qt6-base-dev qt6-tools-dev qt6-svg-dev qt6-charts-dev \
+            libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
+            zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
+            libglvnd-dev libusb-1.0-0-dev \
+            libavcodec-dev libavutil-dev libswscale-dev libavformat-dev \
+            libavfilter-dev
+
+      - name: ccache 加速重建（dolphin）
+        if: matrix.emu == 'dolphin'
+        uses: actions/cache@v4
+        with:
+          path: /root/.cache/ccache
+          key: ccache-dolphin-linux-arm64-${{ github.sha }}
+          restore-keys: ccache-dolphin-linux-arm64-
 
       - name: Build emulator
-        id: build
-        continue-on-error: true
         env:
-          EDEN_FORCE_SYSTEM: "OFF"   # CI 有网：CPM 拉上游锁定版本依赖
-        run: bash scripts/build_emulators.sh ${{ matrix.emu }} 3
+          CCACHE_DIR: /root/.cache/ccache
+          EDEN_FORCE_SYSTEM: "OFF"
+        run: |
+          set -o pipefail
+          bash scripts/build_emulators.sh ${{ matrix.emu }} 3 2>&1 | tee build_${{ matrix.emu }}.log
 
       - name: Write status
         if: always()
-        shell: bash
         run: |
           mkdir -p dist
           OUT="dist/emulators/${{ matrix.emu }}"
           BIN_OK=0
           case "${{ matrix.emu }}" in
             dolphin) [ -n "$(find "$OUT" -type f \( -name 'Dolphin.exe' -o -name 'dolphin-emu' \) 2>/dev/null)" ] && BIN_OK=1 ;;
-            eden)    [ -n "$(find "$OUT" -type f \( -name 'eden.exe'  -o -name 'eden' -o -name 'Eden.exe' \) 2>/dev/null)" ] && BIN_OK=1 ;;
+            eden)    [ -n "$(find "$OUT" -type f \( -name 'eden.exe'  -o -name 'eden' \) 2>/dev/null)" ] && BIN_OK=1 ;;
           esac
           if [ "$BIN_OK" = "1" ]; then
             echo "ok" > dist/_status.txt
             echo "构建成功" >> dist/_status.txt
           else
-            echo "failed: 产物二进制未生成（详见构建日志）" > dist/_status.txt
+            echo "failed: 产物二进制未生成" > dist/_status.txt
           fi
           cat dist/_status.txt
+          tail -n 400 "build_${{ matrix.emu }}.log" > dist/_build_tail.log 2>/dev/null || true
           find dist -maxdepth 3 -type d || true
 
       - name: Trim dist (only this emulator)
         if: always()
-        shell: bash
         run: |
           if [ -d "dist/emulators" ]; then
             find dist/emulators -mindepth 1 -maxdepth 1 -type d \
@@ -472,13 +572,14 @@ jobs:
           name: emu-linux-arm64-${{ matrix.emu }}
           path: dist/
 
-  emu-build-windows-x64:
+  emu-windows-x64:
     name: "EMU ${{ matrix.emu }} · windows-x64"
     if: ${{ github.event.inputs.with_emulators != 'false' &&
             (github.event.inputs.target == 'all' ||
              github.event.inputs.target == 'emulators' ||
              github.event.inputs.target == 'windows-x64') }}
     runs-on: windows-2022
+    timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
@@ -487,21 +588,45 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Qt6 (Dolphin/Eden)
-        # runner 无 Qt：aqtinstall 装到 C:\Qt，经 CMAKE_PREFIX_PATH 供 cmake 发现
-        # 注意：qtbase 属默认安装内容不能作为 -m 模块名；qtcharts 为 Eden 必需
-        if: ${{ matrix.emu == 'dolphin' || matrix.emu == 'eden' }}
-        shell: pwsh
-        run: |
-          pip install aqtinstall
-          aqt install-qt windows desktop 6.7.0 win64_msvc2019_64 -O C:\Qt -m qttools qtcharts
-          "CMAKE_PREFIX_PATH=C:\Qt\6.7.0\msvc2019_64" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "PATH=C:\Qt\6.7.0\msvc2019_64\bin;$env:PATH" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+        # ★v1.2.2：改用 install-qt-action（内嵌锁定的 aqtinstall，稳定），
+        #   Qt 6.8.3 LTS + msvc2022；模块补 qtsvg（Dolphin 必需 Svg）与
+        #   qtcharts（Eden 必需 Charts）—— 旧命令 -m qttools qtcharts 缺 qtsvg
+        if: ${{ matrix.emu != 'cemu' }}
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtsvg qttools qtcharts'
+          dir: 'C:/Qt'
+          cache: 'false'
 
-      - name: Build emulator (Windows)
-        id: build
-        continue-on-error: true
-        shell: pwsh
-        run: powershell -File scripts\build_emulators.ps1 -Target ${{ matrix.emu }} -Jobs 3
+      - name: vcpkg binary cache (cemu)
+        if: ${{ matrix.emu == 'cemu' }}
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-binary
+          key: vcpkg-bin-cemu-win-x64-${{ hashFiles('emulators/cemu/vcpkg.json') }}
+
+      - name: Build emulator
+        # shell:bash = Windows runner 自带 Git Bash；构建脚本全平台统一
+        shell: bash
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-binary
+          EDEN_FORCE_SYSTEM: "OFF"
+        run: |
+          set -o pipefail
+          set -eux
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          # install-qt-action 布局：<dir>/<version>/<arch>；同时导出给
+          # cmake（CMAKE_PREFIX_PATH）与 build_emulators.sh（QT_DIR → Eden）
+          if [ "${{ matrix.emu }}" != "cemu" ]; then
+            export CMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64"
+            export QT_DIR="C:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6"
+            ls "C:/Qt/6.8.3/msvc2022_64/bin/qmake.exe" >/dev/null   # 布局自检
+          fi
+          bash scripts/build_emulators.sh ${{ matrix.emu }} 3 2>&1 | tee build_${{ matrix.emu }}.log
 
       - name: Write status
         if: always()
@@ -513,15 +638,16 @@ jobs:
           case "${{ matrix.emu }}" in
             dolphin) [ -n "$(find "$OUT" -type f \( -name 'Dolphin.exe' -o -name 'dolphin-emu' \) 2>/dev/null)" ] && BIN_OK=1 ;;
             cemu)    [ -n "$(find "$OUT" -type f \( -name 'Cemu.exe'  -o -name 'Cemu' \) 2>/dev/null)" ] && BIN_OK=1 ;;
-            eden)    [ -n "$(find "$OUT" -type f \( -name 'eden.exe'  -o -name 'eden' -o -name 'Eden.exe' \) 2>/dev/null)" ] && BIN_OK=1 ;;
+            eden)    [ -n "$(find "$OUT" -type f \( -name 'eden.exe'  -o -name 'eden' \) 2>/dev/null)" ] && BIN_OK=1 ;;
           esac
           if [ "$BIN_OK" = "1" ]; then
             echo "ok" > dist/_status.txt
             echo "构建成功" >> dist/_status.txt
           else
-            echo "failed: 产物二进制未生成（详见构建日志）" > dist/_status.txt
+            echo "failed: 产物二进制未生成" > dist/_status.txt
           fi
           cat dist/_status.txt
+          tail -n 400 "build_${{ matrix.emu }}.log" > dist/_build_tail.log 2>/dev/null || true
           find dist -maxdepth 3 -type d || true
 
       - name: Trim dist (only this emulator)
@@ -543,19 +669,21 @@ jobs:
   # ==========================================================================
   # 打包合并：前端本体 + 三大模拟器 → 最终发行包
   #   linux-x64   → NesStation-linux-x64-full.tar.gz
-  #   linux-arm64 → nesstation_1.2.1_arm64_full.deb（注入 /opt/nesstation/emulators）
+  #   linux-arm64 → nesstation_1.2.2_arm64_full.deb（注入 /opt/nesstation/emulators）
   #   windows-x64 → NesStation-windows-x64-full.zip
   # 某模拟器状态为 failed / 缺失时自动跳过该模拟器，其余照常打包；
-  # needs 里 emu-build-* 为 skipped（with_emulators=false）时本作业一并跳过。
+  # needs 里 emu-* 为 skipped（with_emulators=false）时本作业一并跳过。
   # ==========================================================================
   bundle-linux-x64:
     name: Bundle Linux x64 (+emulators)
-    needs: [linux-x64, emu-build-linux-x64]
+    needs: [linux-x64, emu-dolphin-eden-linux-x64, emu-cemu-linux-x64]
     if: ${{ !cancelled() &&
             needs.linux-x64.result == 'success' &&
-            needs.emu-build-linux-x64.result != 'skipped' &&
+            needs.emu-dolphin-eden-linux-x64.result != 'skipped' &&
+            needs.emu-cemu-linux-x64.result != 'skipped' &&
             (github.event.inputs.target == 'all' || github.event.inputs.target == 'linux-x64') }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v4
         with: { name: NesStation-linux-x64, path: app }
@@ -583,6 +711,7 @@ jobs:
               INCLUDED="$INCLUDED $e"
             else
               echo "::warning::linux-x64 模拟器 $e 未成功构建，发行包跳过"
+              [ -f "emu/$e/_build_tail.log" ] && tail -n 20 "emu/$e/_build_tail.log" || true
             fi
           done
           # artifact 中转会丢失可执行位：恢复模拟器可执行文件权限
@@ -600,12 +729,13 @@ jobs:
 
   bundle-linux-arm64:
     name: Bundle Linux arm64 deb (+emulators)
-    needs: [linux-arm64, emu-build-linux-arm64]
+    needs: [linux-arm64, emu-dolphin-eden-linux-arm64]
     if: ${{ !cancelled() &&
             needs.linux-arm64.result == 'success' &&
-            needs.emu-build-linux-arm64.result != 'skipped' &&
+            needs.emu-dolphin-eden-linux-arm64.result != 'skipped' &&
             (github.event.inputs.target == 'all' || github.event.inputs.target == 'linux-arm64') }}
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v4
         with: { name: NesStation-linux-arm64-deb, path: appdeb }
@@ -633,6 +763,7 @@ jobs:
               INCLUDED="$INCLUDED $e"
             else
               echo "::warning::linux-arm64 模拟器 $e 未成功构建，发行包跳过"
+              [ -f "emu/$e/_build_tail.log" ] && tail -n 20 "emu/$e/_build_tail.log" || true
             fi
           done
           # Cemu 上游仅 x86_64：ARM64 设备提示经 box64 运行 x64 包
@@ -644,8 +775,8 @@ jobs:
           # 运行库提示（可选安装）
           cat > ex/opt/nesstation/模拟器依赖.txt <<'EOF'
           内置模拟器为系统库动态链接，缺失时按需安装：
-            Dolphin: sudo apt install libqt6widgets6 libqt6gui6 libqt6core6 libqt6dbus6 libqt6charts6 libpulse0 libasound2t64
-            Eden:    sudo apt install libboost-locale1.74+ libfmt9 liblz4-1 libopus0 libzstd1 zlib1g
+            Dolphin: sudo apt install libqt6widgets6 libqt6gui6 libqt6core6 libqt6dbus6 libqt6svg6 libqt6charts6 libpulse0 libasound2t64
+            Eden:    sudo apt install libboost-locale1.74+ libfmt9 liblz4-1 libopus0 libzstd1 zlib1g libvulkan1
           EOF
           # 重算 md5sums + 权限
           cd ex && find . -type f ! -path "./DEBIAN/*" -exec md5sum {} \; \
@@ -674,12 +805,13 @@ jobs:
 
   bundle-windows-x64:
     name: Bundle Windows x64 (+emulators)
-    needs: [windows-x64, emu-build-windows-x64]
+    needs: [windows-x64, emu-windows-x64]
     if: ${{ !cancelled() &&
             needs.windows-x64.result == 'success' &&
-            needs.emu-build-windows-x64.result != 'skipped' &&
+            needs.emu-windows-x64.result != 'skipped' &&
             (github.event.inputs.target == 'all' || github.event.inputs.target == 'windows-x64') }}
     runs-on: windows-2022
+    timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v4
         with: { name: NesStation-windows-x64, path: app }
@@ -709,6 +841,7 @@ jobs:
               $included += $e
             } else {
               Write-Output "::warning::windows-x64 模拟器 $e 未成功构建，发行包跳过"
+              if (Test-Path "emu/$e/_build_tail.log") { Get-Content "emu/$e/_build_tail.log" -Tail 20 }
             }
           }
           if ($included.Count -eq 0) { throw "没有任何模拟器构建成功" }

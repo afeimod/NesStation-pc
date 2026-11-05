@@ -122,15 +122,25 @@ int main() {
   assert(ex.find("ishiiruka") != nullptr);
   printf("  ✓ 键名 = ishiiruka（旧 dolphin 由 App 启动时映射）\n");
 
-  // 7b) 超级构建产物目录：emulators/dolphin/dolphin-emu（exeDir = 测试程序所在 /tmp）
-  fsutil::makeDirs("/tmp/emulators/dolphin");
-  { FILE* f = fopen("/tmp/emulators/dolphin/dolphin-emu", "w"); fputs("x", f); fclose(f); }
-  ex.reDetect("ishiiruka");
-  assert(ex.available("ishiiruka"));
-  assert(ex.available(GamePlatform::NGCWII));
-  printf("  ✓ 超级构建目录探测：ishiiruka → %s\n",
-         ex.find("ishiiruka")->foundPath.c_str());
-  fsutil::removeFile("/tmp/emulators/dolphin/dolphin-emu");
+  // 7b) 超级构建产物目录：exe 同目录 emulators/dolphin/dolphin-emu
+  //     ★路径无关：exeDir() 取测试程序实际所在目录（CI 编译到 ./smoke/ 下同样成立；
+  //     旧版硬编码 /tmp/emulators —— 二进制不在 /tmp 时探测必失败，CI 134 崩溃根因）
+  {
+    const std::string emuRoot =
+        fsutil::join(fsutil::exeDir(), "emulators");
+    const std::string dolDir = fsutil::join(emuRoot, "dolphin");
+    const std::string fakeBin = fsutil::join(dolDir, "dolphin-emu");
+    fsutil::makeDirs(dolDir);
+    { FILE* f = fopen(fakeBin.c_str(), "w"); fputs("x", f); fclose(f); }
+    ex.reDetect("ishiiruka");
+    assert(ex.available("ishiiruka"));
+    assert(ex.available(GamePlatform::NGCWII));
+    printf("  ✓ 超级构建目录探测：ishiiruka → %s\n",
+           ex.find("ishiiruka")->foundPath.c_str());
+    fsutil::removeFile(fakeBin);
+    ex.reDetect("ishiiruka");
+    assert(!ex.available("ishiiruka"));
+  }
 
   // 7) 状态文本中文
   const std::string st = ex.statusText(GamePlatform::NGCWII);

@@ -326,14 +326,16 @@ class NeonHome : public Scene {
       app.font.drawVCentered(app.sdlRenderer(), brand, badge.x + 10, badge.cy(), 15,
                              sk.bgDeep, true);
       // ★版本徽章（紧贴品牌右侧）：一眼确认所跑构建 —— 旧版无此元素
+      // v1.2.2：textDim → text（用户反馈整体发暗看不清）
       app.font.draw(app.sdlRenderer(), appVersionText(), badge.right() + 14, by + 8, 12,
-                    sk.textDim, true);
+                    sk.text, true);
       const std::string count = std::to_string(games_.size()) + " GAMES";
       const float cw = app.font.textWidth(count, 12, true);
       const std::string tm = clockText();
       const float tw = app.font.textWidth(tm, 15, true);
+      // v1.2.2：计数与版本从 textDim 提亮到 textHi（深底上可读性优先）
       app.font.draw(app.sdlRenderer(), count, d.W - 28 - tw - 20 - cw, by + 8, 12,
-                    sk.textDim, true);
+                    sk.textHi, true);
       app.font.draw(app.sdlRenderer(), tm, d.W - 28 - tw, by + 6, 15, sk.accent, true);
     }
 
@@ -372,8 +374,9 @@ class NeonHome : public Scene {
           d.chamferRect(rc, rc.minDim() * 0.4f, sk.bgPanel);
         }
         w::icon(app, chips[i].iconId, Rect(rc.x + 10, rc.cy() - 8, 16, 16), chips[i].col);
-        app.font.drawVCentered(app.sdlRenderer(), chips[i].label, rc.x + 32, rc.cy(), 13,
-                               sk.text, true);
+        // v1.2.2：chip 文字 text → textHi + 13→14（深底低对比“发暗看不清”修复）
+        app.font.drawVCentered(app.sdlRenderer(), chips[i].label, rc.x + 32, rc.cy(), 14,
+                               sk.textHi, true);
         x += rc.w + 10;
       }
     }
@@ -502,9 +505,10 @@ class NeonHome : public Scene {
                     (float)d.W / 2 - app.font.textWidth("还没有游戏", 20, true) / 2,
                     cy + 4, 20, sk.textHi, true);
       const std::string tip = "去游戏库导入 ROM 开始游玩";
+      // v1.2.2：提示文字 textDim → text（空库引导也要看得清）
       app.font.draw(app.sdlRenderer(), tip,
                     (float)d.W / 2 - app.font.textWidth(tip, 13) / 2, cy + 36, 13,
-                    sk.textDim);
+                    sk.text);
       const Rect goRc((float)d.W / 2 - 100, cy + 72, 200, 44);
       if (w::primaryButton(app, goRc, "进入游戏库", 12)) {
         app.pushScene(createLibraryScene(-1));
