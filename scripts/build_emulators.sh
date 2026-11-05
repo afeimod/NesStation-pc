@@ -146,6 +146,15 @@ build_cemu() {
   # vcpkg x64-linux triplet 为动态链接时，把依赖 .so 一并拷到 Cemu 旁边
   find build/cemu/vcpkg_installed -name '*.so*' -type f \
     -exec cp {} "$OUT/cemu/" \; 2>/dev/null || true
+  # ★v1.2.4：便携化 rpath —— vcpkg 动态库默认带构建机绝对路径的 RPATH，
+  #   拷到用户机器上会找不到库；统一改 $ORIGIN（与 exe 同目录即加载）
+  if [ "$WINDOWS" != "1" ] && command -v patchelf >/dev/null 2>&1; then
+    for f in "$OUT/cemu/Cemu" "$OUT/cemu"/*.so*; do
+      [ -f "$f" ] || continue
+      patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+    done
+    echo "（rpath 已统一为 \$ORIGIN）"
+  fi
   echo "✓ Cemu → $OUT/cemu"
 }
 

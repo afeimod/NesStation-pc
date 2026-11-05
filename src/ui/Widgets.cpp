@@ -539,6 +539,8 @@ void icon(App& app, int id, const Rect& rc, Color8 c) {
     case 19: iconArrowLeft(app, rc, c); break;
     case 20: iconRefresh(app, rc, c); break;
     case 21: iconPercent(app, rc, c); break;
+    case 22: iconGlobe(app, rc, c); break;
+    case 23: iconBolt(app, rc, c); break;
     default: break;
   }
 }
@@ -811,6 +813,47 @@ void iconRefresh(App& app, const Rect& rc, Color8 c) {  // 刷新
   }
   d.line(cx + R * 0.5f, cy - R * 0.72f, cx + R * 0.9f, cy - R * 1.0f, c, 2.2f);
   d.line(cx + R * 0.5f, cy - R * 0.72f, cx + R * 0.12f, cy - R * 1.0f, c, 2.2f);
+}
+
+void iconGlobe(App& app, const Rect& rc, Color8 c) {  // 在线游戏（地球）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), cy = rc.cy();
+  const float R = rc.minDim() * 0.38f;
+  const int segs = 22;
+  for (int i = 0; i < segs; i++) {  // 外圆
+    const float a0 = (float)i / segs * 6.2831853f;
+    const float a1 = (float)(i + 1) / segs * 6.2831853f + 0.03f;
+    d.line(cx + std::cos(a0) * R, cy + std::sin(a0) * R, cx + std::cos(a1) * R,
+           cy + std::sin(a1) * R, c, 2.2f);
+  }
+  d.line(cx - R, cy, cx + R, cy, c, 1.8f);                       // 赤道
+  d.line(cx, cy - R, cx, cy + R, c, 1.8f);                       // 经线
+  for (int i = 0; i < segs; i++) {  // 两条回纬线（扁椭圆近似）
+    const float t0 = (float)i / segs * 6.2831853f;
+    const float t1 = (float)(i + 1) / segs * 6.2831853f + 0.03f;
+    d.line(cx + std::cos(t0) * R, cy + std::sin(t0) * R * 0.45f - R * 0.45f,
+           cx + std::cos(t1) * R, cy + std::sin(t1) * R * 0.45f - R * 0.45f, c, 1.6f);
+    d.line(cx + std::cos(t0) * R, cy + std::sin(t0) * R * 0.45f + R * 0.45f,
+           cx + std::cos(t1) * R, cy + std::sin(t1) * R * 0.45f + R * 0.45f, c, 1.6f);
+  }
+}
+
+void iconBolt(App& app, const Rect& rc, Color8 c) {  // SWF（闪电）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), cy = rc.cy();
+  const float s = rc.minDim() * 0.42f;
+  // 六边形闪电（Material Bolt 路径近似）
+  const float px[7] = {cx + s * 0.18f, cx - s * 0.42f, cx + s * 0.06f,
+                       cx - s * 0.06f, cx + s * 0.42f, cx - s * 0.18f,
+                       cx + s * 0.18f};
+  const float py[7] = {cy - s,        cy - s * 0.08f,  cy - s * 0.08f,
+                       cy + s * 0.08f, cy + s * 0.08f,  cy + s,
+                       cy - s};
+  d.line(px[0], py[0], px[1], py[1], c, 2.6f);
+  d.line(px[1], py[1], px[2], py[2], c, 2.6f);
+  d.line(px[2], py[2], px[4], py[4], c, 2.6f);
+  d.line(px[4], py[4], px[5], py[5], c, 2.6f);
+  d.line(px[5], py[5], px[6], py[6], c, 2.6f);
 }
 
 // —— 平台徽章（Android PlatformBadge）——

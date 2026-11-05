@@ -28,7 +28,7 @@ class EmuRunner;
 
 // —— 版本号（CMake 注入；本地直编 g++ 时回退）——
 #ifndef NESSTATION_VERSION
-#define NESSTATION_VERSION "1.2.2"
+#define NESSTATION_VERSION "1.2.4"
 #endif
 inline const char* appVersionText() { return "v" NESSTATION_VERSION; }
 
@@ -123,6 +123,7 @@ class App {
 
  private:
   bool init();
+  bool initFontChain();   // 系统字体选链（v1.2.4：不随包附带字体）
   void shutdown();
   void pumpEvents();
   void frame();

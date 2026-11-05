@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(NesStation VERSION 1.2.2 LANGUAGES C CXX
+project(NesStation VERSION 1.2.4 LANGUAGES C CXX
         DESCRIPTION "NesStation PC - Multi-platform retro game station for Windows/Linux")
 
 # ---------------------------------------------------------------------------
@@ -110,18 +110,18 @@ if(NESSTATION_FETCH_CORES)
   endif()
 endif()
 
-# Embed resources: fonts + app icon
+# Embed resources: app icon
 
 # ---------------------------------------------------------------------------
 # Install / package layout (portable)
+# ★v1.2.4：不再随包附带字体（用户可选放 exe 旁 assets/fonts/ 自备），
+#   运行时自动选系统字体（App::initFontChain）
 # ---------------------------------------------------------------------------
 if(WIN32)
   set(NESSTATION_EXE_DIR ${CMAKE_BINARY_DIR}/bin)
   install(TARGETS nesstation RUNTIME DESTINATION .)
-  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts DESTINATION assets)
 else()
   install(TARGETS nesstation RUNTIME DESTINATION bin)
-  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts DESTINATION share/nesstation/assets)
 endif()
 
 # ---------------------------------------------------------------------------

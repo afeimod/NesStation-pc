@@ -8,6 +8,27 @@ C++17 + SDL2 单二进制原生实现，libretro 核心进程内加载（RetroAr
 
 ---
 
+## 📦 v1.2.3 更新（2026-11-05）
+
+**修复（对照用户提供的完整 CI 日志，4 个根因全部实证）**
+
+| 问题 | 根因（日志原文） | 修复 |
+| --- | --- | --- |
+| dolphin/eden · linux 四个 job 秒退（退出码 2） | debian:12 容器默认 shell 是 dash：`set: Illegal option -o pipefail` | 容器 job 统一 `defaults.run.shell: bash -e {0}` |
+| dolphin/eden · windows Qt6 安装失败 | Qt 6.8 起基础包已内置 qtsvg/qttools，再请求即 `packages not found`（aqt 实测镜像核实） | `modules: qtcharts`（唯一真正以模块形式存在的依赖） |
+| cemu · windows openssl 失败 | msys2 镜像已删旧版 `pkgconf 1~2.2.0-1`（全部 404） | `choco pkgconfiglite` + `PKG_CONFIG` 环境变量（vcpkg 官方逃生口），彻底绕开 msys |
+| cemu · linux cubeb 配置失败 | 内置 cubeb 快照缺嵌套子模块 sanitizers-cmake | 子模块内容完整内置进仓库（离线可用） |
+
+**主页 UI 按参考 APK 源码逐行重制**（NeonHomeScreen/NeonFlow/NeonComponents 1:1）：
+顶部品牌条 + 九枚彩色 chip（游戏库/收藏/最近/在线游戏/对战平台/SWF/设置/关于/退出）、
+弧形导轨 3D 封面流（±34° 透视/逐级缩放变暗下沉/倒影渐隐/选中辉光浮起/拖拽跟手）、
+右侧 300dp 信息面板（PS5 风格）、底部 A/Y/X 提示胶囊、封面背景 420ms 淡入淡出；
+封面卡按显示尺寸 1.5× 动态烘焙（大窗口不再发糊）。
+
+**添加目录闪退根因修复**：nlohmann::json `dump()` 遇非法 UTF-8 文件名抛异常
+（安卓存储常见 GBK 文件名）→ 入库跳过 + dump 全改 replace 处理器 + 目录名校验；
+同步扫描改后台线程 + 分帧合入（每帧 400 个）；单次扫描上限 20000 文件防 OOM。
+
 ## 📦 v1.2.1 更新（2026-11-04）
 
 **修复（用户反馈）**
@@ -293,7 +314,7 @@ NesStation-PC/
 │   ├── ui/                     # 双主题 / 字体 / 控件 / 各场景
 │   └── util/                   # 日志 / 文件系统
 ├── third_party/                # stb · nlohmann/json · libretro.h（全部单头内嵌）
-├── assets/fonts/               # Noto Sans SC（中文字体内嵌分发）
+├── assets/fonts/               # （v1.2.4 起不随包分发；运行时选系统字体，此处可放自备字体）
 ├── scripts/                    # build.sh/.bat（构建后自动下核心）· fetch_cores.sh/.ps1（架构自适应+回退链）· seed_selftest.py（无头测试数据）
 ├── tests/smoke_libretro.cpp    # 真实核心链路冒烟测试
 └── .github/workflows/build.yml # CI（手动触发：linux-x64 / linux-arm64(deb) / windows-x64）

@@ -87,6 +87,25 @@ bool FontCache::load(const std::string& regularTtf, const std::string& boldTtf) 
     fclose(f);
     return rd == out->size();
   };
+  // ★TTC 集合支持：系统字体常见 .ttc（msyh.ttc / NotoSansCJK-*.ttc / simsun.ttc），
+  //   stbtt_InitFont 的 offset 参数必须传 stbtt_GetFontOffsetForIndex(data, 0)
+  //   的返回值（普通 .ttf 时为 0），直接传 0 解析 .ttc 必失败。
+  auto initFont = [](void** slot, const std::vector<uint8_t>& data) -> bool {
+    if (*slot) {
+      delete reinterpret_cast<stbtt_fontinfo*>(*slot);
+      *slot = nullptr;
+    }
+    if (data.empty()) return false;
+    const int offset = stbtt_GetFontOffsetForIndex(data.data(), 0);
+    if (offset < 0) return false;
+    auto* info = new stbtt_fontinfo();
+    if (stbtt_InitFont(info, data.data(), offset) == 0) {
+      delete info;
+      return false;
+    }
+    *slot = info;
+    return true;
+  };
 
   regData_.clear();
   boldData_.clear();
@@ -94,30 +113,30 @@ bool FontCache::load(const std::string& regularTtf, const std::string& boldTtf) 
     LOGE("字体加载失败：%s", regularTtf.c_str());
     return false;
   }
-  if (regFont_) delete reinterpret_cast<stbtt_fontinfo*>(regFont_);
-  auto* reg = new stbtt_fontinfo();
-  if (stbtt_InitFont(reg, regData_.data(), 0) == 0) {
-    LOGE("stbtt_InitFont 失败（regular）");
-    delete reg;
+  if (!initFont(&regFont_, regData_)) {
+    LOGE("stbtt_InitFont 失败（regular）：%s", regularTtf.c_str());
     return false;
   }
-  regFont_ = reg;
 
-  if (!boldTtf.empty() && loadFile(boldTtf, &boldData_)) {
-    if (boldFont_) delete reinterpret_cast<stbtt_fontinfo*>(boldFont_);
-    auto* bold = new stbtt_fontinfo();
-    if (stbtt_InitFont(bold, boldData_.data(), 0) != 0) {
-      boldFont_ = bold;
-    } else {
-      delete bold;
+  if (!boldTtf.empty() && boldTtf != regularTtf && loadFile(boldTtf, &boldData_)) {
+    if (!initFont(&boldFont_, boldData_)) {
+      boldData_.clear();
       boldFont_ = nullptr;
       LOGW("粗体初始化失败，回退常规体");
     }
   } else {
+    // 粗体路径缺失或与常规体相同：直接复用常规体数据（免二次读盘）
     LOGW("粗体缺失，回退常规体：%s", boldTtf.c_str());
   }
-  LOGI("字体就绪（regular %zu 字节）", regData_.size());
+  LOGI("字体就绪：%s（regular %zu 字节）", regularTtf.c_str(), regData_.size());
   return true;
+}
+
+bool FontCache::hasCodepoint(uint32_t cp) const {
+  const stbtt_fontinfo* font =
+      reinterpret_cast<const stbtt_fontinfo*>(regFont_);
+  if (!font) return false;
+  return stbtt_FindGlyphIndex(const_cast<stbtt_fontinfo*>(font), cp) != 0;
 }
 
 FontCache::Atlas& FontCache::atlasFor(float size, bool bold) {

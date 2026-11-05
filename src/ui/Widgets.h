@@ -109,6 +109,8 @@ void iconLogout(App& app, const Rect& rc, Color8 c);      // 退出
 void iconArrowLeft(App& app, const Rect& rc, Color8 c);   // 返回
 void iconRefresh(App& app, const Rect& rc, Color8 c);     // 刷新
 void iconPercent(App& app, const Rect& rc, Color8 c);     // 百分比（性能）
+void iconGlobe(App& app, const Rect& rc, Color8 c);       // 在线游戏（Public 地球）
+void iconBolt(App& app, const Rect& rc, Color8 c);        // SWF（Bolt 闪电）
 
 // 封面卡片（面板 + 封面/占位 + 收藏角标）
 void coverCard(App& app, const Rect& rc, const GameEntry& g, bool selected);

@@ -17,6 +17,9 @@ class FontCache {
 
   bool load(const std::string& regularTtf, const std::string& boldTtf);
 
+  // 字体是否包含某码点字形（App 字体选链用：校验中文字形 U+4E2D）
+  bool hasCodepoint(uint32_t cp) const;
+
   // 绘制一行 UTF-8 文本（左上角锚点），返回文本宽度
   float draw(SDL_Renderer* r, const std::string& utf8, float x, float y, float size,
              Color8 color, bool bold = false);

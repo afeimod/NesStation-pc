@@ -184,11 +184,21 @@ class LibraryScene : public Scene {
     req.startDir = app.library.romDirs().empty() ? fsutil::homeDir()
                                                  : app.library.romDirs().back();
     req.onPick = [&app](const std::string& dir) {
-      app.library.addRomDir(dir);
-      const int n = app.library.scanDirectory(dir, GamePlatform::NES, false,
-                                              app.config.scanRecursive);
+      // ★v1.2.3 防闪退三重修复：
+      //  ① 同步扫描整块存储会卡死界面数分钟（手机上像闪退）→ 改后台线程扫描
+      //  ② 非法 UTF-8 目录名不再入库（json dump 会抛异常）
+      //  ③ 扫描中不重复启动（避免 joinScanThread 卡 UI）
+      if (!app.library.addRomDir(dir)) {
+        app.toast("该目录已在扫描列表中（或目录名含不支持的字符）");
+        return;
+      }
       app.library.save();
-      app.toast("已添加目录，本次扫描新增 " + std::to_string(n) + " 个游戏");
+      if (app.library.scanRunning()) {
+        app.toast("已添加目录，当前扫描完成后自动纳入下次扫描");
+      } else {
+        app.library.startBackgroundRescan(app.config.scanRecursive);
+        app.toast("已添加目录，正在后台扫描…");
+      }
     };
     app.pushScene(createFileBrowser(req));
   }

@@ -127,6 +127,34 @@ uint64_t fileSize(const std::string& path) {
   return ec ? 0 : (uint64_t)sz;
 }
 
+// ★UTF-8 合法性校验（严格 RFC 3629：拒超长/代理区/孤立连续字节）
+bool isValidUtf8(const std::string& s) {
+  const auto* p = (const unsigned char*)s.data();
+  const size_t n = s.size();
+  size_t i = 0;
+  while (i < n) {
+    const unsigned char c = p[i];
+    int len; unsigned int cp;
+    if (c < 0x80) { i++; continue; }
+    else if ((c & 0xE0) == 0xC0) { len = 2; cp = c & 0x1F; }
+    else if ((c & 0xF0) == 0xE0) { len = 3; cp = c & 0x0F; }
+    else if ((c & 0xF8) == 0xF0) { len = 4; cp = c & 0x07; }
+    else return false;  // 0x80-0xBF 孤立连续字节 / 0xF8+
+    if (i + (size_t)len > n) return false;  // 截断
+    for (int k = 1; k < len; k++) {
+      if ((p[i + k] & 0xC0) != 0x80) return false;
+      cp = (cp << 6) | (p[i + k] & 0x3F);
+    }
+    if (len == 2 && cp < 0x80) return false;           // 超长编码
+    if (len == 3 && cp < 0x800) return false;
+    if (len == 4 && cp < 0x10000) return false;
+    if (cp > 0x10FFFF) return false;
+    if (cp >= 0xD800 && cp <= 0xDFFF) return false;    // 代理区
+    i += (size_t)len;
+  }
+  return true;
+}
+
 std::vector<DirEntry> listDir(const std::string& dir) {
   std::vector<DirEntry> out;
 #ifdef _WIN32
@@ -198,9 +226,12 @@ void walkFiles(const std::string& dir, std::vector<std::string>* out, int maxDep
 }
 
 // 带符号链接环去重的内部实现（dev+ino 记录已访问目录）
+// ★单次扫描文件数上限：防手机/PRoot 环境扫到整块内部存储时内存燎炸
+constexpr size_t kMaxWalkFiles = 20000;
 void walkFilesImpl(const std::string& dir, std::vector<std::string>* out, int maxDepth,
                    int depth, std::set<std::pair<uint64_t, uint64_t>>* visitedOuter) {
   if (depth > maxDepth) return;
+  if (out && out->size() >= kMaxWalkFiles) return;  // 超限即停（防 OOM）
   std::set<std::pair<uint64_t, uint64_t>> local;
   std::set<std::pair<uint64_t, uint64_t>>& visited = visitedOuter ? *visitedOuter : local;
 #ifndef _WIN32
@@ -214,6 +245,7 @@ void walkFilesImpl(const std::string& dir, std::vector<std::string>* out, int ma
   }
 #endif
   for (const auto& e : listDir(dir)) {
+    if (out && out->size() >= kMaxWalkFiles) return;  // 超限即停
     if (e.isDir) {
       try {
         walkFilesImpl(e.fullPath, out, maxDepth, depth + 1, &visited);

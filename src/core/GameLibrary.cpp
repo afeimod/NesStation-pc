@@ -156,7 +156,9 @@ void GameLibrary::save() {
     j["games"].push_back(std::move(g));
   }
   j["romDirs"] = romDirs_;
-  const std::string text = j.dump(2);
+  // ★error_handler=replace：非法 UTF-8 字节替换为 U+FFFD 而非抛异常
+  //   （防御第二层：即使上层漏拦，保存也绝不闪退）
+  const std::string text = j.dump(2, ' ', false, json::error_handler_t::replace);
   if (!fsutil::writeFile(libraryFile_, text)) LOGW("library.json 写入失败");
 }
 
@@ -174,6 +176,13 @@ const GameEntry* GameLibrary::find(const std::string& id) const {
 bool GameLibrary::addRom(const std::string& romPath, GamePlatform platformHint,
                          bool useHint) {
   if (!fsutil::isFile(romPath)) return false;
+  // ★非 UTF-8 文件名直接跳过（nlohmann::json dump() 遇非法 UTF-8 会抛异常
+  //   ——「添加目录后闪退」的真正根因；且此类文件名在界面上也只能显示乱码。
+  //   安卓存储里从 Windows 拷来的 GBK 编码文件名很常见）
+  if (!fsutil::isValidUtf8(romPath)) {
+    LOGW("跳过非 UTF-8 文件名（无法入库）：%s", romPath.c_str());
+    return false;
+  }
   const std::string id = gameIdForPath(romPath);
   if (find(id)) return false;  // 已在库中
   const std::string ext = fsutil::extOf(romPath);
@@ -282,6 +291,9 @@ size_t GameLibrary::pendingScanCount() const {
 }
 
 // 主线程调用：把后台枚举到的候选文件合入库（去重 + 平台嗅探在此进行）
+// ★分帧合入：单次最多处理 kDrainBatch 个 —— 后台扫描一次带回上万文件时，
+//   一帧内全部 addRom 会卡住界面数秒（手机上像死机）；分批后每帧几百个，
+//   界面全程流畅，剩余部分下一帧继续合入
 int GameLibrary::drainPendingScan() {
   std::vector<std::string> batch;
   {
@@ -289,12 +301,18 @@ int GameLibrary::drainPendingScan() {
     batch.swap(pendingScan_);
   }
   if (batch.empty()) return 0;
+  constexpr size_t kDrainBatch = 400;
+  const size_t n = std::min(batch.size(), kDrainBatch);
   int added = 0;
-  for (const auto& path : batch) {
+  for (size_t i = 0; i < n; i++) {
     try {
-      if (addRom(path, GamePlatform::NES, false)) added++;
+      if (addRom(batch[i], GamePlatform::NES, false)) added++;
     } catch (...) {
     }
+  }
+  if (batch.size() > n) {  // 剩余回队，下一帧继续（保持原顺序）
+    std::lock_guard<std::mutex> lk(scanMu_);
+    pendingScan_.insert(pendingScan_.begin(), batch.begin() + (long)n, batch.end());
   }
   lastScanAdded_.store(added);
   return added;
@@ -357,9 +375,14 @@ int GameLibrary::countFor(GamePlatform p) const {
   return n;
 }
 
-void GameLibrary::addRomDir(const std::string& dir) {
-  if (std::find(romDirs_.begin(), romDirs_.end(), dir) == romDirs_.end())
+// ★返回 true=新增目录；false=已存在或非法 UTF-8 目录名（调用方提示）
+bool GameLibrary::addRomDir(const std::string& dir) {
+  if (!fsutil::isValidUtf8(dir)) return false;
+  if (std::find(romDirs_.begin(), romDirs_.end(), dir) == romDirs_.end()) {
     romDirs_.push_back(dir);
+    return true;
+  }
+  return false;
 }
 
 void GameLibrary::removeRomDir(const std::string& dir) {

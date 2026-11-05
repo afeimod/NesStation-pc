@@ -34,8 +34,15 @@ uint64_t fileSize(const std::string& path);
 std::vector<DirEntry> listDir(const std::string& dir); // 名称排序，目录优先
 std::vector<std::string> listFilesRecursive(const std::string& dir);
 
+// ★字符串是否为合法 UTF-8（非法字节的文件名/目录名直接跳过：
+//   ① nlohmann::json dump() 遇非法 UTF-8 会抛异常（添加目录后保存即闪退
+//   的真正根因）② 界面显示也是乱码。安卓存储里 GBK 编码文件名很常见）
+bool isValidUtf8(const std::string& s);
+
 // 递归收集 romPath 指定目录下所有文件
-// 深度上限 32（覆盖深层 ROM 整理目录）；符号链接环按 dev+inode 去重剪枝
+// 深度上限 32（覆盖深层 ROM 整理目录）；符号链接环按 dev+inode 去重剪枝；
+// ★单次收集上限 kMaxWalkFiles 个文件（手机/PRoot 环境扫到整块内部存储时
+//   防止内存燎炸与无限等待 —— 超限即停止，已收集的照常入库）
 void walkFiles(const std::string& dir, std::vector<std::string>* out,
                int maxDepth = 32, int depth = 0);
 

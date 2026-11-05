@@ -82,7 +82,7 @@ class GameLibrary {
 
   // ROM 目录（设置页管理）
   const std::vector<std::string>& romDirs() const { return romDirs_; }
-  void addRomDir(const std::string& dir);
+  bool addRomDir(const std::string& dir);  // true=新增；false=已存在/非法UTF-8名
   void removeRomDir(const std::string& dir);
 
   const std::string& coverDir() const { return coverDir_; }

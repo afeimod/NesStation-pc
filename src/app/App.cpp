@@ -1,7 +1,9 @@
 #include "app/App.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 #include <stb_image.h>
 
@@ -82,11 +84,176 @@ void Config::save(const std::string& file) const {
     pm[port == 0 ? "p0" : "p1"] = arr;
   }
   j["padMapping"] = pm;
-  fsutil::writeFile(file, j.dump(2));
+  // ★replace 处理器：非法 UTF-8 字节替换为 U+FFFD（不抛异常，防退出/保存闪退）
+  fsutil::writeFile(file, j.dump(2, ' ', false, json::error_handler_t::replace));
 }
 
 // —— App ——————————————————————————————————————————————
 App::~App() { shutdown(); }
+
+namespace {
+// 系统字体发现（v1.2.4：不随包附带字体，全部用系统字体；TTC 集合已支持）
+std::string lowerCopy(std::string s) {
+  for (char& c : s) c = (char)tolower((unsigned char)c);
+  return s;
+}
+bool hasExt(const std::string& name) {
+  const std::string e = fsutil::extOf(name);
+  return e == "ttf" || e == "ttc" || e == "otf";
+}
+// Linux：按名字给中文字体打分（分越高越优先）
+int fontScore(const std::string& lowerName) {
+  if (lowerName.find("notosanssc") != std::string::npos ||
+      lowerName.find("notoserifsc") != std::string::npos ||
+      lowerName.find("sourcehansans") != std::string::npos) return 100;
+  if (lowerName.find("notosanscjk") != std::string::npos ||
+      lowerName.find("notoserifcjk") != std::string::npos) return 90;
+  if (lowerName.find("droidsansfallback") != std::string::npos) return 80;
+  if (lowerName.find("wenquanyi") != std::string::npos ||
+      lowerName.find("wqy") != std::string::npos) return 70;
+  if (lowerName.find("misans") != std::string::npos ||
+      lowerName.find("harmonyos") != std::string::npos ||
+      lowerName.find("pingfang") != std::string::npos ||
+      lowerName.find("alibaba") != std::string::npos ||
+      lowerName.find("sourcehanserif") != std::string::npos) return 60;
+  if (lowerName.find("cjk") != std::string::npos) return 50;
+  if (lowerName.find("dejavusans") != std::string::npos ||
+      lowerName.find("liberationsans") != std::string::npos ||
+      lowerName.find("ubuntumono") != std::string::npos ||
+      lowerName.find("ubuntu") != std::string::npos ||
+      lowerName.find("freesans") != std::string::npos) return 30;
+  return 10;
+}
+bool isBoldName(const std::string& lowerStem) {
+  return lowerStem.find("bold") != std::string::npos ||
+         lowerStem.find("-b") != std::string::npos ||
+         lowerStem.find("_b") != std::string::npos ||
+         lowerStem.find("heavy") != std::string::npos;
+}
+}  // namespace
+
+bool App::initFontChain() {
+  // 候选链：环境变量 → 便携 assets/fonts（用户自备）→ 系统字体
+  std::vector<std::pair<std::string, std::string>> candidates;  // (regular, bold)
+
+  // 1) NESSTATION_FONT=/path/font.ttf（自检/高级用户）
+  if (const char* env = getenv("NESSTATION_FONT")) {
+    candidates.emplace_back(env, "");
+  }
+
+  // 2) 运行目录 assets/fonts/：不再随包附带，但保留用户自备字体入口
+  const std::string portableDir = fsutil::join(fsutil::exeDir(), "assets/fonts");
+  std::vector<std::pair<int, std::string>> portable;  // (score, path)
+  if (fsutil::isDir(portableDir)) {
+    for (const auto& e : fsutil::listDir(portableDir)) {
+      if (e.isDir || !hasExt(e.name)) continue;
+      portable.emplace_back(fontScore(lowerCopy(e.name)), e.fullPath);
+    }
+  }
+  std::sort(portable.begin(), portable.end(),
+            [](const auto& a, const auto& b) {
+              return a.first != b.first ? a.first > b.first : a.second < b.second;
+            });
+  {
+    std::string reg, bold;
+    for (const auto& [sc, p] : portable) {
+      const std::string stem = lowerCopy(fsutil::stemOf(p));
+      if (isBoldName(stem)) {
+        if (bold.empty()) bold = p;
+      } else if (reg.empty()) {
+        reg = p;
+      }
+    }
+    if (!reg.empty()) {
+      if (bold.empty()) bold = reg;
+      candidates.emplace_back(reg, bold);
+    }
+  }
+
+#ifdef _WIN32
+  // 3) Windows 系统字体（中文字体优先；msyh/simsun 为 TTC，已支持集合解析）
+  std::vector<std::string> winDirs{"C:/Windows/Fonts"};
+  if (const char* lad = getenv("LOCALAPPDATA"))
+    winDirs.push_back(std::string(lad) + "/Microsoft/Windows/Fonts");
+  static const char* kPairs[][2] = {
+      {"msyh.ttc", "msyhbd.ttc"},    // 微软雅黑（Win7+）
+      {"msyh.ttf", "msyhbd.ttf"},
+      {"deng.ttf", "dengb.ttf"},     // 等线（Win10+）
+      {"simhei.ttf", nullptr},       // 黑体（自带粗体观感）
+      {"simsun.ttc", nullptr},       // 宋体
+      {"simfang.ttf", nullptr}, {"simkai.ttf", nullptr},
+      {"segoeui.ttf", "segoeuib.ttf"},  // 无中文，最后兑底（仅西文）
+  };
+  for (const char* const* pair : kPairs) {
+    for (const std::string& dir : winDirs) {
+      const std::string r = fsutil::join(dir, pair[0]);
+      if (fsutil::isFile(r)) {
+        std::string b = pair[1] ? fsutil::join(dir, pair[1]) : r;
+        if (!fsutil::isFile(b)) b = r;
+        candidates.emplace_back(r, b);
+      }
+    }
+  }
+#else
+  // 3) Linux/macOS：扫描系统字体目录，按中文字体优先级选（含粗体配套）
+  std::vector<std::string> roots{"/usr/share/fonts", "/usr/local/share/fonts",
+                                 "/opt/homebrew/share/fonts"};
+  if (const char* home = getenv("HOME")) {
+    roots.push_back(std::string(home) + "/.local/share/fonts");
+    roots.push_back(std::string(home) + "/.fonts");
+    roots.push_back(std::string(home) + "/Library/Fonts");  // macOS
+  }
+  std::vector<std::pair<int, std::string>> found;  // (score, path)
+  for (const std::string& root : roots) {
+    if (!fsutil::isDir(root)) continue;
+    for (const std::string& p : fsutil::listFilesRecursive(root)) {
+      if (!hasExt(fsutil::baseOf(p))) continue;
+      found.emplace_back(fontScore(lowerCopy(fsutil::baseOf(p))), p);
+    }
+  }
+  std::sort(found.begin(), found.end(),
+            [](const auto& a, const auto& b) {
+              return a.first != b.first ? a.first > b.first : a.second < b.second;
+            });
+  {
+    std::string reg, bold;
+    for (const auto& [sc, p] : found) {
+      const std::string stem = lowerCopy(fsutil::stemOf(p));
+      // 同分才可能配套；避免拿低分字体当粗体
+      if (isBoldName(stem)) {
+        if (bold.empty() && (reg.empty() || sc == fontScore(lowerCopy(fsutil::baseOf(reg))))) {
+          // 记住同族粗体（暂存，等 regular 定了再校验）
+          if (bold.empty()) bold = p;
+        }
+      } else if (reg.empty()) {
+        reg = p;
+        if (!bold.empty() && fontScore(lowerCopy(fsutil::baseOf(bold))) != sc) bold.clear();
+      }
+    }
+    if (!reg.empty()) {
+      if (bold.empty()) bold = reg;
+      candidates.emplace_back(reg, bold);
+    }
+  }
+#endif
+
+  // 逐个尝试：能加载且有中文字形（U+4E2D「中」）即用；全部无中文时退而求其次
+  std::string warnNoCjk;
+  for (const auto& [r, b] : candidates) {
+    if (!font.load(r, b)) continue;
+    if (font.hasCodepoint(0x4E2D)) {
+      LOGI("系统字体选定：%s（粗体 %s）", r.c_str(),
+           (b == r || b.empty()) ? "复用常规体" : b.c_str());
+      return true;
+    }
+    if (warnNoCjk.empty()) warnNoCjk = r;
+  }
+  if (!warnNoCjk.empty()) {
+    LOGW("所有字体均无中文字形，回退：%s（中文将显示为方块）", warnNoCjk.c_str());
+    return font.load(warnNoCjk, warnNoCjk);
+  }
+  return false;
+}
 
 bool App::init() {
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
@@ -150,35 +317,11 @@ bool App::init() {
   audio.setMuted(config.audioMuted);
   video.setDualScreen(false);
 
-  // 字体：assets/fonts → 运行目录回退 → 系统字体回退
-  std::string fontDir;
-  for (const char* cand : {"assets/fonts"}) {
-    const std::string p = fsutil::join(fsutil::exeDir(), cand);
-    if (fsutil::isDir(p)) {
-      fontDir = p;
-      break;
-    }
-  }
-  std::string regular = fsutil::join(fontDir, "NotoSansSC-Regular.ttf");
-  std::string bold = fsutil::join(fontDir, "NotoSansSC-Bold.ttf");
-  if (!fsutil::isFile(regular)) {
-#ifdef _WIN32
-    regular = "C:/Windows/Fonts/msyh.ttc";
-    bold = "C:/Windows/Fonts/msyhbd.ttc";
-#else
-    for (const char* p : {"/usr/share/fonts/truetype/chinese/NotoSansSC-Regular.ttf",
-                          "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                          "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"}) {
-      if (fsutil::isFile(p)) {
-        regular = p;
-        bold = p;
-        break;
-      }
-    }
-#endif
-  }
-  if (!font.load(regular, bold)) {
-    LOGE("致命：无法加载任何字体（%s）", regular.c_str());
+  // 字体：v1.2.4 起不再随包附带字体，全部使用系统字体（TTC 集合已支持）。
+  // 优先级：NESSTATION_FONT 环境变量 → 运行目录 assets/fonts/（用户自备，
+  // 便携包可自行放入 .ttf/.ttc）→ 系统字体扫描（中文优先，含 CJK 字形校验）。
+  if (!initFontChain()) {
+    LOGE("致命：无法加载任何字体");
     return false;
   }
   return true;

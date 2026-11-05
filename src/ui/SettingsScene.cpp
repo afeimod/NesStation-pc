@@ -532,11 +532,13 @@ class SettingsScene : public Scene {
         }
         const Rect scan(rc.right() - 178, rc.y + 7, 88, 28);
         if (w::button(app, scan, "↻ 重新扫描", false, 12, false)) {
-          const int n = app.library.scanDirectory(dir, GamePlatform::NES, false,
-                                                  app.config.scanRecursive);
-          app.library.save();
-          app.toast("扫描完成：新增 " + std::to_string(n) + " 个游戏（目录内共 " +
-                    std::to_string(app.library.games().size()) + "）");
+          // ★v1.2.3：同步 → 后台（大目录同步扫卡界面；完成时主循环自动 toast）
+          if (app.library.scanRunning()) {
+            app.toast("正在扫描中，请稍候…");
+          } else {
+            app.library.startBackgroundRescan(app.config.scanRecursive);
+            app.toast("正在后台重新扫描…");
+          }
         }
         y += 46;
       }
@@ -552,11 +554,18 @@ class SettingsScene : public Scene {
                              ? fsutil::homeDir()
                              : app.library.romDirs().back();
           req.onPick = [&app](const std::string& dir) {
-            app.library.addRomDir(dir);
-            const int n = app.library.scanDirectory(dir, GamePlatform::NES, false,
-                                                    app.config.scanRecursive);
+            // ★v1.2.3：后台扫描（同步扫大目录卡界面）+ 非 UTF-8 目录名拦截
+            if (!app.library.addRomDir(dir)) {
+              app.toast("该目录已在扫描列表中（或目录名含不支持的字符）");
+              return;
+            }
             app.library.save();
-            app.toast("已添加目录，本次扫描新增 " + std::to_string(n) + " 个游戏");
+            if (app.library.scanRunning()) {
+              app.toast("已添加目录，当前扫描完成后自动纳入下次扫描");
+            } else {
+              app.library.startBackgroundRescan(app.config.scanRecursive);
+              app.toast("已添加目录，正在后台扫描…");
+            }
           };
           app.pushScene(createFileBrowser(req));
         }
@@ -569,11 +578,17 @@ class SettingsScene : public Scene {
                              ? fsutil::homeDir()
                              : app.library.romDirs().back();
           req.onPick = [&app](const std::string& dir) {
-            app.library.addRomDir(dir);
-            const int n = app.library.scanDirectory(dir, GamePlatform::NES, false,
-                                                    app.config.scanRecursive);
+            if (!app.library.addRomDir(dir)) {
+              app.toast("该目录已在扫描列表中（或目录名含不支持的字符）");
+              return;
+            }
             app.library.save();
-            app.toast("已添加目录，本次扫描新增 " + std::to_string(n) + " 个游戏");
+            if (app.library.scanRunning()) {
+              app.toast("已添加目录，当前扫描完成后自动纳入下次扫描");
+            } else {
+              app.library.startBackgroundRescan(app.config.scanRecursive);
+              app.toast("已添加目录，正在后台扫描…");
+            }
           };
           app.pushScene(createFileBrowser(req));
         }

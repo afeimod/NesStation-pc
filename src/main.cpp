@@ -174,6 +174,34 @@ void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
     st.synth[3].push_back(synthMotion(1140, 53, 0, 0));
     st.synth[4].push_back(synthButton(true, 1140, 53));
     st.synth[6].push_back(synthButton(false, 1140, 53));
+  } else if (name == "homedrag") {
+    // ★v1.2.3 封面流拖拽验证：先保证有游戏（无则现场造 3 个）→ 主页 →
+    //   在封面流区域按住右移 240px（跟手平移）→ 松手 → 截图应显示选中卡
+    //   已从第 1 张切到第 2 张（半步阈值 0.45 翻页）且动画归位
+    {
+      const std::string dir = "/tmp/nesstation-selftest-roms";
+      fsutil::makeDirs(dir);
+      if (app.library.games().size() < 2) {
+        for (int k = 1; k <= 3; k++) {
+          std::ofstream f(fsutil::join(dir, "拖拽测试_" + std::to_string(k) + ".nes"),
+                          std::ios::binary);
+          f << "NES\x1A" << std::string(64, '\0');
+        }
+        app.library.addRomDir(dir);
+        app.library.scanDirectory(dir, ns::GamePlatform::NES, false, false);
+        app.library.save();
+      }
+      ns::Theme::setStyle(ns::UiStyle::Neon);
+      app.replaceScene(ns::createHomeScene());
+      st.synthFrame = 0;
+      // 封面流区域中心（布局：flowCx ≈ (W-314)/2+72 → 1280 下 ≈ 550）
+      // 向左拖 240px = 前进到后面的游戏（向右拖是回退；sel=0 时无处可退）
+      st.synth[3].push_back(synthMotion(550, 360, 0, 0));
+      st.synth[4].push_back(synthButton(true, 550, 360));
+      for (int k = 1; k <= 12; k++)
+        st.synth[4 + k].push_back(synthMotion(550 - k * 20, 360, -20, 0));
+      st.synth[17].push_back(synthButton(false, 310, 360));
+    }
   } else if (name == "scan") {
     // ★扫描验证：生成临时 ROM（含 NES 魔数/各平台扩展名）→ 扫描入库 →
     //   库页截图应显示新增游戏；随后的 home 步骤应显示 N GAMES

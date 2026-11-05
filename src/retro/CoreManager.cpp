@@ -164,7 +164,8 @@ void CoreManager::saveOptions(const std::string& coreKey,
   json j = json::object();
   for (const auto& [k, v] : kv) j[k] = v;
   const std::string file = fsutil::join(optionsDir_, coreKey + ".json");
-  fsutil::writeFile(file, j.dump(2));
+  // ★replace 处理器：核心选项值含非法 UTF-8 时替换而非抛异常（防闪退）
+  fsutil::writeFile(file, j.dump(2, ' ', false, json::error_handler_t::replace));
 }
 
 std::string CoreManager::statePath(const std::string& gameId, int slot) const {

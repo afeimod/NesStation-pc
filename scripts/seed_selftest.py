@@ -14,9 +14,8 @@ shutil.rmtree(HOME, ignore_errors=True)
 os.makedirs(COVERS, exist_ok=True)
 os.makedirs(f"{BIN}/assets", exist_ok=True)
 
-# 字体软链（运行目录 assets/fonts）
-if not os.path.exists(f"{BIN}/assets/fonts"):
-    os.symlink("/home/z/my-project/NesStation-PC/assets/fonts", f"{BIN}/assets/fonts")
+# 字体（v1.2.4：运行时自动选系统字体；可用 NESSTATION_FONT 指定）
+# 如需固定字体：os.environ["NESSTATION_FONT"] = "/path/to/font.ttf"
 # 窗口图标
 shutil.copy("/home/z/my-project/NesStation-PC/assets/icon32.png", f"{BIN}/assets/icon32.png")
 

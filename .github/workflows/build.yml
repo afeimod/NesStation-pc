@@ -99,20 +99,22 @@ jobs:
           ./smoke/test_ext
 
       - name: Bundle cores (buildbot x86_64)
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: |
           mkdir -p dist/NesStation-linux/cores
-          # 下载本架构全部可用核心进包（azahar 等缺失时自动回退替代核心）
+          # ★v1.2.4：buildbot 已全部 15 平台可用（含 PS2/DC/3DS/PSP/Java），
+          #   一次性拉齐；x64 便携包目标 Debian 13+/Ubuntu 23.04+（glibc ≥ 2.38），
+          #   nightly 核心无兼容风险，不需过滤
           bash scripts/fetch_cores.sh --dest dist/NesStation-linux/cores || true
           n=$(find dist/NesStation-linux/cores -name '*_libretro.so' | wc -l)
           echo "bundled cores: $n / 15"
-          test "$n" -ge 12
+          test "$n" -ge 14
 
       - name: Package (portable tar.gz)
         run: |
-          mkdir -p dist/NesStation-linux/cores dist/NesStation-linux/assets/fonts
+          # ★v1.2.4：不附带字体（运行时选系统字体；用户可自备 assets/fonts/）
+          mkdir -p dist/NesStation-linux/cores
           cp build/bin/nesstation dist/NesStation-linux/
-          cp assets/fonts/*.ttf dist/NesStation-linux/assets/fonts/
           cp README.md LICENSE dist/NesStation-linux/
           cd dist && tar czf NesStation-linux-x64.tar.gz NesStation-linux
 
@@ -179,24 +181,44 @@ jobs:
             smoke/cores/fceumm_libretro.so smoke/test.nes smoke
 
       - name: Bundle cores (buildbot aarch64)
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: |
           # 核心进 deb：/opt/nesstation/cores（exe 同目录，CoreManager 自动识别）
-          # azahar 在 aarch64 无预编译包 → 自动回退 citra
+          # ★v1.2.4：azahar 在 aarch64 无预编译包 → 自动回退 citra（仍在构建链上）
           mkdir -p dist/root/opt/nesstation/cores
           bash scripts/fetch_cores.sh --dest dist/root/opt/nesstation/cores || true
           n=$(find dist/root/opt/nesstation/cores -name '*_libretro.so' | wc -l)
           echo "bundled cores: $n / 15"
           test "$n" -ge 12
 
+          # ★v1.2.4 GLIBC 兼容过滤：deb 目标 Debian 12（glibc 2.36）。
+          #   buildbot nightly 核心在新 Ubuntu 上构建，个别核心要求更高版本
+          #   会「装得上、加载时崩」——逐个 readelf 检查，超限核心剔出包并记日志，
+          #   保证包内每个核心都能在 Debian 12 上加载（剔除后平台由前端运行时
+          #   提示手动安装，不再直接崩溃）。
+          mkdir -p dist/rejected
+          for so in dist/root/opt/nesstation/cores/*_libretro.so; do
+            [ -f "$so" ] || continue
+            need=$(readelf --version-info "$so" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' \
+              | sed 's/GLIBC_//' | sort -uV | tail -1)
+            [ -z "$need" ] && need=0
+            if [ "$(printf '%s\n' '2.36' "$need" | sort -V | tail -1)" != '2.36' ]; then
+              echo "::warning::核心 $(basename "$so") 要求 GLIBC $need > 2.36，剔出 deb（平台改由运行时提示）"
+              mv "$so" dist/rejected/
+            else
+              echo "  $(basename "$so"): GLIBC ≤ $need"
+            fi
+          done
+          n2=$(find dist/root/opt/nesstation/cores -name '*_libretro.so' | wc -l)
+          echo "cores after GLIBC filter: $n2"
+
       - name: Package (.deb, Debian/Ubuntu)
         env:
-          DEB_VERSION: "1.2.2"
+          DEB_VERSION: "1.2.4"
         run: |
           set -eux
           PKG="dist/root"
-          mkdir -p "$PKG/opt/nesstation/assets/fonts" \
-                   "$PKG/opt/nesstation/cores" \
+          mkdir -p "$PKG/opt/nesstation/cores" \
                    "$PKG/usr/bin" \
                    "$PKG/usr/share/applications" \
                    "$PKG/usr/share/icons/hicolor/256x256/apps" \
@@ -204,8 +226,8 @@ jobs:
                    "$PKG/DEBIAN"
 
           # /opt 布局（exeDir 经 /proc/self/exe 解析，/usr/bin 软链可用）
+          # ★v1.2.4：不附带字体（运行时选系统字体，中文字体优先）
           cp build/bin/nesstation          "$PKG/opt/nesstation/"
-          cp assets/fonts/*.ttf            "$PKG/opt/nesstation/assets/fonts/"
           cp assets/legal/THIRD_PARTY_NOTICES.txt "$PKG/usr/share/doc/nesstation/"
           cp LICENSE                       "$PKG/usr/share/doc/nesstation/copyright"
           cp README.md                     "$PKG/usr/share/doc/nesstation/"
@@ -276,24 +298,24 @@ jobs:
         run: cmake --build build --config Release -- -m
 
       - name: Bundle cores (buildbot windows x64)
-        timeout-minutes: 20
+        timeout-minutes: 25
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "dist/NesStation-windows/cores" | Out-Null
-          # 下载全部可用核心进包（缺失时自动回退替代核心）
+          # ★v1.2.4：全部 15 平台拉齐（azahar/pcsx2/flycast/ppsspp/squirreljme 均在）
           ./scripts/fetch_cores.ps1 -Dest "dist/NesStation-windows/cores"
           $n = (Get-ChildItem "dist/NesStation-windows/cores" -Filter '*_libretro.dll').Count
           Write-Host "bundled cores: $n / 15"
-          if ($n -lt 12) { throw "内置核心过少：$n" }
+          if ($n -lt 14) { throw "内置核心过少：$n" }
           exit 0
 
       - name: Package
         shell: pwsh
         run: |
+          # ★v1.2.4：不附带字体（运行时选系统字体 msyh/deng/simhei…）
           $out = "dist/NesStation-windows"
-          New-Item -ItemType Directory -Force -Path "$out/cores", "$out/assets/fonts" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$out/cores" | Out-Null
           Copy-Item build/bin/Release/nesstation.exe $out/
-          Copy-Item assets/fonts/*.ttf $out/assets/fonts/
           Copy-Item README.md, LICENSE $out/
           Copy-Item scripts/fetch_cores.ps1 $out/
           # 内置核心目录（已由上一步下载填充）
@@ -330,6 +352,11 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:12
     timeout-minutes: 330
+    # ★v1.2.3：容器内默认 shell 是 dash（sh），不支持 `set -o pipefail`
+    #   → Build 步骤 1 秒退出码 2。全 job 统一 bash（debian:12 自带）。
+    defaults:
+      run:
+        shell: bash -e {0}
     strategy:
       fail-fast: false
       matrix:
@@ -347,7 +374,7 @@ jobs:
           apt-get update -qq
           apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config git curl ca-certificates \
-            unzip python3 nasm yasm ccache \
+            unzip python3 nasm yasm ccache patchelf \
             libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev libxi-dev \
             libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
             libcurl4-openssl-dev libvulkan-dev \
@@ -355,8 +382,8 @@ jobs:
             libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
             zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
             libglvnd-dev libusb-1.0-0-dev \
-            libavcodec-dev libavutil-dev libswscale-dev libavformat-dev \
-            libavfilter-dev
+            libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
+            libavformat-dev libavfilter-dev
 
       - name: ccache 加速重建（dolphin）
         if: matrix.emu == 'dolphin'
@@ -430,7 +457,7 @@ jobs:
           sudo apt-get install -y \
             clang-15 cmake freeglut3-dev libgcrypt20-dev libglm-dev libgtk-3-dev \
             libpulse-dev libsecret-1-dev libsystemd-dev libudev-dev nasm \
-            ninja-build libbluetooth-dev \
+            ninja-build libbluetooth-dev patchelf \
             build-essential pkg-config git curl ca-certificates unzip python3 \
             zip bison flex
 
@@ -495,6 +522,10 @@ jobs:
     runs-on: ubuntu-24.04-arm
     container: debian:12
     timeout-minutes: 330
+    # ★v1.2.3：同 linux-x64 —— dash 不支持 pipefail，必须显式 bash
+    defaults:
+      run:
+        shell: bash -e {0}
     strategy:
       fail-fast: false
       matrix:
@@ -510,7 +541,7 @@ jobs:
           apt-get update -qq
           apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config git curl ca-certificates \
-            unzip python3 nasm yasm ccache \
+            unzip python3 nasm yasm ccache patchelf \
             libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev libxi-dev \
             libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
             libcurl4-openssl-dev libvulkan-dev \
@@ -518,8 +549,8 @@ jobs:
             libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
             zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
             libglvnd-dev libusb-1.0-0-dev \
-            libavcodec-dev libavutil-dev libswscale-dev libavformat-dev \
-            libavfilter-dev
+            libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
+            libavformat-dev libavfilter-dev
 
       - name: ccache 加速重建（dolphin）
         if: matrix.emu == 'dolphin'
@@ -588,9 +619,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Qt6 (Dolphin/Eden)
-        # ★v1.2.2：改用 install-qt-action（内嵌锁定的 aqtinstall，稳定），
-        #   Qt 6.8.3 LTS + msvc2022；模块补 qtsvg（Dolphin 必需 Svg）与
-        #   qtcharts（Eden 必需 Charts）—— 旧命令 -m qttools qtcharts 缺 qtsvg
+        # ★v1.2.3：Qt 6.8 起基础包已内置 qtsvg + qttools（windeployqt/Linguist
+        #   都在），再显式请求这两个"模块"会报
+        #   "The packages ['qtsvg','qttools'] were not found while parsing XML"
+        #   （aqt 元数据里它们已不是可选模块）。仅保留真正以模块形式存在的
+        #   qtcharts（Eden 必需）；Dolphin 需要的 Svg 在基础包里。
+        #   依据：qt-repo-cache（aqt list-qt 实测镜像）6.8.3/win64_msvc2022_64
+        #   的 34 个可选模块中不含 qtsvg/qttools。
         if: ${{ matrix.emu != 'cemu' }}
         uses: jurplel/install-qt-action@v4
         with:
@@ -598,9 +633,18 @@ jobs:
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2022_64'
-          modules: 'qtsvg qttools qtcharts'
+          modules: 'qtcharts'
           dir: 'C:/Qt'
           cache: 'false'
+
+      - name: Install pkgconfiglite (cemu)
+        # ★v1.2.3：vcpkg 快照里 msys2 的 pkgconf 1~2.2.0-1 已被上游镜像删除
+        #   （全部镜像 404），openssl 构建尾部 vcpkg_fixup_pkgconfig 必挂。
+        #   vcpkg_find_acquire_program(PKGCONFIG) 优先读 PKG_CONFIG 环境变量
+        #   —— 预装 pkgconfiglite 并指向它，完全绕开 msys 下载。
+        if: ${{ matrix.emu == 'cemu' }}
+        shell: pwsh
+        run: choco install -y --no-progress pkgconfiglite
 
       - name: vcpkg binary cache (cemu)
         if: ${{ matrix.emu == 'cemu' }}
@@ -615,6 +659,8 @@ jobs:
         env:
           VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-binary
           EDEN_FORCE_SYSTEM: "OFF"
+          # ★v1.2.3：vcpkg 优先使用此路径的 pkg-config，跳过 msys 下载
+          PKG_CONFIG: 'C:\ProgramData\chocolatey\bin\pkg-config.exe'
         run: |
           set -o pipefail
           set -eux
@@ -625,6 +671,10 @@ jobs:
             export CMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64"
             export QT_DIR="C:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6"
             ls "C:/Qt/6.8.3/msvc2022_64/bin/qmake.exe" >/dev/null   # 布局自检
+          else
+            # pkgconfiglite 自检（缺失则 vcpkg 会回落到死链 msys 源）
+            ls "C:/ProgramData/chocolatey/bin/pkg-config.exe" >/dev/null
+            "C:/ProgramData/chocolatey/bin/pkg-config.exe" --version
           fi
           bash scripts/build_emulators.sh ${{ matrix.emu }} 3 2>&1 | tee build_${{ matrix.emu }}.log
 
@@ -669,7 +719,7 @@ jobs:
   # ==========================================================================
   # 打包合并：前端本体 + 三大模拟器 → 最终发行包
   #   linux-x64   → NesStation-linux-x64-full.tar.gz
-  #   linux-arm64 → nesstation_1.2.2_arm64_full.deb（注入 /opt/nesstation/emulators）
+  #   linux-arm64 → nesstation_<版本>_arm64_full.deb（注入 /opt/nesstation/emulators）
   #   windows-x64 → NesStation-windows-x64-full.zip
   # 某模拟器状态为 failed / 缺失时自动跳过该模拟器，其余照常打包；
   # needs 里 emu-* 为 skipped（with_emulators=false）时本作业一并跳过。
@@ -774,8 +824,9 @@ jobs:
           EOF
           # 运行库提示（可选安装）
           cat > ex/opt/nesstation/模拟器依赖.txt <<'EOF'
-          内置模拟器为系统库动态链接，缺失时按需安装：
-            Dolphin: sudo apt install libqt6widgets6 libqt6gui6 libqt6core6 libqt6dbus6 libqt6svg6 libqt6charts6 libpulse0 libasound2t64
+          内置模拟器为系统库动态链接，缺失时按需安装（Debian 12 示例；
+          Ubuntu 24.04+ 的 libasound2 改名为 libasound2t64）：
+            Dolphin: sudo apt install libqt6widgets6 libqt6gui6 libqt6core6 libqt6dbus6 libqt6svg6 libqt6charts6 libpulse0 libasound2
             Eden:    sudo apt install libboost-locale1.74+ libfmt9 liblz4-1 libopus0 libzstd1 zlib1g libvulkan1
           EOF
           # 重算 md5sums + 权限
