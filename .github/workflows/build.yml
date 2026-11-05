@@ -23,6 +23,25 @@ name: Build
 #      尾部存入产物（无需登录即可从 artifact 看到真实报错）
 #   8. External cores registry test 的 exeDir 断言修复（旧版硬编码 /tmp，
 #      CI 编译到 smoke/ 下必崩 → 整个 linux-x64 job 连带挂掉）
+# ★v1.2.5 修复（对照 run 41994953377 三个 EMU job 的真实报错逐一修复）：
+#   1. dolphin 全平台：内置 cubeb 快照缺【嵌套子模块】cmake/sanitizers-cmake
+#      （v1.2.4 只补了 Cemu 那份 cubeb，漏了 Dolphin 自己那份）——已随包补齐；
+#      同时补齐 bzip2（gitlab 源，旧 fetch 脚本只认 github 而跳过，
+#      否则修完 cubeb 后必死在 find_package(BZip2) → 空目录）与
+#      libadrenotools 的 linkernsbypass（Android 专用，补齐完整性）。
+#   2. eden·linux：externals/CMakeLists 无条件 find_package(SDL2 2.26.4)，
+#      旧依赖清单漏 libsdl2-dev → 配置阶段即死（本次报错点）；
+#      Debian 12 的 libsdl2-dev = 2.26.5 ≥ 2.26.4，两个 Linux EMU job 已补。
+#   3. dolphin/eden·windows：install-qt-action 源码 path.resolve(dir, "Qt")
+#      ——dir 填 'C:/Qt' 时实际装到 C:/Qt/Qt/6.8.3/msvc2022_64，
+#      旧步骤硬编码 C:/Qt/6.8.3/... 且 ls 自检必挂（本次两 job 2~3 分钟死亡、
+#      构建日志为空的直接原因）。改用 action 导出的 QT_ROOT_DIR 动态发现，
+#      dir 改 'C:/' 使实际布局与历史路径一致。
+#   4. cemu：vcpkg 基线 a4275b7e（2024-06-04）过老，2026 runner 上 manifest
+#      install 失败（Windows 端报错点）；升级到上游同源 f0fb3ddba513
+#      （上游 Cemu 2025-08~2026-06 实际在用；wxwidgets 3.2.7/sdl2 2.32.8/
+#      glslang 15.1.0 全为基线默认值，无需 override，深度=1 的 git fetch
+#      即可解析全部版本树）。
 on:
   workflow_dispatch:
     inputs:
@@ -377,7 +396,7 @@ jobs:
             unzip python3 nasm yasm ccache patchelf \
             libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev libxi-dev \
             libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
-            libcurl4-openssl-dev libvulkan-dev \
+            libcurl4-openssl-dev libvulkan-dev libsdl2-dev \
             qt6-base-dev qt6-tools-dev qt6-svg-dev qt6-charts-dev \
             libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
             zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
@@ -538,13 +557,15 @@ jobs:
         run: |
           set -eux
           # 与 linux-x64 相同清单（debian:12 双架构通用；qt6-charts-dev 有 arm64）
+          # ★v1.2.5：+libsdl2-dev（Eden 的 externals 无条件 find_package(SDL2 2.26.4)；
+          #   Debian 12 提供 2.26.5 满足版本下限）
           apt-get update -qq
           apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config git curl ca-certificates \
             unzip python3 nasm yasm ccache patchelf \
             libegl1-mesa-dev libevdev-dev libudev-dev libx11-dev libxi-dev \
             libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
-            libcurl4-openssl-dev libvulkan-dev \
+            libcurl4-openssl-dev libvulkan-dev libsdl2-dev \
             qt6-base-dev qt6-tools-dev qt6-svg-dev qt6-charts-dev \
             libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
             zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
@@ -626,6 +647,13 @@ jobs:
         #   qtcharts（Eden 必需）；Dolphin 需要的 Svg 在基础包里。
         #   依据：qt-repo-cache（aqt list-qt 实测镜像）6.8.3/win64_msvc2022_64
         #   的 34 个可选模块中不含 qtsvg/qttools。
+        # ★v1.2.5：install-qt-action 的 dir 是【前缀】，源码
+        #   path.resolve(dir, "Qt") 会再拼一层 Qt —— dir 填 'C:/Qt' 时实际
+        #   装到 C:/Qt/Qt/6.8.3/msvc2022_64，旧步骤硬编码
+        #   C:/Qt/6.8.3/... 的 ls 自检必挂（run 41994953377 中 dolphin/eden
+        #   windows 两 job 2~3 分钟即死、构建日志为空的直接原因）。
+        #   dir 改为 'C:/' 使实际布局回归 C:/Qt/6.8.3/msvc2022_64；
+        #   构建步骤改用 action 导出的 QT_ROOT_DIR（见下方 Build 步骤）。
         if: ${{ matrix.emu != 'cemu' }}
         uses: jurplel/install-qt-action@v4
         with:
@@ -634,7 +662,7 @@ jobs:
           target: 'desktop'
           arch: 'win64_msvc2022_64'
           modules: 'qtcharts'
-          dir: 'C:/Qt'
+          dir: 'C:/'
           cache: 'false'
 
       - name: Install pkgconfiglite (cemu)
@@ -665,12 +693,28 @@ jobs:
           set -o pipefail
           set -eux
           mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
-          # install-qt-action 布局：<dir>/<version>/<arch>；同时导出给
-          # cmake（CMAKE_PREFIX_PATH）与 build_emulators.sh（QT_DIR → Eden）
+          # ★v1.2.5：Qt 目录不再硬编码 —— install-qt-action 向后续步骤导出
+          #   QT_ROOT_DIR（指到含 bin/qmake.exe 的真实安装根），优先使用；
+          #   历史路径作缺失时的兜底候选；全部没有则列出 C:/Qt 下的实际布局
+          #   后明确报错退出（不再“空日志猝死”，日志可直查）。
           if [ "${{ matrix.emu }}" != "cemu" ]; then
-            export CMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64"
-            export QT_DIR="C:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6"
-            ls "C:/Qt/6.8.3/msvc2022_64/bin/qmake.exe" >/dev/null   # 布局自检
+            QT_ROOT="${QT_ROOT_DIR:-}"
+            if [ -z "$QT_ROOT" ] || [ ! -f "$QT_ROOT/bin/qmake.exe" ]; then
+              QT_ROOT=""
+              for d in "C:/Qt/6.8.3/msvc2022_64" \
+                       "C:/Qt/Qt/6.8.3/msvc2022_64" \
+                       "C:/Qt/6.8.3/win64_msvc2022_64"; do
+                [ -f "$d/bin/qmake.exe" ] && QT_ROOT="$d" && break
+              done || true
+            fi
+            if [ -z "$QT_ROOT" ]; then
+              echo "::error::未找到 Qt 6.8.3（QT_ROOT_DIR='${QT_ROOT_DIR:-}'）；C:/Qt 实际布局："
+              find C:/Qt -maxdepth 4 -name qmake.exe 2>/dev/null || true
+              exit 1
+            fi
+            echo "（Qt 目录：$QT_ROOT）"
+            export CMAKE_PREFIX_PATH="$QT_ROOT"
+            export QT_DIR="$QT_ROOT/lib/cmake/Qt6"
           else
             # pkgconfiglite 自检（缺失则 vcpkg 会回落到死链 msys 源）
             ls "C:/ProgramData/chocolatey/bin/pkg-config.exe" >/dev/null
@@ -755,10 +799,14 @@ jobs:
           ok() { [ -f "emu/$1/_status.txt" ] && grep -q '^ok' "emu/$1/_status.txt"; }
           INCLUDED=""
           for e in dolphin cemu eden; do
-            if ok $e; then
+            # ★v1.2.5：状态 ok 但产物目录缺失（artifact 中转丢件）时降级为
+            #   警告并跳过，不让单个模拟器击溃整个发行包
+            if ok $e && [ -d "emu/$e/emulators/$e" ]; then
               mkdir -p app/NesStation-linux/emulators
               cp -r "emu/$e/emulators/$e" "app/NesStation-linux/emulators/$e"
               INCLUDED="$INCLUDED $e"
+            elif ok $e; then
+              echo "::warning::linux-x64 模拟器 $e 状态 ok 但产物目录缺失（artifact 中转异常），发行包跳过"
             else
               echo "::warning::linux-x64 模拟器 $e 未成功构建，发行包跳过"
               [ -f "emu/$e/_build_tail.log" ] && tail -n 20 "emu/$e/_build_tail.log" || true
@@ -807,10 +855,13 @@ jobs:
           ok() { [ -f "emu/$1/_status.txt" ] && grep -q '^ok' "emu/$1/_status.txt"; }
           INCLUDED=""
           for e in dolphin eden; do
-            if ok $e; then
+            # ★v1.2.5：同 linux-x64 —— 状态 ok 但产物目录缺失时降级警告
+            if ok $e && [ -d "emu/$e/emulators/$e" ]; then
               mkdir -p ex/opt/nesstation/emulators
               cp -r "emu/$e/emulators/$e" "ex/opt/nesstation/emulators/$e"
               INCLUDED="$INCLUDED $e"
+            elif ok $e; then
+              echo "::warning::linux-arm64 模拟器 $e 状态 ok 但产物目录缺失（artifact 中转异常），发行包跳过"
             else
               echo "::warning::linux-arm64 模拟器 $e 未成功构建，发行包跳过"
               [ -f "emu/$e/_build_tail.log" ] && tail -n 20 "emu/$e/_build_tail.log" || true
@@ -886,10 +937,15 @@ jobs:
           $included = @()
           foreach ($e in @("dolphin","cemu","eden")) {
             $status = "emu/$e/_status.txt"
-            if ((Test-Path $status) -and ((Get-Content $status -First 1) -eq "ok")) {
+            $payload = "emu/$e/emulators/$e"
+            # ★v1.2.5：状态 ok 但产物目录缺失（artifact 中转丢件）时降级为
+            #   警告并跳过，不让单个模拟器击溃整个发行包
+            if ((Test-Path $status) -and ((Get-Content $status -First 1) -eq "ok") -and (Test-Path $payload)) {
               New-Item -ItemType Directory -Force -Path "$out/emulators" | Out-Null
-              Copy-Item -Path "emu/$e/emulators/$e" -Destination "$out/emulators/$e" -Recurse -Force
+              Copy-Item -Path $payload -Destination "$out/emulators/$e" -Recurse -Force
               $included += $e
+            } elseif ((Test-Path $status) -and ((Get-Content $status -First 1) -eq "ok")) {
+              Write-Output "::warning::windows-x64 模拟器 $e 状态 ok 但产物目录缺失（artifact 中转异常），发行包跳过"
             } else {
               Write-Output "::warning::windows-x64 模拟器 $e 未成功构建，发行包跳过"
               if (Test-Path "emu/$e/_build_tail.log") { Get-Content "emu/$e/_build_tail.log" -Tail 20 }
