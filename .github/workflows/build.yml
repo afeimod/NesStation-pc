@@ -690,7 +690,13 @@ jobs:
             (github.event.inputs.target == 'all' ||
              github.event.inputs.target == 'emulators' ||
              github.event.inputs.target == 'windows-x64') }}
-    runs-on: windows-2022
+    # ★v1.2.8：Dolphin 快照的 Source/PCH/pch.h 硬性要求 VS2026
+    #   （#if _MSC_FULL_VER < 195136252 → #error），windows-2022 镜像的
+    #   VS2022 17.14（1944）必挂 —— 本次 EMU dolphin · windows-x64 的死因。
+    #   切到 windows-2025-vs2026（2026-05-07 起 GA，VS2026 18.5+，_MSC_VER
+    #   1955 ≥ 1951 通过检查；CMake 4.3 自带 "Visual Studio 18 2026" 生成器）。
+    #   cemu/eden 已在 windows-2022 实证通过，保持不动（最小变更面）。
+    runs-on: ${{ matrix.emu == 'dolphin' && 'windows-2025-vs2026' || 'windows-2022' }}
     timeout-minutes: 330
     strategy:
       fail-fast: false

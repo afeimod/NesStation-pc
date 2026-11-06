@@ -91,9 +91,22 @@ build_dolphin() {
     echo "（Dolphin 使用预装 Qt：$QT_DIR）"
     QT_ARGS="-DQt6_DIR=$QT_DIR"
   fi
+  # ★v1.2.8：windows-2025-vs2026 镜像的 CMake 4.x 移除了对
+  #   cmake_minimum_required < 3.5 的兼容，而 Dolphin 内置的 enet
+  #   （2.8.12...3.20）/ hidapi（3.1.3...3.25）等 Externals 仍是老写法，
+  #   CMake 4 会在配置期直接 FATAL。CMAKE_POLICY_VERSION_MINIMUM=3.5 是
+  #   CMake 4 官方逃生口（对 CMake 3 是无害的未知缓存变量）。
+  local POLICY_ARGS=""
+  if command -v cmake >/dev/null 2>&1; then
+    CMAKE_MAJOR=$(cmake --version | head -1 | sed 's/[^0-9]*\([0-9]*\).*/\1/')
+    if [ "${CMAKE_MAJOR:-0}" -ge 4 ] 2>/dev/null; then
+      POLICY_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+      echo "（CMake ≥ 4：附加 CMAKE_POLICY_VERSION_MINIMUM=3.5，兼容 Externals 老式最低版本声明）"
+    fi
+  fi
   cmake -S emulators/dolphin -B build/dolphin \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$OUT/dolphin" \
-    -DENABLE_TESTS=OFF $CCACHE_ARGS $QT_ARGS
+    -DENABLE_TESTS=OFF $CCACHE_ARGS $QT_ARGS $POLICY_ARGS
   build_ok build/dolphin
   install_ok build/dolphin
   # Windows：windeployqt 部署 Qt DLL（PATH 有 Qt 时；CI 的 install-qt-action 已加）

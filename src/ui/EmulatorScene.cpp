@@ -1,4 +1,7 @@
 // NesStation PC — 模拟器场景：游戏画面 + 游戏内菜单（主题化）
+// ★v1.2.8：画面缩放/滤镜对齐 APK（EmulatorScreen SettingsPanel：
+//   画面缩放 6 档 / 视频滤镜 11 档，游戏内改动写平台键）；自定义比例的
+//   四角拖动编辑器 1:1 复刻 ui/swf/ScreenPositionEditor.kt。
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -12,6 +15,58 @@
 
 namespace ns {
 namespace {
+
+// —— APK PadLayoutStore.pk() 语义：游戏内改动写平台键，读取先平台后全局 ——
+std::string platformVideoScale(App& app, GamePlatform platform) {
+  auto it = app.config.videoScaleByPlatform.find(platformShortName(platform));
+  if (it != app.config.videoScaleByPlatform.end()) return it->second;
+  return app.config.videoScale;
+}
+std::string platformVideoFilter(App& app, GamePlatform platform) {
+  auto it = app.config.videoFilterByPlatform.find(platformShortName(platform));
+  if (it != app.config.videoFilterByPlatform.end()) return it->second;
+  return app.config.videoFilter;
+}
+void setPlatformVideoScale(App& app, GamePlatform platform, const std::string& v) {
+  app.config.videoScaleByPlatform[platformShortName(platform)] = v;
+  app.config.save(fsutil::join(app.dataDir(), "config.json"));
+}
+void setPlatformVideoFilter(App& app, GamePlatform platform, const std::string& v) {
+  app.config.videoFilterByPlatform[platformShortName(platform)] = v;
+  app.config.save(fsutil::join(app.dataDir(), "config.json"));
+}
+
+// APK SettingsScreen / EmulatorScreen 的两套循环选项表（文案 1:1）
+const std::vector<std::string>& videoScaleOptions() {
+  static const std::vector<std::string> opts = {
+      "全屏拉伸(默认)", "4:3", "3:2 (GBA 原生)", "8:7 (NES 像素比)", "16:9",
+      "自定义(拖动四角)"};
+  return opts;
+}
+const std::vector<std::string>& videoScaleKeys() {
+  static const std::vector<std::string> keys = {"stretch", "4:3", "3:2", "8:7", "16:9",
+                                                "custom"};
+  return keys;
+}
+const std::vector<std::string>& videoFilterOptions() {
+  static const std::vector<std::string> opts = {
+      "关闭",   "扫描线",       "CRT",     "点阵",        "XBR",
+      "HQ2X",   "HQ4X",         "XBR+点阵", "4XBR",       "4XBR+点阵",
+      "HQ4X+点阵"};
+  return opts;
+}
+const std::vector<std::string>& videoFilterKeys() {
+  static const std::vector<std::string> keys = {
+      "none",    "scanline", "crt",      "dot",     "xbr",
+      "hq2x",    "hq4x",     "xbr_dot",  "4xbr",    "4xbr_dot",
+      "hq4x_dot"};
+  return keys;
+}
+int indexFor(const std::vector<std::string>& keys, const std::string& v) {
+  for (size_t i = 0; i < keys.size(); i++)
+    if (keys[i] == v) return (int)i;
+  return 0;
+}
 
 class EmulatorScene : public Scene {
  public:
@@ -45,6 +100,12 @@ class EmulatorScene : public Scene {
     EmuRunner* emu = app.activeEmu();
     if (!emu || !emu->running()) {
       app.popScene();
+      return;
+    }
+
+    // —— 自定义比例编辑器（APK ScreenPositionEditor：自消费输入）——
+    if (editLayout_) {
+      updateLayoutEditor(app, in);
       return;
     }
 
@@ -152,7 +213,7 @@ class EmulatorScene : public Scene {
 
   void updateMenu(App& app, const InputState& in) {
     EmuRunner* emu = app.activeEmu();
-    // 鼠标移动时显示光标（已显示）
+    (void)emu;
     switch (subMode_) {
       case Sub::Main: {
         const int N = menuItemCount(app);
@@ -197,12 +258,21 @@ class EmulatorScene : public Scene {
 
   int subItemCount(App& app) const {
     if (subMode_ == Sub::States) return 12;  // 槽位 0-10
-    if (subMode_ == Sub::Video) return 6;
+    if (subMode_ == Sub::Video) return videoRowCount(app);
     if (subMode_ == Sub::Disk) {
       EmuRunner* emu = app.activeEmu();
       if (emu && emu->core()) return (int)emu->core()->diskControl().numImages();
     }
     return 0;
+  }
+
+  // 画面设置子页行数（APK SettingsPanel：画面缩放/视频滤镜 + PC 增强行）
+  int videoRowCount(App& app) const {
+    EmuRunner* emu = app.activeEmu();
+    int n = 5;  // 画面缩放 / 视频滤镜 / 整数缩放 / 平滑缩放 / 显示 FPS
+    if (emu && platformIsDualScreen(emu->game().platform)) n++;  // 双屏布局
+    n++;  // 全屏切换
+    return n;
   }
 
   void draw(App& app) override {
@@ -214,9 +284,19 @@ class EmulatorScene : public Scene {
     Draw& d = app.draw;
     app.draw.rect(Rect(0, 0, app.draw.W, app.draw.H), sk.bgDeep);
     Rect gameArea(0, 0, (float)app.draw.W, (float)app.draw.H);
-    app.video.draw(app.sdlRenderer(), gameArea, (ScalingMode)app.config.scalingMode,
-                   (ScreenEffect)app.config.screenEffect, (DualLayout)app.config.dualLayout,
-                   app.config.videoSmooth ? 1.0f : 0.0f);
+
+    // ★v1.2.8：APK videoScale/videoFilter（游戏内 = 平台键优先）
+    const GamePlatform plat = emu->game().platform;
+    VideoDrawParams vp;
+    const std::string vs = platformVideoScale(app, plat);
+    const std::string vf = platformVideoFilter(app, plat);
+    vp.videoScale = vs.c_str();
+    vp.customRect = app.config.customLayout;
+    vp.videoFilter = vf.c_str();
+    vp.integerScale = app.config.integerScale;
+    vp.dual = (DualLayout)app.config.dualLayout;
+    vp.smooth = app.config.videoSmooth ? 1.0f : 0.0f;
+    app.video.draw(app.sdlRenderer(), gameArea, vp);
 
     // FPS HUD（对齐 Android：右上角胶囊，快进金色 / 常态青色，追加暂停态）
     if (app.config.showFps) {
@@ -245,7 +325,7 @@ class EmulatorScene : public Scene {
     }
 
     // 暂停浮层（对齐 Android「已暂停 —— 按 Esc 呼出菜单」）
-    if (paused_ && !menuOpen_) {
+    if (paused_ && !menuOpen_ && !editLayout_) {
       d.rect(Rect(0, 0, app.draw.W, app.draw.H), Color8(0, 0, 0, 90));
       const char* msg = "已暂停 —— 按 Esc 呼出菜单，F7 继续";
       app.font.draw(app.sdlRenderer(), msg,
@@ -253,7 +333,149 @@ class EmulatorScene : public Scene {
                     app.draw.H / 2, 20, sk.textHi, true);
     }
 
-    if (menuOpen_) drawMenu(app);
+    if (editLayout_) drawLayoutEditor(app);
+    else if (menuOpen_) drawMenu(app);
+  }
+
+  // ======================= 自定义比例编辑器（APK ScreenPositionEditor 1:1）
+  // 交互（ScreenPositionEditor.kt:110-215）：
+  //   · 4 角手柄（归一化容差 6% 屏幕尺寸 → PC 用 26 逻辑像素命中半径）
+  //     拖动独立更新 x1/y1 或 x2/y2，最小尺寸 MIN_SIZE=0.05（5% 屏幕）；
+  //   · 矩形内部任意点 = 整体拖动（保持宽高，四边 clamp [0,1]）；
+  //   · 实时预览（拖动中游戏画面立即跟随）；抬手持久化（APK confirm）；
+  //   · 视觉（48-99 行）：半透明粉红填充 #33E91E63 + 边框 + 4 圆手柄；
+  //   · 底部「完成」「重置」按钮（APK 5955-5996）。
+  void updateLayoutEditor(App& app, const InputState& in) {
+    const float W = (float)app.draw.W, H = (float)app.draw.H;
+    const float tol = 0.06f * std::min(W, H);  // APK 归一化容差 6%
+    auto clamp01 = [](float v) { return std::min(1.0f, std::max(0.0f, v)); };
+    constexpr float MIN_SIZE = 0.05f;  // APK MIN_SIZE
+
+    // 手柄中心（屏幕坐标）
+    const float hx[4] = {rect_[0] * W, rect_[2] * W, rect_[2] * W, rect_[0] * W};
+    const float hy[4] = {rect_[1] * H, rect_[1] * H, rect_[3] * H, rect_[3] * H};
+
+    if (in.mousePressed) {
+      editDrag_ = -1;
+      float best = tol * tol;
+      for (int i = 0; i < 4; i++) {
+        const float dx = in.mouse.x - hx[i], dy = in.mouse.y - hy[i];
+        const float d2 = dx * dx + dy * dy;
+        if (d2 <= best) { best = d2; editDrag_ = i; }
+      }
+      if (editDrag_ < 0) {
+        // 矩形内部 = 整体拖动（APK body 拖动）
+        if (in.mouse.x >= hx[0] && in.mouse.x <= hx[2] && in.mouse.y >= hy[0] &&
+            in.mouse.y <= hy[3]) {
+          editDrag_ = 4;
+          editAnchorX_ = in.mouse.x;
+          editAnchorY_ = in.mouse.y;
+          editOrig_[0] = rect_[0]; editOrig_[1] = rect_[1];
+          editOrig_[2] = rect_[2]; editOrig_[3] = rect_[3];
+        }
+      }
+    }
+    if (in.mouseHeld && editDrag_ >= 0) {
+      const float nx = clamp01(in.mouse.x / W);
+      const float ny = clamp01(in.mouse.y / H);
+      switch (editDrag_) {
+        case 0: rect_[0] = std::min(nx, rect_[2] - MIN_SIZE);
+                rect_[1] = std::min(ny, rect_[3] - MIN_SIZE); break;
+        case 1: rect_[2] = std::max(nx, rect_[0] + MIN_SIZE);
+                rect_[1] = std::min(ny, rect_[3] - MIN_SIZE); break;
+        case 2: rect_[2] = std::max(nx, rect_[0] + MIN_SIZE);
+                rect_[3] = std::max(ny, rect_[1] + MIN_SIZE); break;
+        case 3: rect_[0] = std::min(nx, rect_[2] - MIN_SIZE);
+                rect_[3] = std::max(ny, rect_[1] + MIN_SIZE); break;
+        case 4: {
+          // body：保持宽高跟随触点，四边 clamp（APK 191-204）
+          const float dx = (in.mouse.x - editAnchorX_) / W;
+          const float dy = (in.mouse.y - editAnchorY_) / H;
+          const float rw = editOrig_[2] - editOrig_[0];
+          const float rh = editOrig_[3] - editOrig_[1];
+          rect_[0] = clamp01(std::min(editOrig_[0] + dx, 1.0f - rw));
+          rect_[1] = clamp01(std::min(editOrig_[1] + dy, 1.0f - rh));
+          rect_[2] = rect_[0] + rw;
+          rect_[3] = rect_[1] + rh;
+          break;
+        }
+      }
+    }
+    if (in.mouseReleased && editDrag_ >= 0) {
+      editDrag_ = -1;
+      persistLayout(app);  // 抬手持久化（APK confirm=true）
+    }
+
+    if (in.pressed[(int)Btn::Back] || in.pressed[(int)Btn::Menu]) {
+      // 取消：还原进入编辑器时的矩形
+      for (int i = 0; i < 4; i++) rect_[i] = editBackup_[i];
+      editLayout_ = false;
+      SDL_ShowCursor(SDL_DISABLE);
+      app.toast("已取消自定义比例修改");
+    }
+  }
+
+  void persistLayout(App& app) {
+    for (int i = 0; i < 4; i++) app.config.customLayout[i] = rect_[i];
+    app.config.save(fsutil::join(app.dataDir(), "config.json"));
+  }
+
+  void enterLayoutEditor(App& app) {
+    for (int i = 0; i < 4; i++) {
+      rect_[i] = app.config.customLayout[i];
+      editBackup_[i] = rect_[i];
+    }
+    editLayout_ = true;
+    editDrag_ = -1;
+    menuOpen_ = false;
+    SDL_ShowCursor(SDL_ENABLE);
+  }
+
+  void drawLayoutEditor(App& app) {
+    const Skin& sk = Theme::skin();
+    Draw& d = app.draw;
+    const float W = (float)app.draw.W, H = (float)app.draw.H;
+    const Rect rc(rect_[0] * W, rect_[1] * H, (rect_[2] - rect_[0]) * W,
+                  (rect_[3] - rect_[1]) * H);
+    // 半透明粉红填充 + 边框（APK #33E91E63）
+    d.rect(rc, Color8(0xE9, 0x1E, 0x63, 0x33));
+    d.rectOutline(rc, Color8(0xE9, 0x1E, 0x63, 220), 2);
+    // 4 圆手柄
+    for (int i = 0; i < 4; i++) {
+      const float cx = (i == 0 || i == 3) ? rc.x : rc.right();
+      const float cy = (i == 0 || i == 1) ? rc.y : rc.bottom();
+      d.circle(cx, cy, 14, Color8(0xE9, 0x1E, 0x63, 200));
+      d.circleOutline(cx, cy, 14, Color8(255, 255, 255, 230), 2);
+    }
+    // 标题 + 提示
+    const char* title = "自定义画面比例";
+    app.font.draw(app.sdlRenderer(), title,
+                  app.draw.W / 2 - app.font.textWidth(title, 20, true) / 2, 18, 20,
+                  sk.textHi, true);
+    const char* hint = "拖动四角调整大小 · 拖动矩形内部移动 · Esc 取消";
+    app.font.draw(app.sdlRenderer(), hint,
+                  app.draw.W / 2 - app.font.textWidth(hint, 13) / 2, 48, 13, sk.textDim);
+
+    // 底部按钮（APK：完成 / 重置）
+    const InputState& in = app.input.input();
+    const float bw = 150, bh = 42;
+    {
+      const Rect rcDone(W / 2 - bw - 10, H - bh - 18, bw, bh);
+      if (w::primaryButton(app, rcDone, "完成")) {
+        persistLayout(app);
+        editLayout_ = false;
+        SDL_ShowCursor(SDL_DISABLE);
+        app.toast("自定义比例已保存");
+      }
+    }
+    {
+      const Rect rcReset(W / 2 + 10, H - bh - 18, bw, bh);
+      if (w::button(app, rcReset, "重置", false)) {
+        rect_[0] = 0; rect_[1] = 0; rect_[2] = 1; rect_[3] = 1;
+        persistLayout(app);
+        app.toast("已重置为全屏");
+      }
+    }
   }
 
   void drawMenu(App& app) {
@@ -262,8 +484,8 @@ class EmulatorScene : public Scene {
     app.draw.rect(Rect(0, 0, app.draw.W, app.draw.H), Color8(0, 0, 0, 140));
 
     EmuRunner* emu = app.activeEmu();
-    const float panelW = 420;
-    const float panelH = 520;
+    const float panelW = 460;
+    const float panelH = 560;
     Rect panel(app.draw.W / 2 - panelW / 2, app.draw.H / 2 - panelH / 2, panelW, panelH);
     // 点击面板外 = 关闭菜单
     {
@@ -398,31 +620,46 @@ class EmulatorScene : public Scene {
         app.font.draw(app.sdlRenderer(), "画面设置", panel.x + pad, panel.y + 132, 18,
                       sk.accent, true);
         y = panel.y + 168;
+        const GamePlatform plat = emu ? emu->game().platform : GamePlatform::NES;
+        // —— 画面缩放（APK SettingsPanel DropdownSetting「画面缩放」）——
         {
           const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          std::vector<std::string> opts = {"保持比例", "拉伸填充", "整数缩放"};
-          if (w::cycleRow(app, rc, "缩放模式", opts, app.config.scalingMode,
-                          subIndex_ == 0))
+          int idx = indexFor(videoScaleKeys(), platformVideoScale(app, plat));
+          if (w::cycleRow(app, rc, "画面缩放", videoScaleOptions(), idx,
+                          subIndex_ == 0)) {
+            const std::string v = videoScaleKeys()[idx];
+            setPlatformVideoScale(app, plat, v);
+            if (v == "custom") enterLayoutEditor(app);  // APK：选 custom 直进编辑器
+          }
+          y += 50;
+        }
+        // —— 视频滤镜（APK SettingsPanel DropdownSetting「视频滤镜」11 档）——
+        {
+          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
+          int idx = indexFor(videoFilterKeys(), platformVideoFilter(app, plat));
+          if (w::cycleRow(app, rc, "视频滤镜", videoFilterOptions(), idx,
+                          subIndex_ == 1)) {
+            setPlatformVideoFilter(app, plat, videoFilterKeys()[idx]);
+          }
+          y += 50;
+        }
+        // —— 整数缩放（PC 增强：像素完美）——
+        {
+          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
+          if (w::toggleRow(app, rc, "整数缩放（像素完美）", app.config.integerScale,
+                           subIndex_ == 2))
             app.config.save(fsutil::join(app.dataDir(), "config.json"));
           y += 50;
         }
         {
           const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          std::vector<std::string> opts = {"无滤镜", "扫描线", "CRT 荫罩"};
-          if (w::cycleRow(app, rc, "画面滤镜", opts, app.config.screenEffect,
-                          subIndex_ == 1))
+          if (w::toggleRow(app, rc, "平滑缩放", app.config.videoSmooth, subIndex_ == 3))
             app.config.save(fsutil::join(app.dataDir(), "config.json"));
           y += 50;
         }
         {
           const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          if (w::toggleRow(app, rc, "平滑缩放", app.config.videoSmooth, subIndex_ == 2))
-            app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          y += 50;
-        }
-        {
-          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          if (w::toggleRow(app, rc, "显示 FPS", app.config.showFps, subIndex_ == 3))
+          if (w::toggleRow(app, rc, "显示 FPS", app.config.showFps, subIndex_ == 4))
             app.config.save(fsutil::join(app.dataDir(), "config.json"));
           y += 50;
         }
@@ -430,13 +667,13 @@ class EmulatorScene : public Scene {
           const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
           std::vector<std::string> opts = {"双屏", "仅上屏", "仅下屏"};
           if (w::cycleRow(app, rc, "双屏布局", opts, app.config.dualLayout,
-                          subIndex_ == 4))
+                          subIndex_ == 5))
             app.config.save(fsutil::join(app.dataDir(), "config.json"));
           y += 50;
         }
         {
           const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          if (w::listRow(app, rc, "全屏切换", "F11", subIndex_ == 5)) app.toggleFullscreen();
+          if (w::listRow(app, rc, "全屏切换", "F11", subIndex_ == 6)) app.toggleFullscreen();
           y += 50;
         }
         break;
@@ -499,6 +736,14 @@ class EmulatorScene : public Scene {
   int fpsAccum_ = 0;
   Uint32 fpsLast_ = 0;
   App* app_ = nullptr;
+
+  // —— 自定义比例编辑器状态（APK customRect 会话态）——
+  bool editLayout_ = false;
+  float rect_[4] = {0, 0, 1, 1};       // 当前编辑矩形（归一化）
+  float editBackup_[4] = {0, 0, 1, 1}; // 进入编辑器时的备份（Esc 取消）
+  float editOrig_[4] = {0, 0, 1, 1};   // body 拖动起始快照
+  float editAnchorX_ = 0, editAnchorY_ = 0;
+  int editDrag_ = -1;                  // -1 无 / 0-3 角 / 4 body
 };
 
 }  // namespace

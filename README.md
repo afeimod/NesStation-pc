@@ -8,6 +8,44 @@ C++17 + SDL2 单二进制原生实现，libretro 核心进程内加载（RetroAr
 
 ---
 
+## 📦 v1.2.8 更新（2026-11-06）
+
+**① UI 放大真正生效 + 点击错位根治（用户反馈：UI 根本没放大、点击错位）**
+
+| v1.2.7 根因（实证） | v1.2.8 修复 |
+| --- | --- |
+| 自动缩放按 `pixelH/720`：逻辑空间恒 1280×720，UI 占屏比例纹丝不动 —— 视觉相对大小完全没变 | 自动缩放改 **`pixelH/540` 密度基准**（对齐 APK 密度缩放逻辑）：720p=133% / **1080p=200%** / 1440p=267% / 4K=400%，1080p 下 1dp≈2 物理像素（与 APK 在 Android TV 1080p 的 xhdpi 视觉密度一致），UI 相对屏幕**整体放大 1.33 倍** |
+| Windows 高 DPI（125%/150%）下进程不感知 DPI → 窗口被虚拟化到 96 DPI、DWM 位图拉伸整个画面 → 又小又糊 | init 前声明 `permonitorv2` + `DPI_SCALING=0`：窗口/鼠标/渲染器输出统一为物理像素，字形 1:1 落盘 |
+| **点击错位根因**：SDL ≥ 2.0.18 在渲染器设置逻辑尺寸后，鼠标事件坐标/增量已被 SDL **自动折算为逻辑坐标**，v1.2.7 又乘一次折算系数 → 双重缩放（实测窗口 1280/逻辑 960 下推送 (147,229) 交付已是 (110,171)） | InputManager 直接使用事件原始坐标（自动折算由 SDL 完成），旧 SDL（<2.0.18）保留标量折算回退；`videoclick` 自检回归覆盖 |
+| 游戏纹理按原始帧尺寸创建，HQ4X 后 1024×960 写进 256×256 纹理 → **堆越界崩溃** | 纹理按【放大后】尺寸创建/扩容（ASAN 实证修复） |
+| 单屏渲染 src=nullptr 把整张 2 的幂纹理（含帧外填充）铺进目标 → 非 2 的幂分辨率（SNES 512×448 等）画面纵向压扁 | 显式源矩形 `{0,0,frameW,frameH}` |
+
+- 设置 → 外观 → 界面缩放：自动 / 100%~300%（手动档位语义不变）
+
+**② 全局功能补全 —— 完全按照 APK 源码逻辑（NesStation Android 版逐文件对照）**
+
+| 功能 | APK 源码出处 | PC 实现 |
+| --- | --- | --- |
+| **画面比例 6 档**：全屏拉伸(默认)/4:3/3:2(GBA 原生)/8:7(NES 像素比)/16:9/自定义(拖动四角) | `EmulatorScreen.kt:8599-8619`（Modifier.aspectRatio contain 数学）/ `ScreenPositionEditor.kt`（四角编辑器） | `VideoBridge::computeGameRect` 同公式（contain + 双向居中；实测 4:3@1080p=1440px±0、8:7=1234px、custom 归一化矩形精确映射）；自定义四角编辑器 1:1（6% 容差/MIN_SIZE 5%/body 整体拖动/半透明粉红 #33E91E63/完成·重置按钮，拖动实时预览、抬手持久化） |
+| **视频滤镜 11 档**：关闭/扫描线/CRT/点阵/XBR/HQ2X/HQ4X/XBR+点阵/4XBR/4XBR+点阵/HQ4X+点阵 | `core_shared.h`（2xBR v3.3a + hqx 库 + 0-10 编号体系）/ `NdsFilterPatterns.kt`（图案逐参数） | **逐行移植**：2xBR/4xBR（Hyllian v3.3a，int32 混合防环绕修复原样保留）+ HQ2X/HQ4X（Maxim Stepin 原版 hqx 库内置 third_party/hqx）；叠加图案逐参数复刻 —— 扫描线 2×4 tile 第 4 行 55% 黑、CRT 3×6 RGB 磷光条 15% + 50% 黑扫描线 + 径向暗角 35%（r=min(w,h)×0.7）、点阵 4×4 smoothstep 圆形暗点 ≤50%；组合滤镜 = 放大 + 叠加两段拼接（APK 同款） |
+| 滤镜编号双口径 | `SettingsScreen.kt:126`（设置页真实编号 xbr→4/4xbr→8）vs `EmulatorScreen.kt:2890`（游戏内 xbr→HQ2X/4xbr→HQ4X，3.5.2 实测行为：2xBR 硬边缘色渗） | 两个入口分别使用两套映射（`filterIntFromSettings`/`filterIntFromGamePanel`），与 APK 完全一致 |
+| **平台级设置**：游戏内改写 `<key>_<平台>`、读取平台键→回退全局 | `PadLayoutStore.kt` pk()/getSp() | `config.videoScaleByPlatform` / `videoFilterByPlatform`，游戏内菜单改动只影响该平台，设置页改动写全局 |
+| **存档方式**：统一存档目录(推荐) / ROM 同目录同名(.srm/.sav) | `SettingsScreen.kt:411-425` | 设置 → 存储 → 存档方式；`core_builtin` 模式 GET_SAVE_DIRECTORY 返回 ROM 所在目录（libretro 惯例落盘），切换后重进游戏生效 |
+| 设置分区归属 | `SettingsScreen.kt:279-505` | 视频区=画面缩放+视频滤镜（APK 同款两行）；显示帧数按 APK 归入性能区；整数缩放保留为 PC 增强（像素完美，优先于画面比例） |
+| NDS 双屏比例派生 | `EmulatorScreen.kt:7840-7855`（非 custom 忽略用户比例） | 双屏平台按布局派生原生比（上/下屏各自 src 矩形） |
+
+- 滤镜热生效（下一帧即用新值，无需重进游戏）；放大预算 = 核心 AV maxW×maxH（钳 1024×1024），超预算静默直通（APK canUpscale 语义）
+- 滤镜切换写日志（`Video filter: hq2x (256x224 → 512x448)`）
+
+**③ CI 修复（对照用户提供的日志，3 个失败 job 逐一实证）**
+
+| 失败 job | 根因（日志原文） | 修复 |
+| --- | --- | --- |
+| EMU eden · linux-x64 / linux-arm64 | `dma_pusher.cpp:65: error: cannot convert 'boost::container::small_vector<Tegra::CommandHeader, 512>' to 'std::span<const Tegra::CommandHeader>'`（CI 容器 debian:12 = GCC 12，libstdc++ 12 的 span 范围构造约束不接受该隐式转换；MSVC/GCC≥14 可过） | 改 `std::span<const CommandHeader>(data(), size())` 显式两参构造（全编译器通用的最基本形式，语义不变） |
+| EMU dolphin · windows-x64 | `Source/PCH/pch.h(11): error C1189: #error: Please update your build environment to the latest Visual Studio 2026!`（快照硬性要求 `_MSC_FULL_VER ≥ 195136252` = VS2026；windows-2022 镜像的 VS2022 17.14（1944）必挂） | dolphin 作业切 **`windows-2025-vs2026`** 镜像（2026-05-07 起 GA，VS2026 18.5+，_MSC_VER 1955 ≥ 1951 通过检查；CMake 4.3 自带 "Visual Studio 18 2026" 生成器）；构建脚本对 CMake ≥ 4 附加 `CMAKE_POLICY_VERSION_MINIMUM=3.5`（内置 enet/hidapi 等老式最低版本声明兼容）。cemu/eden 已实证通过 windows-2022，保持不动 |
+
+---
+
 ## 📦 v1.2.7 更新（2026-11-06）
 
 **① 整体 UI 放大（用户反馈：字体/标题/菜单/图标卡片太小、发糊）**

@@ -8,6 +8,7 @@
 
 namespace ns {
 
+
 const char* retroPadName(int btn) {
   switch (btn) {
     case RP_B: return "B";
@@ -271,6 +272,20 @@ void InputManager::pollRetroState() {
   }
 }
 
+// ★v1.2.8 根因修复（点击错位）：SDL ≥ 2.0.18 在渲染器设置了逻辑尺寸后，
+//   鼠标事件的坐标与增量在 SDL_PollEvent 交付时【已自动折算为逻辑坐标】
+//   （含窗口/DPI/letterbox 全部边界）。直接使用原始值 —— 再乘任何换算
+//   系数都会双重缩放，这正是 v1.2.7「点击错位」的根因（实测：窗口 1280、
+//   逻辑 960 时，推送 (147,229) 交付 (110,171)，已是逻辑坐标）。
+//   仅旧 SDL（< 2.0.18，无自动折算）才需要标量折算。
+Vec2 InputManager::toUi(int wx, int wy) const {
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+  return Vec2((float)wx, (float)wy);
+#else
+  return Vec2((float)wx * mouseToUi_, (float)wy * mouseToUi_);
+#endif
+}
+
 void InputManager::handleEvent(const SDL_Event& ev) {
   switch (ev.type) {
     case SDL_KEYDOWN: {
@@ -338,13 +353,19 @@ void InputManager::handleEvent(const SDL_Event& ev) {
       if (textEditing_) textBuf_ += ev.text.text;
       break;
     case SDL_MOUSEMOTION:
-      // ★v1.2.7：窗口点数 → 设计单位（与渲染器逻辑坐标系一致）
-      ui_.mouse = Vec2((float)ev.motion.x * mouseToUi_, (float)ev.motion.y * mouseToUi_);
+      // ★v1.2.8：坐标与增量均已由 SDL 自动折算（≥ 2.0.18，见 toUi 注释），
+      //   直接使用，不做二次换算
+      ui_.mouse = toUi(ev.motion.x, ev.motion.y);
+#if !SDL_VERSION_ATLEAST(2, 0, 18)
       mouseDxAccum_ += (float)ev.motion.xrel * mouseToUi_;
       mouseDyAccum_ += (float)ev.motion.yrel * mouseToUi_;
+#else
+      mouseDxAccum_ += (float)ev.motion.xrel;
+      mouseDyAccum_ += (float)ev.motion.yrel;
+#endif
       break;
     case SDL_MOUSEBUTTONDOWN:
-      ui_.mouse = Vec2((float)ev.button.x * mouseToUi_, (float)ev.button.y * mouseToUi_);
+      ui_.mouse = toUi(ev.button.x, ev.button.y);
       if (ev.button.button == SDL_BUTTON_LEFT) {
         if (!mouseHeldNow_) {
           mouseHeldNow_ = true;
@@ -362,7 +383,7 @@ void InputManager::handleEvent(const SDL_Event& ev) {
       }
       break;
     case SDL_MOUSEBUTTONUP:
-      ui_.mouse = Vec2((float)ev.button.x * mouseToUi_, (float)ev.button.y * mouseToUi_);
+      ui_.mouse = toUi(ev.button.x, ev.button.y);
       if (ev.button.button == SDL_BUTTON_LEFT) {
         mouseHeldNow_ = false;
         mouseReleasedAccum_ = true;

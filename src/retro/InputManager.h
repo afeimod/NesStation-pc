@@ -83,9 +83,10 @@ class InputManager {
   void textInputStart();
   void textInputStop();
 
-  // ★v1.2.7 鼠标坐标 → UI 设计单位 的折算系数（窗口点数 → 逻辑坐标）。
-  //   渲染器逻辑尺寸不再等于窗口点数（高 DPI / UI 缩放），
-  //   所有 UI 命中测试在设计单位下进行，事件坐标需同比例折算。
+  // —— ★v1.2.8 鼠标坐标 → UI 设计单位 ——
+  //   SDL ≥ 2.0.18：渲染器设置逻辑尺寸后，事件坐标/增量已由 SDL 自动折算
+  //   为逻辑坐标 —— InputManager 直接使用（双重换算 = v1.2.7 点击错位根因）。
+  //   旧 SDL（< 2.0.18）无自动折算，用此标量（逻辑单位/窗口点数）。
   void setMouseToUiScale(float s) { mouseToUi_ = s > 0.0f ? s : 1.0f; }
 
  private:
@@ -93,6 +94,7 @@ class InputManager {
   void setUiBtn(Btn b, bool down);
   void feedCoreKey(bool down, const SDL_Keysym& sym);
   void pollRetroState();
+  Vec2 toUi(int wx, int wy) const;  // ★v1.2.8 窗口坐标 → 逻辑坐标（精确反演）
 
   InputState ui_;
   bool rawHeld_[(int)Btn::Count] = {};
@@ -105,7 +107,7 @@ class InputManager {
   bool mouseRightPressedAccum_ = false;
   int wheelAccum_ = 0;
   float mouseDxAccum_ = 0, mouseDyAccum_ = 0;
-  float mouseToUi_ = 1.0f;  // ★v1.2.7 窗口点数 → 设计单位
+  float mouseToUi_ = 1.0f;   // ★v1.2.8 窗口点数 → 设计单位（仅 SDL < 2.0.18 用）
 
   // 长按重复
   float repeatTimer_[(int)Btn::Count] = {};

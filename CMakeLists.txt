@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(NesStation VERSION 1.2.7 LANGUAGES C CXX
+project(NesStation VERSION 1.2.8 LANGUAGES C CXX
         DESCRIPTION "NesStation PC - Multi-platform retro game station for Windows/Linux")
 
 # ---------------------------------------------------------------------------
@@ -85,6 +85,15 @@ target_link_libraries(nesstation PRIVATE SDL2::SDL2)
 
 # stb 单头库实现聚合单元
 target_sources(nesstation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb/stb_impl.cpp)
+
+# ★v1.2.8：HQX 放大滤镜库（Maxim Stepin 原版，APK core/jni/hqx 同源移植；
+#   C 编译，随主目标静态链接）
+target_sources(nesstation PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hqx/hq2x.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hqx/hq4x.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hqx/init.c)
+target_include_directories(nesstation PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hqx)
 
 # ---------------------------------------------------------------------------
 # 核心自动下载（默认开）：构建完成后从 libretro 官方 buildbot 下载当前架构

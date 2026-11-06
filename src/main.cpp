@@ -96,6 +96,46 @@ void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
     app.pushScene(ns::createLibraryScene(-1));
   } else if (name == "settings") {
     app.pushScene(ns::createSettingsScene());
+  } else if (name == "video") {
+    // ★v1.2.8 视频分类（画面缩放 6 档 / 视频滤镜 11 档回归截图）
+    app.pushScene(ns::createSettingsScene(1));
+  } else if (name == "game") {
+    // ★v1.2.8 真实核心全链路：造 NES ROM + 入库 + 启动（渲染若干帧后截图）。
+    //   滤镜/画面比例经 config.json 正常加载路径生效（外部预置），
+    //   覆盖：像素格式转换 → 放大滤镜（CPU）→ 纹理上传 → 比例数学 → 叠加层。
+    {
+      const std::string dir = "/tmp/nesstation-selftest-roms";
+      fsutil::makeDirs(dir);
+      // 最小合法 NES ROM：16 字节 header（PRG 32K×1 + CHR 8K×1）+ 填充
+      std::string rom;
+      rom += "NES\x1a";
+      rom += std::string(1, (char)1);   // PRG banks
+      rom += std::string(1, (char)1);   // CHR banks
+      rom += std::string(1, (char)0x01);  // horizontal mirroring
+      rom += std::string(12, '\0');
+      rom += std::string(32768, '\x55');  // PRG（0x55 交替位图）
+      rom += std::string(8192, '\xAA');   // CHR
+      {
+        std::ofstream f(fsutil::join(dir, "滤镜测试.nes"), std::ios::binary);
+        f << rom;
+      }
+      app.library.addRomDir(dir);
+      app.library.scanDirectory(dir, ns::GamePlatform::NES, false, false);
+      app.library.save();
+      const auto& games = app.library.games();
+      if (!games.empty()) app.launchGame(games.back());
+    }
+  } else if (name == "videoclick") {
+    // ★v1.2.8 点击对齐回归：设置页 → 合成点击左侧导航「视频」分类。
+    //   窗口 1280×720（逻辑 960×540，缩放 1.333）下，视频行中心逻辑
+    //   (110,172) → 窗口坐标 (147,229)。截图应显示「视频」分类选中 +
+    //   右侧出现「画面缩放 / 视频滤镜」行 —— 若坐标换算错误则会停在
+    //   「外观」或点进别的分类（v1.2.7 点击错位回归测试）。
+    app.pushScene(ns::createSettingsScene());
+    st.synthFrame = 0;
+    st.synth[3].push_back(synthMotion(147, 229, 0, 0));
+    st.synth[4].push_back(synthButton(true, 147, 229));
+    st.synth[6].push_back(synthButton(false, 147, 229));
   } else if (name == "perf") {
     app.pushScene(ns::createSettingsScene(3));  // 性能 tab（快进倍速）
   } else if (name == "cores") {

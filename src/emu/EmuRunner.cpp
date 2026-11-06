@@ -83,7 +83,14 @@ std::string EmuRunner::start(App& app, const GameEntry& game) {
     return appPtr->cores.resolveOption(coreKey_, optKey);
   };
 
-  if (!core_->load(corePath, app.cores.systemDir(), app.cores.savesDir(), resolver)) {
+  // ★v1.2.8 存档方式（对齐 APK globalSaveMode，SettingsScreen.kt:411-425）：
+  //   nesstation = 统一存档目录（数据目录 saves/，旧行为）；
+  //   core_builtin = ROM 同目录同名 .srm/.sav（GET_SAVE_DIRECTORY 返回 ROM
+  //   所在目录，libretro 核心按惯例把存档写到该目录下）。
+  const std::string saveDir =
+      app.config.saveMode == "core_builtin" ? fsutil::dirOf(game.romPath)
+                                            : app.cores.savesDir();
+  if (!core_->load(corePath, app.cores.systemDir(), saveDir, resolver)) {
     const std::string err = core_->lastError();
     core_.reset();
     return std::string("核心装载失败：") + err;

@@ -62,7 +62,14 @@ bool DmaPusher::Step() {
     }
 
     if (prefetch_size > 0) {
-        ProcessCommands(command_list.prefetch_command_list);
+        // ★修复 GCC 12 构建（CI debian:12 容器 = GCC 12，EMU eden · linux-x64/arm64
+        //   的死因）：boost::container::small_vector<T, 512> → std::span<const T>
+        //   的隐式转换在 libstdc++ 12 的约束下不可用（MSVC / GCC ≥ 14 可过，
+        //   GCC 12 报 "cannot convert"）。改用 data()/size() 两参显式构造 ——
+        //   全编译器通用的最基本 span 构造形式，语义与原隐式转换完全一致。
+        ProcessCommands(std::span<const CommandHeader>(
+            command_list.prefetch_command_list.data(),
+            command_list.prefetch_command_list.size()));
         dma_pushbuffer.pop();
         return true;
     }

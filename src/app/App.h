@@ -28,21 +28,30 @@ class EmuRunner;
 
 // —— 版本号（CMake 注入；本地直编 g++ 时回退）——
 #ifndef NESSTATION_VERSION
-#define NESSTATION_VERSION "1.2.7"
+#define NESSTATION_VERSION "1.2.8"
 #endif
 inline const char* appVersionText() { return "v" NESSTATION_VERSION; }
 
 // —— 配置（<dataDir>/config.json）——
 struct Config {
   int uiStyle = 0;             // 0=Neon 1=FSD
-  int scalingMode = 0;         // ScalingMode
-  int screenEffect = 0;        // ScreenEffect（全局主滤镜：0 无 / 1 扫描线 / 2 CRT 荫罩）
+  // ★v1.2.8：画面缩放/滤镜完全对齐 APK PadLayout（字符串键，APK 同枚举值）。
+  //   旧 scalingMode/screenEffect 读取时迁移到新键（见 load）。
+  std::string videoScale = "stretch";   // APK video_scale：stretch/4:3/3:2/8:7/16:9/custom
+  std::string videoFilter = "none";    // APK video_filter：none/scanline/crt/dot/xbr/
+                                       // hq2x/hq4x/xbr_dot/4xbr/4xbr_dot/hq4x_dot
+  float customLayout[4] = {0, 0, 1, 1}; // APK custom_layout_{l,t,r,b}（归一化 0..1）
+  bool integerScale = false;    // PC 增强：整数缩放（像素完美，APK 无此项）
+  std::string saveMode = "nesstation"; // APK global_save_mode：统一目录 / core_builtin
+  // 平台级覆盖（APK pk() 逻辑：游戏内设置写 <key>_<PLATFORM>，设置页写全局键）
+  std::map<std::string, std::string> videoScaleByPlatform;
+  std::map<std::string, std::string> videoFilterByPlatform;
   int dualLayout = 0;          // DualLayout（NDS/3DS）
   bool videoSmooth = true;
   bool audioMuted = false;
   bool fullscreen = false;
   bool showFps = false;
-  int uiScalePercent = 0;      // ★v1.2.7 整体 UI 缩放：0=自动 / 100~300 固定百分比
+  int uiScalePercent = 0;      // ★v1.2.8 整体 UI 缩放：0=自动 / 100~300 固定百分比
                                //（字体/标题/菜单/卡片统一放大，高 DPI 不再发糊）
   bool autoSaveState = true;   // 退出游戏自动存 slot 0
   bool scanRecursive = true;

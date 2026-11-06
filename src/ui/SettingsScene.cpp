@@ -314,20 +314,23 @@ class SettingsScene : public Scene {
         saveConfig(app);
       }
       y += 38;
-      // ★v1.2.7 整体界面缩放（字体/标题/菜单/卡片统一放大，高 DPI 不发糊）
+      // ★v1.2.8 整体界面缩放（字体/标题/菜单/卡片统一放大，高 DPI 不发糊）
+      //   自动 = 密度缩放：720p 133% / 1080p 200% / 4K 400%（对齐 APK
+      //   在 Android TV 1080p 的 xhdpi 视觉密度）
       {
         const Rect rc2(cx_ + 12, y, (float)app.draw.W - cx_ - 50, 38);
-        std::vector<std::string> scales = {"自动", "100%", "125%", "150%", "175%", "200%"};
-        const int vals[] = {0, 100, 125, 150, 175, 200};
+        std::vector<std::string> scales = {"自动", "100%", "125%", "150%", "175%",
+                                           "200%", "250%", "300%"};
+        const int vals[] = {0, 100, 125, 150, 175, 200, 250, 300};
         int sel = 0;
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 8; i++)
           if (app.config.uiScalePercent == vals[i]) {
             sel = i;
             break;
           }
         const bool f2 = rowFocus();
         w::blockRow(app, rc2, "界面缩放",
-                    "字体/标题/菜单/卡片整体放大；自动 = 1080p 150%、4K 300%", f2);
+                    "字体/标题/菜单/卡片整体放大；自动 = 720p 133%、1080p 200%、4K 400%", f2);
         if (w::spinnerChip(app, rc2, scales, sel, f2)) {
           app.config.uiScalePercent = vals[sel];
           app.applyUiScale();
@@ -406,31 +409,64 @@ class SettingsScene : public Scene {
   }
 
   // ============ 1 视频 ============
+  // ★v1.2.8：对齐 APK SettingsScreen「视频」区 —— 画面缩放 6 档 + 视频滤镜
+  //   11 档（文案与枚举值 1:1，SettingsScreen.kt:280-297）；设置页写入全局键
+  //   （游戏内菜单写平台键，APK pk() 语义）。
   void drawVideo(App& app, float& y) {
     const Skin& sk = Theme::skin();
     app.font.draw(app.sdlRenderer(), "视频", cx_, y, 24, sk.textHi, true);
     y += 42;
+    const float rw = (float)app.draw.W - cx_ - 50;
+    // —— APK「画面缩放」（videoScale：stretch/4:3/3:2/8:7/16:9/custom）——
     {
-      const float ph = 38 * 4 + 12;
+      static const std::vector<std::string> opts = {
+          "全屏拉伸(默认)", "4:3", "3:2 (GBA 原生)", "8:7 (NES 像素比)", "16:9",
+          "自定义(拖动四角)"};
+      static const std::vector<std::string> keys = {"stretch", "4:3", "3:2", "8:7",
+                                                    "16:9", "custom"};
+      const float ph = 38 + 12 + 14;
       y = beginBlock(app, y, "游戏画面", ph);
-      const float rw = (float)app.draw.W - cx_ - 50;
-      {
-        const Rect rc(cx_ + 12, y, rw, 38);
-        std::vector<std::string> modes = {"保持比例", "拉伸填充", "整数缩放"};
-        const bool f = rowFocus();
-        w::blockRow(app, rc, "游戏画面缩放", "按核心宽高比缩放（整数缩放 = 像素完美）",
-                    f);
-        if (w::spinnerChip(app, rc, modes, app.config.scalingMode, f)) saveConfig(app);
-        y += 38;
+      int idx = 0;
+      for (size_t i = 0; i < keys.size(); i++)
+        if (keys[i] == app.config.videoScale) idx = (int)i;
+      const bool f = rowFocus();
+      w::blockRow(app, Rect(cx_ + 12, y, rw, 38), "画面缩放",
+                  "全屏拉伸 / 固定比例 / 自定义（游戏内拖四角）", f);
+      if (w::spinnerChip(app, Rect(cx_ + 12, y, rw, 38), opts, idx, f)) {
+        app.config.videoScale = keys[idx];
+        if (keys[idx] == "custom")
+          app.toast("已选自定义：进入游戏 → 菜单 → 画面设置拖动四角");
+        saveConfig(app);
       }
-      {
-        const Rect rc(cx_ + 12, y, rw, 38);
-        std::vector<std::string> fx = {"无滤镜", "扫描线", "CRT 荫罩"};
-        const bool f = rowFocus();
-        w::blockRow(app, rc, "画面滤镜", "0 无 / 1 扫描线 / 2 CRT 荫罩", f);
-        if (w::spinnerChip(app, rc, fx, app.config.screenEffect, f)) saveConfig(app);
-        y += 38;
+      y += 38 + 12 + 14;
+    }
+    // —— APK「视频滤镜」（videoFilter：none…hq4x_dot 11 档）——
+    {
+      static const std::vector<std::string> opts = {
+          "关闭",       "扫描线",   "CRT",     "点阵",      "XBR",
+          "HQ2X",     "HQ4X",     "XBR+点阵", "4XBR",      "4XBR+点阵",
+          "HQ4X+点阵"};
+      static const std::vector<std::string> keys = {
+          "none",    "scanline", "crt",     "dot",     "xbr",
+          "hq2x",    "hq4x",     "xbr_dot", "4xbr",    "4xbr_dot",
+          "hq4x_dot"};
+      const float ph = 38 + 12 + 14;
+      y = beginBlock(app, y, "视频滤镜", ph);
+      int idx = 0;
+      for (size_t i = 0; i < keys.size(); i++)
+        if (keys[i] == app.config.videoFilter) idx = (int)i;
+      const bool f = rowFocus();
+      w::blockRow(app, Rect(cx_ + 12, y, rw, 38), "视频滤镜",
+                  "叠加类（扫描线/CRT/点阵）+ 放大类（XBR/HQ 系，对齐 APK）", f);
+      if (w::spinnerChip(app, Rect(cx_ + 12, y, rw, 38), opts, idx, f)) {
+        app.config.videoFilter = keys[idx];
+        saveConfig(app);
       }
+      y += 38 + 12 + 14;
+    }
+    {
+      const float ph = 38 * 3 + 12;
+      y = beginBlock(app, y, "画面选项", ph);
       {
         const Rect rc(cx_ + 12, y, rw, 38);
         std::vector<std::string> dual = {"双屏", "仅上屏", "仅下屏"};
@@ -444,25 +480,25 @@ class SettingsScene : public Scene {
         const bool f = rowFocus();
         w::blockRow(app, rc, "平滑缩放", "使用线性采样（像素风游戏建议关闭）", f);
         if (w::switchNeon(app, rc, app.config.videoSmooth, f)) saveConfig(app);
+        y += 38;
+      }
+      {
+        const Rect rc(cx_ + 12, y, rw, 38);
+        const bool f = rowFocus();
+        w::blockRow(app, rc, "整数缩放", "按源分辨率取整倍数（像素完美，优先于画面比例）", f);
+        if (w::switchNeon(app, rc, app.config.integerScale, f)) saveConfig(app);
         y += 38 + 12 + 14;
       }
     }
   }
 
   // ============ 2 显示 ============
+  // ★v1.2.8：APK「显示」区只放横竖屏（Android 专属）——PC 对应保留
+  //   全屏相关 + 快捷键说明；「显示帧数」按 APK 归属移入「性能」区。
   void drawDisplay(App& app, float& y) {
     const Skin& sk = Theme::skin();
     app.font.draw(app.sdlRenderer(), "显示", cx_, y, 24, sk.textHi, true);
     y += 42;
-    {
-      const float ph = 62;
-      y = beginBlock(app, y, "FPS 显示", ph);
-      const Rect rc(cx_ + 12, y, (float)app.draw.W - cx_ - 50, 38);
-      const bool f = rowFocus();
-      w::blockRow(app, rc, "显示帧率 HUD", "游戏画面角落显示实时 FPS", f);
-      if (w::switchNeon(app, rc, app.config.showFps, f)) saveConfig(app);
-      y += 38 + 12 + 14;
-    }
     // ★v1.2.6 启动游戏时自动全屏（对齐 Android AppSettings.fullscreenOnLaunch；
     //   退出游戏自动恢复原窗口状态；游戏中 F11 仍可手动切换）
     {
@@ -498,10 +534,22 @@ class SettingsScene : public Scene {
   }
 
   // ============ 3 性能 ============
+  // ★v1.2.8：「显示帧数」按 APK 归属放在本区（SettingsScreen 性能区 =
+  //   高质量缩放 + 显示帧数；高质量缩放为 Android 缓冲策略，PC 对应项
+  //   为视频区的「平滑缩放」，此处不重复）。
   void drawPerformance(App& app, float& y) {
     const Skin& sk = Theme::skin();
     app.font.draw(app.sdlRenderer(), "性能", cx_, y, 24, sk.textHi, true);
     y += 42;
+    {
+      const float ph = 62;
+      y = beginBlock(app, y, "显示帧数", ph);
+      const Rect rc(cx_ + 12, y, (float)app.draw.W - cx_ - 50, 38);
+      const bool f = rowFocus();
+      w::blockRow(app, rc, "显示帧数", "游戏画面角落显示实时 FPS（APK 性能区同款）", f);
+      if (w::switchNeon(app, rc, app.config.showFps, f)) saveConfig(app);
+      y += 38 + 12 + 14;
+    }
     {
       const float ph = 100;
       y = beginBlock(app, y, "快进", ph);
@@ -621,12 +669,35 @@ class SettingsScene : public Scene {
   }
 
   // ============ 5 存储 ============
+  // ★v1.2.8：补全 APK「存档方式」（globalSaveMode：统一存档目录 /
+  //   ROM 同目录同名 .srm/.sav，SettingsScreen.kt:411-425）；切换后需重进游戏。
   void drawStorage(App& app, float& y) {
     const Skin& sk = Theme::skin();
     Draw& d = app.draw;
     app.font.draw(app.sdlRenderer(), "存储", cx_, y, 24, sk.textHi, true);
     y += 42;
     const float rw = (float)app.draw.W - cx_ - 50;
+    {
+      const float ph = 38 + 12 + 14 + 34;
+      y = beginBlock(app, y, "存档方式", ph);
+      static const std::vector<std::string> opts = {"统一存档目录 (推荐)",
+                                                    "ROM 同目录同名 (.srm/.sav)"};
+      static const std::vector<std::string> keys = {"nesstation", "core_builtin"};
+      int idx = app.config.saveMode == "core_builtin" ? 1 : 0;
+      const bool f = rowFocus();
+      w::blockRow(app, Rect(cx_ + 12, y, rw, 38), "存档方式",
+                  "所有核心通用的 SRAM/电可擦写存档落盘位置（切换后需重进游戏）", f);
+      if (w::spinnerChip(app, Rect(cx_ + 12, y, rw, 38), opts, idx, f)) {
+        app.config.saveMode = keys[idx];
+        saveConfig(app);
+      }
+      y += 38 + 10;
+      app.font.draw(app.sdlRenderer(),
+                    "「统一存档目录」把存档集中在应用数据目录 saves/；「ROM 同目录」"
+                    "直接读写 ROM 旁的同名存档（与官方模拟器/RetroArch 习惯一致，便于交换存档）。",
+                    cx_ + 12, y, 11, sk.textDim);
+      y += 12 + 4 + 14;
+    }
     // ROM 扫描目录
     {
       const float ph = 62 + (float)std::max<size_t>(app.library.romDirs().size(), 1) * 46 + 46;

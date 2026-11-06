@@ -20,6 +20,17 @@ namespace ns {
 using nlohmann::json;
 
 // —— Config ————————————————————————————————————————————
+// —— APK 键值合法性校验（对齐 PadLayoutStore：非法值回退默认）——
+static bool validVideoScale(const std::string& s) {
+  return s == "stretch" || s == "4:3" || s == "3:2" || s == "8:7" || s == "16:9" ||
+         s == "custom";
+}
+static bool validVideoFilter(const std::string& s) {
+  return s == "none" || s == "scanline" || s == "crt" || s == "dot" || s == "xbr" ||
+         s == "hq2x" || s == "hq4x" || s == "xbr_dot" || s == "4xbr" ||
+         s == "4xbr_dot" || s == "hq4x_dot";
+}
+
 void Config::load(const std::string& file) {
   std::string text;
   if (!fsutil::readFile(file, &text)) return;
@@ -27,8 +38,49 @@ void Config::load(const std::string& file) {
     const json j = json::parse(text, nullptr, false);
     if (j.is_discarded()) return;
     uiStyle = j.value("uiStyle", 0);
-    scalingMode = j.value("scalingMode", 0);
-    screenEffect = j.value("screenEffect", 0);
+    // ★v1.2.8：新键（APK 同名字符串枚举）优先；旧版 int 键自动迁移——
+    //   scalingMode: 0保持/1拉伸→stretch、2整数→stretch+integerScale=true
+    //   screenEffect: 0无→none、1扫描线→scanline、2CRT→crt
+    {
+      std::string vs = j.value("videoScale", "");
+      if (vs.empty()) {
+        const int oldScaling = j.value("scalingMode", 0);
+        vs = oldScaling == 1 ? "stretch" : "stretch";
+        integerScale = oldScaling == 2;
+      }
+      videoScale = validVideoScale(vs) ? vs : "stretch";
+      std::string vf = j.value("videoFilter", "");
+      if (vf.empty()) {
+        const int oldFx = j.value("screenEffect", 0);
+        vf = oldFx == 1 ? "scanline" : (oldFx == 2 ? "crt" : "none");
+      }
+      videoFilter = validVideoFilter(vf) ? vf : "none";
+    }
+    {
+      auto cl = j.find("customLayout");
+      if (cl != j.end() && cl->is_array() && cl->size() == 4) {
+        for (int i = 0; i < 4; i++)
+          customLayout[i] =
+              std::min(1.0f, std::max(0.0f, (*cl)[i].get<float>()));
+      }
+    }
+    if (j.contains("videoScaleByPlatform") && j["videoScaleByPlatform"].is_object()) {
+      for (auto it = j["videoScaleByPlatform"].begin();
+           it != j["videoScaleByPlatform"].end(); ++it)
+        if (validVideoScale(it.value().get<std::string>()))
+          videoScaleByPlatform[it.key()] = it.value().get<std::string>();
+    }
+    if (j.contains("videoFilterByPlatform") && j["videoFilterByPlatform"].is_object()) {
+      for (auto it = j["videoFilterByPlatform"].begin();
+           it != j["videoFilterByPlatform"].end(); ++it)
+        if (validVideoFilter(it.value().get<std::string>()))
+          videoFilterByPlatform[it.key()] = it.value().get<std::string>();
+    }
+    {
+      std::string sm = j.value("saveMode", "nesstation");
+      saveMode = (sm == "core_builtin") ? "core_builtin" : "nesstation";
+    }
+    integerScale = j.value("integerScale", integerScale);
     dualLayout = j.value("dualLayout", 0);
     videoSmooth = j.value("videoSmooth", true);
     audioMuted = j.value("audioMuted", false);
@@ -70,8 +122,19 @@ void Config::load(const std::string& file) {
 void Config::save(const std::string& file) const {
   json j;
   j["uiStyle"] = uiStyle;
-  j["scalingMode"] = scalingMode;
-  j["screenEffect"] = screenEffect;
+  j["videoScale"] = videoScale;
+  j["videoFilter"] = videoFilter;
+  {
+    json cl = json::array();
+    for (int i = 0; i < 4; i++) cl.push_back(customLayout[i]);
+    j["customLayout"] = cl;
+  }
+  j["integerScale"] = integerScale;
+  j["saveMode"] = saveMode;
+  j["videoScaleByPlatform"] = json::object();
+  for (const auto& [k, v] : videoScaleByPlatform) j["videoScaleByPlatform"][k] = v;
+  j["videoFilterByPlatform"] = json::object();
+  for (const auto& [k, v] : videoFilterByPlatform) j["videoFilterByPlatform"][k] = v;
   j["dualLayout"] = dualLayout;
   j["videoSmooth"] = videoSmooth;
   j["audioMuted"] = audioMuted;
@@ -270,6 +333,16 @@ bool App::initFontChain() {
 }
 
 bool App::init() {
+  // ★v1.2.8：Windows 高 DPI 根治（必须在 SDL_Init 之前设置）。
+  //   旧版问题：进程不声明 DPI 感知 → Windows 把窗口虚拟化到 96 DPI，
+  //   渲染器输出 = 逻辑点数，整个画面被 DWM 位图拉伸 → 高 DPI（125%/150%）
+  //   下「又小又糊」；UI 缩放按 pixelH 计算也永远拿不到真实物理像素。
+  //   permonitorv2 + DPI_SCALING=0：窗口/鼠标/渲染器输出全部统一为物理像素，
+  //   字形 1:1 落盘不再被拉伸，自动缩放拿到真实分辨率。非 Windows 平台
+  //   这两个 hint 是无害空操作（macOS 走 cocoa 缩放、Linux X11/Wayland 原生）。
+  SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+  SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "0");
+
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
     LOGE("SDL_Init 失败：%s", SDL_GetError());
     return false;
@@ -302,6 +375,11 @@ bool App::init() {
       if (defW > 1920) defW = 1920;
       if (defH > 1080) defH = 1080;
     }
+  }
+  // ★v1.2.8 调试/回归用：NESSTATION_TEST_WINSIZE=1920x1080 强制初始窗口尺寸
+  //   （无头自检在不同分辨率下验证 UI 缩放/命中测试；正常用户不受影响）
+  if (const char* tw = getenv("NESSTATION_TEST_WINSIZE")) {
+    if (sscanf(tw, "%dx%d", &defW, &defH) == 2) { /* keep */ }
   }
   window_ = SDL_CreateWindow(std::string("NesStation ").append(appVersionText()).c_str(),
                              SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -419,18 +497,20 @@ bool App::saveScreenshot(const std::string& pngPath) {
   return ok != 0;
 }
 
-// —— ★v1.2.7 窗口表面 → 逻辑尺寸 / UI 缩放 / 鼠标映射 全量重算 ——
-// 旧版问题（用户反馈“整体 UI 太小很模糊”的双重根因）：
-//   1) 逻辑尺寸 = 窗口点数，所有字体/间距/卡片是固定设计像素 → 1080p+
-//      大窗口与 4K/高分屏上整体偏小；
-//   2) 窗口开了 ALLOW_HIGHDPI，高 DPI（如 150%）下渲染器输出是点数的
-//      1.5 倍，字形位图被 GPU 线性拉伸 → 发糊。
-// 新方案：
-//   · 渲染器逻辑尺寸 = 输出像素 / UI 缩放（宽高比一致，无黑边），
-//     所有绘制走同一变换，矢量元素在设备分辨率上光栅化；
-//   · 字形按 设计时号 × 缩放 烘焙（Font.cpp），1:1 落到物理像素 → 清晰；
-//   · 自动缩放按输出像素高度相对 720 基准：720p=100% / 1080p=150% /
-//     1440p=200% / 4K=300%；设置里可固定 100%~200%。
+// —— ★v1.2.8 窗口表面 → 逻辑尺寸 / UI 缩放 / 鼠标映射 全量重算 ——
+// v1.2.7 的教训（用户反馈「UI 根本没有放大 + 点击错位」）：
+//   ① 自动缩放按 pixelH/720：逻辑空间恒 1280×720，窗口越大缩放越大，但
+//     UI 元素占屏幕比例纹丝不动 —— 视觉相对大小完全没变；
+//   ② Windows 高 DPI 不感知（v1.2.8 已在 init 前声明 permonitorv2 +
+//     DPI_SCALING=0），渲染输出被 DWM 位图拉伸 —— 又小又糊。
+// v1.2.8 新方案（对齐 APK 密度缩放逻辑：Compose dp × 设备密度）：
+//   · 自动缩放 = pixelH / 540（设计基准 960×540）：
+//     720p 窗口=133% / 1080p=200% / 4K=400% —— 1080p 下 1dp ≈ 2 物理像素，
+//     与 APK 在 Android TV 1080p（xhdpi 密度 2.0）的视觉密度一致；
+//     相比 v1.2.7（720 基准）整体再放大 1.33 倍，UI 相对屏幕明显变大；
+//   · 字号/卡片等设计值不变，全部经渲染器统一变换放大 —— 布局逻辑零改动；
+//   · 鼠标坐标用 SDL_RenderWindowToLogical 精确反演渲染器变换（含
+//     letterbox/取整/DPI 一切边界），命中测试与所见像素严格一致。
 void App::updateSurface() {
   if (!renderer_ || !window_) return;
   SDL_GetWindowSize(window_, &winW_, &winH_);
@@ -445,18 +525,16 @@ void App::updateSurface() {
   if (config.uiScalePercent > 0) {
     scale = config.uiScalePercent / 100.0f;
     // ★防裁切：固定百分比不得把设计空间压到最低设计尺寸（960×540，
-    //   与 SDL_SetWindowMinimumSize 一致）以下 —— 720p 窗口强行 150% 会让
-    //   设计空间跌到 853×480，底部按键提示等元素被挤出屏幕。
-    //   例：1280×720 窗口最高 133%（=960×540）；1920×1080 才放行 150%。
+    //   与 SDL_SetWindowMinimumSize 一致）以下。
     const float maxByW = (float)pixelW / 960.0f;
     const float maxByH = (float)pixelH / 540.0f;
     const float maxScale = std::min(maxByW, maxByH);
     if (scale > maxScale) scale = maxScale;
   } else {
-    scale = (float)pixelH / 720.0f;
-    // 0.125 步进：连续调窗口大小时档位过渡平滑（也避免图集碎片化）
+    // 自动：540p 基准密度缩放（0.125 步进平滑过渡，避免图集碎片化）
+    scale = (float)pixelH / 540.0f;
     scale = std::floor(scale * 8.0f + 0.5f) / 8.0f;
-    if (pixelH >= 720 && scale < 1.0f) scale = 1.0f;  // 可读性下限
+    if (pixelH >= 540 && scale < 1.0f) scale = 1.0f;  // 可读性下限
   }
   if (scale < 0.5f) scale = 0.5f;
   if (scale > 5.0f) scale = 5.0f;
@@ -471,7 +549,8 @@ void App::updateSurface() {
   SDL_RenderGetScale(renderer_, &rx, &ry);
   uiscale::set(rx > 0.0f ? rx : scale);
   draw.begin(renderer_, logicalW, logicalH);
-  // 鼠标事件坐标是窗口点数 → 折算到设计单位（拖拽/点击命中测试共用）
+  // 鼠标：SDL ≥ 2.0.18 已自动把事件坐标折算为逻辑坐标（InputManager 直用）；
+  // 旧 SDL 的标量折算系数在此同步（逻辑单位/窗口点数）
   input.setMouseToUiScale(winW_ > 0 ? (float)logicalW / (float)winW_ : 1.0f);
   LOGI("UI 缩放：%.2f（输出 %dx%d / 逻辑 %dx%d / 窗口 %dx%d）", uiscale::get(), pixelW,
        pixelH, logicalW, logicalH, winW_, winH_);
