@@ -1650,7 +1650,18 @@ bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 si
     if (upload_copies.empty()) {
         return true;
     }
-    UploadMemory(buffer, staging_offset, largest_copy, std::span(upload_copies));
+    // ★修复 GCC 12 构建（CI debian:12 = GCC 12.2 + 系统 boost 1.74；本次 EMU
+    //   eden · linux-x64/arm64 的真实死因，vk_buffer_cache_base.cpp 在 46% 处）：
+    //   upload_copies 是 boost::container::small_vector<BufferCopy, 4>，
+    //   boost 1.74 的 vec_iterator 未标记 contiguous（iterator_category 仅到
+    //   random_access_iterator_tag），GCC 12 的 std::span 范围构造器要求
+    //   contiguous_range 约束 → CTAD「no matching function」直接编译失败
+    //   （MSVC / GCC ≥ 13 可过）。与 dma_pusher.cpp 同款修法：显式 data()/
+    //   size() 两参构造 —— 全编译器通用的最基本 span 构造形式。
+    //   （上游对同类问题的官方 workaround 见 texture_cache/util.h
+    //   FixSmallVectorADL，本处与其语义一致但零拷贝。）
+    UploadMemory(buffer, staging_offset, largest_copy,
+                 std::span(upload_copies.data(), upload_copies.size()));
     return false;
 }
 

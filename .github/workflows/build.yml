@@ -96,10 +96,18 @@ jobs:
             https://buildbot.libretro.com/nightly/linux/x86_64/latest/fceumm_libretro.so.zip
           python3 -c "import zipfile; zipfile.ZipFile('fce.zip').extractall('smoke/cores')"
           rm -f fce.zip
+          # ★v1.2.9：冒烟测试文件清单补齐 —— v1.2.8 的 VideoBridge.cpp 接入了
+          #   像素滤镜引擎（pixelfilters::applyUpscale / make*Pattern 等），
+          #   其实现位于 src/retro/PixelFilters.cpp（内部调用 hqx 的 C 函数），
+          #   旧清单缺这三个文件 → 链接期 undefined reference（本次 Linux
+          #   arm64 job Smoke test 步骤 exit 1 的直接死因；已本地复现验证）。
           g++ -std=c++17 -w -I src -I third_party -I third_party/stb -I third_party/libretro \
+              -I third_party/hqx \
               $(sdl2-config --cflags) tests/smoke_libretro.cpp \
               src/util/Log.cpp src/util/Fs.cpp src/retro/LibretroCore.cpp \
               src/retro/AudioBridge.cpp src/retro/VideoBridge.cpp src/retro/InputManager.cpp \
+              src/retro/PixelFilters.cpp third_party/hqx/hq2x.c third_party/hqx/hq4x.c \
+              third_party/hqx/init.c \
               third_party/stb/stb_impl.cpp $(sdl2-config --libs) -ldl -lpthread -o smoke/test
           python3 - <<'EOF'
           prg = bytes([0xA9,0x01,0x8D,0x06,0x20,0xA9,0x00,0x8D,0x06,0x20]) + bytes([0xEA]*(16*1024-10))
@@ -111,6 +119,7 @@ jobs:
 
       - name: External cores registry test
         # ★exeDir 断言已路径无关（v1.2.2）：二进制在哪编译运行都成立
+        #   （不含 VideoBridge/PixelFilters，无需 hqx —— 已本地验证可链接）
         run: |
           g++ -std=c++17 -w -I src -I third_party $(sdl2-config --cflags) \
               tests/test_externals.cpp src/util/Fs.cpp src/util/Log.cpp \
@@ -186,10 +195,14 @@ jobs:
             https://buildbot.libretro.com/nightly/linux/aarch64/latest/fceumm_libretro.so.zip
           python3 -c "import zipfile; zipfile.ZipFile('fce.zip').extractall('smoke/cores')"
           rm -f fce.zip
+          # ★v1.2.9：同 linux-x64 —— 补 PixelFilters.cpp + hqx 三件（死因同上）
           g++ -std=c++17 -w -I src -I third_party -I third_party/stb -I third_party/libretro \
+              -I third_party/hqx \
               $(sdl2-config --cflags) tests/smoke_libretro.cpp \
               src/util/Log.cpp src/util/Fs.cpp src/retro/LibretroCore.cpp \
               src/retro/AudioBridge.cpp src/retro/VideoBridge.cpp src/retro/InputManager.cpp \
+              src/retro/PixelFilters.cpp third_party/hqx/hq2x.c third_party/hqx/hq4x.c \
+              third_party/hqx/init.c \
               third_party/stb/stb_impl.cpp $(sdl2-config --libs) -ldl -lpthread -o smoke/test
           python3 - <<'EOF'
           prg = bytes([0xA9,0x01,0x8D,0x06,0x20,0xA9,0x00,0x8D,0x06,0x20]) + bytes([0xEA]*(16*1024-10))

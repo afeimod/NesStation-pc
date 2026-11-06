@@ -340,8 +340,17 @@ bool App::init() {
   //   permonitorv2 + DPI_SCALING=0：窗口/鼠标/渲染器输出全部统一为物理像素，
   //   字形 1:1 落盘不再被拉伸，自动缩放拿到真实分辨率。非 Windows 平台
   //   这两个 hint 是无害空操作（macOS 走 cocoa 缩放、Linux X11/Wayland 原生）。
+  // ★v1.2.9 修复 Linux x64 构建：SDL_HINT_WINDOWS_DPI_AWARENESS / _SCALING
+  //   是 SDL 2.24.0（2022-09）新增宏；ubuntu-22.04（linux-x64 job）系统
+  //   SDL2 = 2.0.20 无此宏 → 编译直接 'was not declared'（本次 Build 步骤
+  //   exit 2 的死因；debian:12 = 2.26.5 与 Windows FetchContent 2.32.4 均有，
+  //   故仅 x64 job 挂）。版本守卫：旧 SDL 跳过这两行（非 Windows 平台本就
+  //   无操作；Windows 端 SDL ≥ 2.24 恒满足，行为不变）。已用 g++ 11.4 +
+  //   SDL 2.0.20 / 2.32.4 双头文件组实测验证。
+#if defined(SDL_HINT_WINDOWS_DPI_AWARENESS) && defined(SDL_HINT_WINDOWS_DPI_SCALING)
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "0");
+#endif
 
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
     LOGE("SDL_Init 失败：%s", SDL_GetError());
