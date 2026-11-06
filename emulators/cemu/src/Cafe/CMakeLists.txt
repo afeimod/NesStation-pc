@@ -523,7 +523,7 @@ add_library(CemuCafe
 )
 
 if(APPLE)
-	target_sources(CemuCafe PRIVATE "HW/Latte/Renderer/Vulkan/CocoaSurface.mm")
+        target_sources(CemuCafe PRIVATE "HW/Latte/Renderer/Vulkan/CocoaSurface.mm")
 endif()
 
 set_property(TARGET CemuCafe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -531,39 +531,44 @@ set_property(TARGET CemuCafe PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CON
 target_include_directories(CemuCafe PUBLIC "../")
 
 if (glslang_VERSION VERSION_LESS "15.0.0")
-	set(glslang_target "glslang::SPIRV")
+        set(glslang_target "glslang::SPIRV")
 else()
-	set(glslang_target "glslang")
+        # ★NesStation 修正（对齐上游 cemu-project/Cemu main 同段代码）：
+        #   vcpkg / 系统安装的 glslang ≥15 只提供带命名空间的导入目标
+        #   （glslang::glslang / glslang::SPIRV / ...），裸名 "glslang" 不是目标，
+        #   会被当作 -lglslang 传给链接器 → "ld: cannot find -lglslang"
+        #   （run 42019801015 EMU cemu · linux-x64 100% 链接期失败的直接原因）
+        set(glslang_target "glslang::glslang")
 endif()
 
 target_link_libraries(CemuCafe PRIVATE
-	CemuAsm
-	CemuAudio
-	CemuCommon
-	CemuComponents
-	CemuConfig
-	CemuGui
-	CemuInput
-	CemuResource
-	CemuUtil
-	imguiImpl
-	Boost::headers
-	Boost::nowide
-	CURL::libcurl
-	fmt::fmt
-	${glslang_target}
-	ih264d
-	OpenSSL::Crypto
-	OpenSSL::SSL
-	PNG::PNG
-	pugixml::pugixml
-	ZArchive::zarchive
-	ZLIB::ZLIB
-	zstd::zstd
+        CemuAsm
+        CemuAudio
+        CemuCommon
+        CemuComponents
+        CemuConfig
+        CemuGui
+        CemuInput
+        CemuResource
+        CemuUtil
+        imguiImpl
+        Boost::headers
+        Boost::nowide
+        CURL::libcurl
+        fmt::fmt
+        ${glslang_target}
+        ih264d
+        OpenSSL::Crypto
+        OpenSSL::SSL
+        PNG::PNG
+        pugixml::pugixml
+        ZArchive::zarchive
+        ZLIB::ZLIB
+        zstd::zstd
 )
 
 if (ENABLE_WAYLAND)
-	# PUBLIC because wayland-client.h is included in VulkanAPI.h
+        # PUBLIC because wayland-client.h is included in VulkanAPI.h
   target_link_libraries(CemuCafe PUBLIC Wayland::Client)
 endif()
 
@@ -580,9 +585,9 @@ else ()
 endif ()
 
 if (ENABLE_WXWIDGETS)
-	target_link_libraries(CemuCafe PRIVATE wx::base wx::core)
+        target_link_libraries(CemuCafe PRIVATE wx::base wx::core)
 endif()
 
 if(WIN32)
-	target_link_libraries(CemuCafe PRIVATE iphlpapi)
+        target_link_libraries(CemuCafe PRIVATE iphlpapi)
 endif()

@@ -49,9 +49,17 @@ function Invoke-Windeployqt([string]$Exe) {
 
 function Build-Dolphin {
   Write-Host "=== Dolphin（NGC/Wii）==="
+  # ★v1.2.6：预装 Qt 时显式传 Qt6_DIR（跳过 Externals/Qt 内置快照 ——
+  #   其二进制不随仓库分发，CMake 命中后死于 Qt 工具目标缺失，详见
+  #   build_emulators.sh 同段注释）
+  $qtArgs = @()
+  if ($QtDir) {
+    Write-Host "（Dolphin 使用预装 Qt：$QtDir）"
+    $qtArgs = @("-DQt6_DIR=$QtDir\lib\cmake\Qt6")
+  }
   cmake -S emulators\dolphin -B build\dolphin `
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$out\dolphin" `
-    -DENABLE_TESTS=OFF -DUSE_MSVC_PRECOMPILED_HEADERS=ON
+    -DENABLE_TESTS=OFF -DUSE_MSVC_PRECOMPILED_HEADERS=ON @qtArgs
   if ($LASTEXITCODE -ne 0) { throw "Dolphin 配置失败" }
   cmake --build build\dolphin --config Release -j $Jobs
   if ($LASTEXITCODE -ne 0) { throw "Dolphin 编译失败" }

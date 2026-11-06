@@ -315,6 +315,66 @@ class SettingsScene : public Scene {
       }
       y += 38 + 12 + 14;
     }
+    // ★v1.2.6 主页背景（对齐 Android AppSettings.homeBackgroundUri：
+    //   自定义背景图两套风格通用；空 = 默认背景）
+    {
+      const bool hasBg = !app.config.homeBackground.empty();
+      const float ph = hasBg ? 38 * 2 + 12 : 62;
+      y = beginBlock(app, y, "主页背景", ph);
+      const float rw = (float)app.draw.W - cx_ - 50;
+      {
+        const Rect rc(cx_ + 12, y, rw, 38);
+        const bool f = rowFocus();
+        w::blockRow(app, rc, "自定义主页背景…",
+                    "选择 png / jpg / webp 图片（Neon 与 FSD 两套风格通用）", f);
+        if (f && (app.input.input().pressed[(int)Btn::Ok] ||
+                  (rc.contains(app.input.input().mouse) &&
+                   app.input.input().mousePressed))) {
+          ns::BrowserRequest req;
+          req.title = "选择主页背景图片";
+          req.mode = 3;  // 图片选择
+          req.startDir = fsutil::homeDir();
+          req.onPick = [&app](const std::string& picked) {
+            // 复制到数据目录持久化（原文件被删/移动后背景仍可用）
+            std::string data;
+            if (!fsutil::readFile(picked, &data) || data.empty()) {
+              app.pushScene(createMessageScene("无法设置背景", "图片读取失败"));
+              return;
+            }
+            const std::string ext = fsutil::extOf(picked);
+            fsutil::makeDirs(app.dataDir());
+            const std::string dest = fsutil::join(
+                app.dataDir(), "home_background." + (ext == "jpeg" ? "jpg" : ext));
+            if (!fsutil::writeFile(dest, data)) {
+              app.pushScene(createMessageScene("无法设置背景", "背景保存失败"));
+              return;
+            }
+            app.config.homeBackground = dest;
+            app.config.save(fsutil::join(app.dataDir(), "config.json"));
+            app.invalidateTexture(dest);
+            app.toast("已设置自定义主页背景");
+          };
+          app.pushScene(createFileBrowser(req));
+        }
+        y += 38;
+      }
+      if (hasBg) {
+        const Rect rc(cx_ + 12, y, rw, 38);
+        const bool f = rowFocus();
+        w::blockRow(app, rc, "恢复默认背景",
+                    "当前：" + app.config.homeBackground, f);
+        if (f && (app.input.input().pressed[(int)Btn::Ok] ||
+                  (rc.contains(app.input.input().mouse) &&
+                   app.input.input().mousePressed))) {
+          app.config.homeBackground.clear();
+          saveConfig(app);
+          app.toast("已恢复默认背景");
+        }
+        y += 38 + 12 + 14;
+      } else {
+        y += 12 + 14;
+      }
+    }
   }
 
   void setStyle(App& app, int idx) {
@@ -382,6 +442,17 @@ class SettingsScene : public Scene {
       if (w::switchNeon(app, rc, app.config.showFps, f)) saveConfig(app);
       y += 38 + 12 + 14;
     }
+    // ★v1.2.6 启动游戏时自动全屏（对齐 Android AppSettings.fullscreenOnLaunch；
+    //   退出游戏自动恢复原窗口状态；游戏中 F11 仍可手动切换）
+    {
+      const float ph = 62;
+      y = beginBlock(app, y, "启动游戏时全屏", ph);
+      const Rect rc(cx_ + 12, y, (float)app.draw.W - cx_ - 50, 38);
+      const bool f = rowFocus();
+      w::blockRow(app, rc, "进入游戏自动全屏", "退出游戏后恢复原窗口大小", f);
+      if (w::switchNeon(app, rc, app.config.fullscreenOnLaunch, f)) saveConfig(app);
+      y += 38 + 12 + 14;
+    }
     {
       // 只读快捷键（对齐 DisplayPanel「游戏内菜单」）
       const float ph = 38 * 5 + 12;
@@ -438,6 +509,30 @@ class SettingsScene : public Scene {
       w::blockRow(app, rc, "静音", "全局关闭模拟音频输出", f);
       if (w::switchNeon(app, rc, app.config.audioMuted, f)) {
         app.audio.setMuted(app.config.audioMuted);
+        saveConfig(app);
+      }
+      y += 38 + 12 + 14;
+    }
+    // ★v1.2.6 音频缓冲（对齐 Android AppSettings.audioBufferMs：
+    //   越大越稳（防断音）、延迟越高；下次进入游戏生效）
+    {
+      const float ph = 38 * 2 + 12;
+      y = beginBlock(app, y, "音频缓冲", ph);
+      const Rect rc(cx_ + 12, y, (float)app.draw.W - cx_ - 50, 38);
+      static const int vals[] = {32, 64, 128, 256};
+      std::vector<std::string> opts = {"32ms（低延迟）", "64ms（默认）",
+                                       "128ms（稳定）", "256ms（最稳）"};
+      int idx = 1;
+      for (int i = 0; i < 4; i++)
+        if (vals[i] == app.config.audioBufferMs) {
+          idx = i;
+          break;
+        }
+      const bool f = rowFocus();
+      w::blockRow(app, rc, "音频缓冲大小",
+                  "断音/爆音时调大；越小延迟越低（下次启动游戏生效）", f);
+      if (w::spinnerChip(app, rc, opts, idx, f)) {
+        app.config.audioBufferMs = vals[idx];
         saveConfig(app);
       }
       y += 38 + 12 + 14;
@@ -787,6 +882,57 @@ class SettingsScene : public Scene {
         y += 46;
       }
       y += 12 + 14;
+    }
+
+    // ★v1.2.6 默认核心（对齐 Android defaultCores：多核心平台的启动默认，
+    //   避免每次启动都弹核心选择器；单核心平台不列出）
+    {
+      struct DefCoreRow {
+        GamePlatform platform;
+        std::vector<std::string> labels;  // 0 = 每次询问
+        std::vector<std::string> values;  // 0 = ""（询问）
+      };
+      std::vector<DefCoreRow> rows;
+      for (GamePlatform p : allPlatforms()) {
+        std::vector<std::string> labels, values;
+        labels.push_back("每次询问");
+        values.push_back("");
+        for (const auto& pc : app.cores.installedCoresFor(p)) {
+          labels.push_back(std::string(pc.coreTitle) + "（进程内）");
+          values.push_back(pc.coreFile);
+        }
+        for (const auto* c : app.externals.forPlatform(p)) {
+          if (!app.externals.available(c->id)) continue;
+          labels.push_back(c->name + "（独立核心）");
+          values.push_back(c->id + "-ext");
+        }
+        if (labels.size() > 2)  // 至少两个可选核心才需要默认
+          rows.push_back({p, labels, values});
+      }
+      if (!rows.empty()) {
+        const float ph = 26 + (float)rows.size() * 46 + 12;
+        y = beginBlock(app, y, "默认核心（多核心平台启动时直接采用）", ph);
+        y += 12;
+        for (const auto& r : rows) {
+          const Rect rc(cx_ + 12, y, rw, 42);
+          const std::string key = platformShortName(r.platform);
+          const std::string& cur = app.config.defaultCores.count(key)
+                                       ? app.config.defaultCores[key]
+                                       : std::string();
+          int idx = 0;
+          for (size_t i = 0; i < r.values.size(); i++)
+            if (r.values[i] == cur) idx = (int)i;
+          const bool f = rowFocus();
+          w::blockRow(app, rc, std::string("默认 ") + key + " 核心",
+                      "启动游戏时的默认核心（未记忆选择的游戏）", f);
+          if (w::spinnerChip(app, rc, r.labels, idx, f)) {
+            app.config.defaultCores[key] = r.values[(size_t)idx];
+            saveConfig(app);
+          }
+          y += 46;
+        }
+        y += 12 + 14;
+      }
     }
 
     // 外置核心（独立模拟器）

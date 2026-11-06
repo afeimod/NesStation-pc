@@ -52,4 +52,10 @@ class CoverArt {
   std::string coverDir_;
 };
 
+// —— 自定义封面（★v1.2.6，对齐 Android 版「长按卡片 → 自定义封面」）——
+// 把用户选择的图片拷贝到封面目录（<dataDir>/covers/<gameId>_custom.<ext>），
+// 写入 game.coverPath 并保存库。返回空串 = 成功；否则为错误提示。
+std::string setCustomCover(GameLibrary& lib, const std::string& gameId,
+                           const std::string& imagePath);
+
 }  // namespace ns

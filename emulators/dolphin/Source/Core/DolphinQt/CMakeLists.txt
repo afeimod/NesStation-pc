@@ -28,6 +28,22 @@ if (Qt6_VERSION VERSION_GREATER_EQUAL 6.10.0)
   # GuiPrivate is needed to #include qplatformnativeinterface.h in MainWindow.cpp with Qt 6.10+.
   set(NEED_QT_GUI_PRIVATE_COMPONENT ON)
   find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
+elseif(NOT WIN32)
+  # ★NesStation 修正（Linux 发行版构建）：
+  #   Qt < 6.10 的官方二进制把 qpa/*.h 放在公开头文件目录（无需 GuiPrivate）；
+  #   但 Debian/Fedora 等发行版把 qpa 头文件挪进了私有头文件包
+  #   （Debian 12 = qt6-base-private-dev，位于
+  #    /usr/include/<arch>/qt6/QtGui/<version>/QtGui/qpa/），且【不提供】
+  #   GuiPrivate 的 CMake 配置（qt6-base-dev 无 Qt6GuiPrivateConfig.cmake），
+  #   find_package(Qt6 COMPONENTS GuiPrivate) 必失败。
+  #   这里在版本化的私有头目录存在时手动加入包含路径，
+  #   MainWindow.cpp 的 #include <qpa/qplatformnativeinterface.h> 即可编译
+  #  （run 42019801015 EMU dolphin · linux-x64/arm64 96% 编译期失败的直接原因）。
+  foreach(_qt_gui_inc IN LISTS Qt6Gui_INCLUDE_DIRS)
+    if (EXISTS "${_qt_gui_inc}/QtGui/${Qt6_VERSION}/QtGui/qpa")
+      list(APPEND Qt6Gui_PRIVATE_INCLUDE_DIRS "${_qt_gui_inc}/QtGui/${Qt6_VERSION}/QtGui")
+    endif()
+  endforeach()
 endif()
 
 message(STATUS "Found Qt version ${Qt6_VERSION}")

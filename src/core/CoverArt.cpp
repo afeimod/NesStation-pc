@@ -188,4 +188,43 @@ void CoverArt::pump(App& app) {
   }
 }
 
+// —— 自定义封面（★v1.2.6，对齐 Android 版「长按卡片 → 自定义封面」）——
+std::string setCustomCover(GameLibrary& lib, const std::string& gameId,
+                           const std::string& imagePath) {
+  GameEntry* e = lib.find(gameId);
+  if (!e) return "未在库中找到该游戏";
+  if (!fsutil::isFile(imagePath)) return "图片文件不存在：" + imagePath;
+  const std::string ext = fsutil::extOf(imagePath);
+  if (ext != "png" && ext != "jpg" && ext != "jpeg" && ext != "bmp" &&
+      ext != "webp")
+    return "仅支持 png / jpg / jpeg / bmp / webp 图片";
+  std::string data;
+  if (!fsutil::readFile(imagePath, &data) || data.empty())
+    return "图片读取失败（文件损坏或无权限）";
+  // 图片有效性快检：png / jpg / bmp / webp / riff 魔数（stb 能解析的主流格式）
+  static const unsigned char kPng[] = {0x89, 'P', 'N', 'G'};
+  static const unsigned char kJpg[] = {0xFF, 0xD8, 0xFF};
+  static const unsigned char kBmp[] = {'B', 'M'};
+  static const unsigned char kRiff[] = {'R', 'I', 'F', 'F'};
+  const unsigned char* p = (const unsigned char*)data.data();
+  const size_t n = data.size();
+  bool magicOk = false;
+  if (n >= 4 && (memcmp(p, kPng, 4) == 0 || memcmp(p, kRiff, 4) == 0))
+    magicOk = true;
+  else if (n >= 3 && memcmp(p, kJpg, 3) == 0)
+    magicOk = true;
+  else if (n >= 2 && memcmp(p, kBmp, 2) == 0)
+    magicOk = true;
+  if (!magicOk) return "无法识别的图片格式（支持 png / jpg / bmp / webp）";
+  if (data.size() > 32u * 1024 * 1024) return "图片过大（>32MB）";
+  // 拷贝到封面目录：<coverDir>/<gameId>_custom.<ext>（同游戏重复自定义 = 覆盖）
+  fsutil::makeDirs(lib.coverDir());
+  const std::string dest =
+      fsutil::join(lib.coverDir(), gameId + "_custom." + (ext == "jpeg" ? "jpg" : ext));
+  if (!fsutil::writeFile(dest, data)) return "封面保存失败（目录不可写？）";
+  e->coverPath = dest;
+  lib.save();
+  return "";
+}
+
 }  // namespace ns

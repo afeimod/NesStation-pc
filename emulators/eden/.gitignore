@@ -8,6 +8,9 @@
 /[Bb]uild*/
 doc-build/
 out/
+# ★NesStation 快照注记：src/audio_core/out 是音频输出源码（上游已跟踪），
+# 需先放行目录本身，避免被上面的 out/ 规则连带忽略
+!src/audio_core/out
 AppDir/
 uruntime
 

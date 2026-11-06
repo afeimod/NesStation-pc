@@ -334,6 +334,13 @@ class FileBrowserScene : public Scene {
           const std::string ext = fsutil::extOf(e.name);
           if (ext != "dll" && ext != "so" && ext != "dylib") continue;
         }
+        // ★v1.2.6 模式 3：图片选择（自定义封面 / 主页背景）
+        if (req_.mode == 3) {
+          const std::string ext = fsutil::extOf(e.name);
+          if (ext != "png" && ext != "jpg" && ext != "jpeg" && ext != "bmp" &&
+              ext != "webp")
+            continue;
+        }
       }
       entries_.push_back({e.name + (e.isDir ? "/" : ""), e.fullPath, e.isDir});
     }

@@ -13,7 +13,9 @@ class AudioBridge {
  public:
   ~AudioBridge();
 
-  bool start(int deviceRate = 48000);
+  // ★v1.2.6 bufferMs：音频缓冲毫秒（对齐 Android audioBufferMs，
+  //   默认 64；32/64/128/256 由设置页选择，越大越稳、延迟越高）
+  bool start(int deviceRate = 48000, int bufferMs = 64);
   void stop();
   bool running() const { return dev_ != 0; }
 

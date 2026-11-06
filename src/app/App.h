@@ -28,7 +28,7 @@ class EmuRunner;
 
 // —— 版本号（CMake 注入；本地直编 g++ 时回退）——
 #ifndef NESSTATION_VERSION
-#define NESSTATION_VERSION "1.2.4"
+#define NESSTATION_VERSION "1.2.6"
 #endif
 inline const char* appVersionText() { return "v" NESSTATION_VERSION; }
 
@@ -36,7 +36,7 @@ inline const char* appVersionText() { return "v" NESSTATION_VERSION; }
 struct Config {
   int uiStyle = 0;             // 0=Neon 1=FSD
   int scalingMode = 0;         // ScalingMode
-  int screenEffect = 0;        // ScreenEffect
+  int screenEffect = 0;        // ScreenEffect（全局主滤镜：0 无 / 1 扫描线 / 2 CRT 荫罩）
   int dualLayout = 0;          // DualLayout（NDS/3DS）
   bool videoSmooth = true;
   bool audioMuted = false;
@@ -45,7 +45,14 @@ struct Config {
   bool autoSaveState = true;   // 退出游戏自动存 slot 0
   bool scanRecursive = true;
   int fastForwardSpeed = 4;    // 快进倍速：0 关 / 2 / 4 / 6 / 8 / 16（对齐 Android SettingsStore）
+  // ★v1.2.6（对齐 Android AppSettings 剩余字段）：
+  std::string homeBackground;  // 自定义主页背景图路径（空 = 默认背景）
+  bool fullscreenOnLaunch = false;   // 启动游戏时自动全屏（退出游戏恢复）
+  int audioBufferMs = 64;      // 音频缓冲毫秒（越大越稳、延迟越高）
   std::map<std::string, std::string> emulatorPaths;  // dolphin/cemu/eden → exe
+  // 双核心平台的默认核心（platformShortName → coreId，对齐 Android defaultCores；
+  // 值格式与 preferredCore 一致：核心文件名 / "<id>-ext"；空 = 每次询问）
+  std::map<std::string, std::string> defaultCores;
   PadMapping padMapping = PadMapping::defaults();
 
   void load(const std::string& file);

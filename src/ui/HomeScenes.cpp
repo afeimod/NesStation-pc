@@ -13,6 +13,7 @@
 
 #include "ui/Scenes.h"
 #include "ui/Widgets.h"
+#include "util/Fs.h"
 
 namespace ns {
 namespace {
@@ -421,6 +422,33 @@ class NeonHome : public Scene {
     const Skin& sk = Theme::skin();
     Draw& d = app.draw;
     const Rect full(0, 0, (float)d.W, (float)d.H);
+    // ★v1.2.6 自定义主页背景（对齐 Android AppSettings.homeBackgroundUri）：
+    //   设置 → 外观 → 主页背景 选择图片后，替代封面流背景（aspect-fill 不变形）
+    if (!app.config.homeBackground.empty()) {
+      SDL_Texture* bgTex = app.texture(app.config.homeBackground);
+      if (bgTex) {
+        d.textureCrop(bgTex, full);
+        // 与封面背景同款四段压暗层（保证前景文字可读）
+        const Color8 s0(0x02, 0x04, 0x0C, 0xCC), s1(0x03, 0x05, 0x12, 0x8C);
+        const Color8 s2(0x03, 0x06, 0x14, 0x99), s3(0x02, 0x03, 0x0A, 0xE6);
+        const int bands = 32;
+        for (int i = 0; i < bands; i++) {
+          const float t = (float)i / bands;
+          Color8 c = t < 0.30f ? s0.lerp(s1, t / 0.30f)
+                    : t < 0.62f ? s1.lerp(s2, (t - 0.30f) / 0.32f)
+                                : s2.lerp(s3, (t - 0.62f) / 0.38f);
+          d.rect(Rect(0, (float)d.H * t, (float)d.W, (float)d.H / bands + 1), c);
+        }
+        for (int i = 0; i < 8; i++) {  // 底部地平线微光（2dp）
+          const float t = (float)i / 7;
+          d.rect(Rect((float)d.W * i / 8, (float)d.H - 2, (float)d.W / 8 + 1, 2),
+                 ca(sk.accentDim, 0.55f * std::sin(t * 3.14159265f)));
+        }
+        bgCur_ = nullptr;
+        bgPrev_ = nullptr;
+        return;
+      }
+    }
     SDL_Texture* bg =
         games_.empty() ? nullptr : w::coverTexture(app, games_[(size_t)sel_]);
     if (bg != bgCur_) {
@@ -806,12 +834,47 @@ class NeonHome : public Scene {
                        app.library.save();
                        refresh(app);
                      }});
-    items.push_back({20, "重新获取封面", "", false, [&app, g]() {
-      if (GameEntry* e = app.library.find(g.id)) e->coverPath.clear();
-      app.library.save();
-      app.covers.requestFetch(g);
-      app.toast("已重新排队获取封面");
+    // ★v1.2.6 自定义封面（对齐 Android「长按卡片 → 自定义封面」）
+    items.push_back({5, "自定义封面…", "", false, [this, &app, g]() {
+      BrowserRequest req;
+      req.title = "选择封面图片（" + g.displayTitle() + "）";
+      req.mode = 3;  // 图片选择（png/jpg/jpeg/bmp/webp）
+      req.startDir = fsutil::homeDir();
+      req.onPick = [this, &app, g](const std::string& picked) {
+        const std::string err = setCustomCover(app.library, g.id, picked);
+        if (err.empty()) {
+          app.invalidateTexture(g.coverPath);  // 旧封面缓存失效
+          refresh(app);                        // 重载条目 → 重烘封面卡
+          app.toast("已设置自定义封面：" + g.displayTitle());
+        } else {
+          app.pushScene(createMessageScene("无法设置封面", err));
+        }
+      };
+      app.pushScene(createFileBrowser(req));
     }});
+    // ★v1.2.6 核心选项（该平台已装核心的选项面板 —— 对齐 Android 核心设置）
+    items.push_back({16, "核心选项", "", false, [&app, g]() {
+      app.pushScene(createCoreOptionsScene(g.platform));
+    }});
+    if (!g.coverPath.empty()) {
+      items.push_back({20, "恢复默认封面", "", false, [this, &app, g]() {
+        if (GameEntry* e = app.library.find(g.id)) {
+          app.invalidateTexture(e->coverPath);
+          e->coverPath.clear();
+        }
+        app.library.save();
+        app.covers.requestFetch(g);
+        refresh(app);
+        app.toast("已恢复默认封面（重新获取官方封面）");
+      }});
+    } else {
+      items.push_back({20, "重新获取封面", "", false, [&app, g]() {
+        if (GameEntry* e = app.library.find(g.id)) e->coverPath.clear();
+        app.library.save();
+        app.covers.requestFetch(g);
+        app.toast("已重新排队获取封面");
+      }});
+    }
     // 平台多核心（进程内 + 已就绪外置独立核心）→ 重新选择入口
     if (app.cores.installedCoresFor(g.platform).size() +
             (size_t)app.externals.availableCount(g.platform) >
@@ -1119,7 +1182,20 @@ class FsdHome : public Scene {
     const float cy = app.draw.H * 0.46f;
 
     // —— 像素天空背景 ——
-    drawPixelBackdrop(app);
+    // ★v1.2.6 自定义主页背景（设置 → 外观 → 主页背景；两套风格通用，
+    //   对齐 Android AppSettings.homeBackgroundUri）：
+    //   选择图片后替代像素天空（aspect-fill 不变形 + 轻压暗保证文字可读）
+    if (!app.config.homeBackground.empty()) {
+      SDL_Texture* bgTex = app.texture(app.config.homeBackground);
+      if (bgTex) {
+        d.textureCrop(bgTex, Rect(0, 0, (float)d.W, (float)d.H));
+        d.rect(Rect(0, 0, (float)d.W, (float)d.H), Color8(0x0D, 0x1A, 0x30, 110));
+      } else {
+        drawPixelBackdrop(app);
+      }
+    } else {
+      drawPixelBackdrop(app);
+    }
 
     // —— 顶部状态条 ——
     {

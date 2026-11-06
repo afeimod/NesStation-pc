@@ -37,6 +37,13 @@ void Config::load(const std::string& file) {
     autoSaveState = j.value("autoSaveState", true);
     fastForwardSpeed = j.value("fastForwardSpeed", 4);  // 0关/2/4/6/8/16（对齐 Android SettingsStore）
     scanRecursive = j.value("scanRecursive", true);
+    homeBackground = j.value("homeBackground", "");          // ★v1.2.6 自定义主页背景
+    fullscreenOnLaunch = j.value("fullscreenOnLaunch", false); // ★v1.2.6 启动游戏时全屏
+    audioBufferMs = j.value("audioBufferMs", 64);              // ★v1.2.6 音频缓冲毫秒
+    if (j.contains("defaultCores") && j["defaultCores"].is_object()) {
+      for (auto it = j["defaultCores"].begin(); it != j["defaultCores"].end(); ++it)
+        defaultCores[it.key()] = it.value().get<std::string>();
+    }
     if (j.contains("emulatorPaths") && j["emulatorPaths"].is_object()) {
       for (auto it = j["emulatorPaths"].begin(); it != j["emulatorPaths"].end(); ++it)
         emulatorPaths[it.key()] = it.value().get<std::string>();
@@ -72,6 +79,11 @@ void Config::save(const std::string& file) const {
   j["autoSaveState"] = autoSaveState;
   j["fastForwardSpeed"] = fastForwardSpeed;
   j["scanRecursive"] = scanRecursive;
+  j["homeBackground"] = homeBackground;         // ★v1.2.6
+  j["fullscreenOnLaunch"] = fullscreenOnLaunch; // ★v1.2.6
+  j["audioBufferMs"] = audioBufferMs;           // ★v1.2.6
+  j["defaultCores"] = json::object();           // ★v1.2.6
+  for (const auto& [k, v] : defaultCores) j["defaultCores"][k] = v;
   j["emulatorPaths"] = json::object();
   for (const auto& [k, v] : emulatorPaths) j["emulatorPaths"][k] = v;
   json pm;
@@ -313,7 +325,7 @@ bool App::init() {
   }
 
   input.init();
-  audio.start(48000);
+  audio.start(48000, config.audioBufferMs);  // ★v1.2.6 音频缓冲毫秒
   audio.setMuted(config.audioMuted);
   video.setDualScreen(false);
 
@@ -474,6 +486,25 @@ void App::launchGame(const GameEntry& gameIn) {
   // 平台可用核心选择 = 已安装 libretro + 已就绪外置独立核心
   //（对齐 Android EngineFactory.coreChoices：libretro 在前 / 外置在后，
   //  多于一个且未记忆选择 → 弹核心选择器）
+  // ★v1.2.6：先查全局「平台默认核心」（对齐 Android defaultCores；
+  //   设置 → 核心设置 → 默认核心，键 = platformShortName）
+  if (game.preferredCore.empty()) {
+    const auto it = config.defaultCores.find(platformShortName(game.platform));
+    if (it != config.defaultCores.end() && !it->second.empty()) {
+      const std::string& want = it->second;
+      bool available = false;
+      if (want.size() > 4 && want.compare(want.size() - 4, 4, "-ext") == 0) {
+        if (const ExternalCore* c =
+                externals.find(want.substr(0, want.size() - 4)))
+          available = externals.available(c->id);
+      } else {
+        for (const auto& pc : cores.installedCoresFor(game.platform))
+          if (pc.coreFile == want) available = true;
+      }
+      // 默认核心可用才采用；不可用（未安装/未就绪）则回落到选择器
+      if (available) game.preferredCore = want;
+    }
+  }
   if (game.preferredCore.empty() &&
       cores.installedCoresFor(game.platform).size() +
               (size_t)externals.availableCount(game.platform) >

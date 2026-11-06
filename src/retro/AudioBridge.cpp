@@ -9,7 +9,7 @@ namespace ns {
 
 AudioBridge::~AudioBridge() { stop(); }
 
-bool AudioBridge::start(int deviceRate) {
+bool AudioBridge::start(int deviceRate, int bufferMs) {
   if (dev_) return true;
   deviceRate_ = deviceRate;
 
@@ -17,7 +17,16 @@ bool AudioBridge::start(int deviceRate) {
   want.freq = deviceRate;
   want.format = AUDIO_S16SYS;
   want.channels = 2;
-  want.samples = 1024;  // ~21ms @48k
+  // ★v1.2.6 音频缓冲毫秒（对齐 Android AppSettings.audioBufferMs，默认 64ms；
+  //   越大越稳防断音、延迟越高）—— samples 取最近的 2 的幂（SDL 要求）
+  if (bufferMs <= 0) bufferMs = 64;
+  int samples = (deviceRate * bufferMs + 500) / 1000;
+  int pow2 = 16;
+  while (pow2 < samples) pow2 <<= 1;
+  if (std::abs(pow2 - samples) > std::abs((pow2 >> 1) - samples)) pow2 >>= 1;
+  if (pow2 < 16) pow2 = 16;
+  if (pow2 > 4096) pow2 = 4096;
+  want.samples = (Uint16)pow2;
   want.callback = &AudioBridge::audioCallback;
   want.userdata = this;
 
@@ -30,7 +39,9 @@ bool AudioBridge::start(int deviceRate) {
   ringPos_ = 0;
   ringSize_ = 0;
   SDL_PauseAudioDevice(dev_, 0);
-  LOGI("音频设备开启：%dHz S16 ×2（核心 %dHz ×%d）", have.freq, coreRate_, coreChannels_);
+  LOGI("音频设备开启：%dHz S16 ×2 缓冲 %d 样本 ≈%dms（核心 %dHz ×%d）",
+       have.freq, have.samples, (int)(have.samples * 1000LL / have.freq), coreRate_,
+       coreChannels_);
   return true;
 }
 

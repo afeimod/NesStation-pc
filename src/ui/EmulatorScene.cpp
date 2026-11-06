@@ -18,9 +18,24 @@ class EmulatorScene : public Scene {
   void onEnter(App& app) override {
     SDL_ShowCursor(SDL_DISABLE);
     app_ = &app;
+    // ★v1.2.6 启动游戏时自动全屏（对齐 Android fullscreenOnLaunch）：
+    //   记住进入前状态，onExit 恢复；游戏中 F11 手动切换会同步回 config
+    if (app.config.fullscreenOnLaunch && !app.config.fullscreen) {
+      wasFullscreen_ = false;
+      app.config.fullscreen = true;
+      app.applyFullscreen();
+      app.config.save(fsutil::join(app.dataDir(), "config.json"));
+    } else {
+      wasFullscreen_ = app.config.fullscreen;
+    }
   }
   void onExit(App& app) override {
-    (void)app;
+    // 自动全屏的会话：退出游戏恢复窗口模式（F11 手动开的不还原）
+    if (app.config.fullscreenOnLaunch && !wasFullscreen_ && app.config.fullscreen) {
+      app.config.fullscreen = false;
+      app.applyFullscreen();
+      app.config.save(fsutil::join(app.dataDir(), "config.json"));
+    }
     SDL_ShowCursor(SDL_ENABLE);
   }
 
@@ -468,6 +483,7 @@ class EmulatorScene : public Scene {
  private:
   enum class Sub { Main, States, Video, Disk };
   bool menuOpen_ = false;
+  bool wasFullscreen_ = true;   // ★v1.2.6 进入游戏前的全屏状态（自动全屏恢复用）
   Sub subMode_ = Sub::Main;
   int menuIndex_ = 0;
   int subIndex_ = 0;

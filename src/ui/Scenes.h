@@ -32,7 +32,8 @@ std::unique_ptr<Scene> createMessageScene(const std::string& title,
                                           const std::string& okLabel = "确定",
                                           std::function<void()> onOk = nullptr);
 
-// 文件浏览器（选择目录 / 文件；title 标题；mode: 0=选目录 1=选文件 2=选核心）
+// 文件浏览器（选择目录 / 文件；title 标题；mode: 0=选目录 1=选文件 2=选核心
+//   3=选图片【★v1.2.6：自定义封面 / 主页背景用，过滤 png/jpg/jpeg/bmp/webp】）
 // 返回值经 std::function 回调
 struct BrowserRequest {
   std::string title;

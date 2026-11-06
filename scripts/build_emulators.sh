@@ -78,9 +78,22 @@ build_dolphin() {
     CCACHE_ARGS="-DENABLE_CCACHE=ON"
     echo "（ccache 已启用：$(ccache -s 2>/dev/null | head -1 || true)）"
   fi
+  # ★v1.2.6：Windows + 预装 Qt（install-qt-action / 本地 Qt）时显式传 Qt6_DIR。
+  #   Dolphin 的 Source/Core/DolphinQt/CMakeLists.txt 在 WIN32 下会把仓库内的
+  #   Externals/Qt/Qt6.8.3/x64 追加进 CMAKE_PREFIX_PATH —— 该内置 Qt 快照的
+  #   二进制（bin/*.exe、*.dll）不随仓库分发（.gitignore 历史上排除过二进制），
+  #   CMake 找到它的 Qt6Config 后会在 Qt6CoreTools 的 syncqt.exe 等工具目标上
+  #   FATAL（run 42019801015 EMU dolphin · windows-x64 的死因）。
+  #   显式 -DQt6_DIR 直接命中 install-qt-action 装好的完整 Qt，优先级高于
+  #   任何前缀搜索（与 build_eden 的处理一致）。
+  local QT_ARGS=""
+  if [ "$WINDOWS" = "1" ] && [ -n "$QT_DIR" ]; then
+    echo "（Dolphin 使用预装 Qt：$QT_DIR）"
+    QT_ARGS="-DQt6_DIR=$QT_DIR"
+  fi
   cmake -S emulators/dolphin -B build/dolphin \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$OUT/dolphin" \
-    -DENABLE_TESTS=OFF $CCACHE_ARGS
+    -DENABLE_TESTS=OFF $CCACHE_ARGS $QT_ARGS
   build_ok build/dolphin
   install_ok build/dolphin
   # Windows：windeployqt 部署 Qt DLL（PATH 有 Qt 时；CI 的 install-qt-action 已加）

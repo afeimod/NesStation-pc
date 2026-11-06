@@ -47,8 +47,11 @@ bin/shaderCache/*
 
 bin/controllerProfiles/*
 
-!bin/gameProfiles/default/*
+# ★NesStation 快照注记：default/ 里的官方游戏配置是源码的一部分
+#（上游已跟踪；负向规则需先放行目录本身再放行内容，否则 git add 会丢弃）
 bin/gameProfiles/*
+!bin/gameProfiles/default
+!bin/gameProfiles/default/**
 
 bin/graphicPacks/*
 

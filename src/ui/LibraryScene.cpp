@@ -795,12 +795,46 @@ class LibraryScene : public Scene {
       app.input.textClear();
       app.input.textInputStart();
     }});
-    items.push_back({20, "重新获取封面", "", false, [&app, g]() {
-      if (GameEntry* e = app.library.find(g.id)) e->coverPath.clear();
-      app.library.save();
-      app.covers.requestFetch(g);
-      app.toast("已重新排队获取封面");
+    // ★v1.2.6 自定义封面（对齐 Android「长按卡片 → 自定义封面」）
+    items.push_back({5, "自定义封面…", "", false, [this, &app, g]() {
+      ns::BrowserRequest req;
+      req.title = "选择封面图片（" + g.displayTitle() + "）";
+      req.mode = 3;  // 图片选择（png/jpg/jpeg/bmp/webp）
+      req.startDir = fsutil::homeDir();
+      req.onPick = [this, &app, g](const std::string& picked) {
+        const std::string err = setCustomCover(app.library, g.id, picked);
+        if (err.empty()) {
+          app.invalidateTexture(g.coverPath);  // 旧封面缓存失效
+          refreshGames(app);                   // 重载条目 → 重绘封面
+          app.toast("已设置自定义封面：" + g.displayTitle());
+        } else {
+          app.pushScene(createMessageScene("无法设置封面", err));
+        }
+      };
+      app.pushScene(createFileBrowser(req));
     }});
+    // ★v1.2.6 核心选项（该平台已装核心的选项面板 —— 对齐 Android 核心设置）
+    items.push_back({16, "核心选项", "", false, [&app, g]() {
+      app.pushScene(createCoreOptionsScene(g.platform));
+    }});
+    if (!g.coverPath.empty()) {
+      items.push_back({20, "恢复默认封面", "", false, [&app, g]() {
+        if (GameEntry* e = app.library.find(g.id)) {
+          app.invalidateTexture(e->coverPath);
+          e->coverPath.clear();
+        }
+        app.library.save();
+        app.covers.requestFetch(g);
+        app.toast("已恢复默认封面（重新获取官方封面）");
+      }});
+    } else {
+      items.push_back({20, "重新获取封面", "", false, [&app, g]() {
+        if (GameEntry* e = app.library.find(g.id)) e->coverPath.clear();
+        app.library.save();
+        app.covers.requestFetch(g);
+        app.toast("已重新排队获取封面");
+      }});
+    }
     if (app.cores.installedCoresFor(g.platform).size() +
             (size_t)app.externals.availableCount(g.platform) >
         1) {

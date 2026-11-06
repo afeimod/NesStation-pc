@@ -1,8 +1,18 @@
-# 构建产物
-build/
-build-*/
-out/
-dist/
+# 构建产物（★v1.2.6：全部锚定到仓库根目录）
+# 旧写法 build/ dist/ out/ Makefile *.exe 等未锚定，会把 emulators/ 内置源码树里
+# 同名路径一并忽略 —— 上游快照的这些内容是【源码的一部分】：
+#   · Dolphin: Externals/zstd/zstd/build/cmake、Externals/lz4/lz4/build/cmake
+#             （CMake 构建必需）、Externals/gettext/msgfmt.exe（Windows 本地化
+#             必需）、各 Externals 的 Makefile
+#   · Cemu:   dist/windows/cemu.manifest（MSVC 资源必需）、bin/gameProfiles
+#   · Eden:   dist/**（qrc 资源/主题/图标/翻译）、src/audio_core/out/*.cpp
+#             （被编译的源文件）、docs/build
+# 只匹配仓库根目录的构建输出目录，不再误伤内置源码树。
+/build/
+/build-*/
+/out/
+/dist/
+/bundle/
 *.obj
 *.o
 *.a
@@ -12,6 +22,8 @@ dist/
 *.so
 *.pdb
 *.ilk
+# 例外：Dolphin 内置的 Windows 本地化工具（上游源码树自带，构建需要）
+!emulators/dolphin/Externals/gettext/msgfmt.exe
 
 # IDE
 .vs/
@@ -26,13 +38,10 @@ compile_commands.json
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-Makefile
+/Makefile
 *.cmake.tmp
 
 # 运行时数据（本地调试）
 UserData/
 *.log
 .DS_Store
-
-# 模拟器超级构建目录
-bundle/
