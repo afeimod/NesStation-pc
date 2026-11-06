@@ -101,6 +101,19 @@ void Config::load(const std::string& file) {
       for (auto it = j["emulatorPaths"].begin(); it != j["emulatorPaths"].end(); ++it)
         emulatorPaths[it.key()] = it.value().get<std::string>();
     }
+    // ★v1.2.9 FSD 磁贴个性化（APK PadLayout.homeTileIcons / homeTileIconAlphas）
+    if (j.contains("homeTileIcons") && j["homeTileIcons"].is_object()) {
+      for (auto it = j["homeTileIcons"].begin(); it != j["homeTileIcons"].end(); ++it)
+        if (it.value().is_string() && !it.value().get<std::string>().empty())
+          homeTileIcons[it.key()] = it.value().get<std::string>();
+    }
+    if (j.contains("homeTileIconAlphas") && j["homeTileIconAlphas"].is_object()) {
+      for (auto it = j["homeTileIconAlphas"].begin(); it != j["homeTileIconAlphas"].end(); ++it)
+        if (it.value().is_number()) {
+          const float a = it.value().get<float>();
+          homeTileIconAlphas[it.key()] = a < 0.05f ? 0.05f : (a > 1.0f ? 1.0f : a);
+        }
+    }
     // 按键映射
     if (j.contains("padMapping") && j["padMapping"].is_object()) {
       const auto& pm = j["padMapping"];
@@ -151,6 +164,11 @@ void Config::save(const std::string& file) const {
   for (const auto& [k, v] : defaultCores) j["defaultCores"][k] = v;
   j["emulatorPaths"] = json::object();
   for (const auto& [k, v] : emulatorPaths) j["emulatorPaths"][k] = v;
+  // ★v1.2.9 FSD 磁贴个性化
+  j["homeTileIcons"] = json::object();
+  for (const auto& [k, v] : homeTileIcons) j["homeTileIcons"][k] = v;
+  j["homeTileIconAlphas"] = json::object();
+  for (const auto& [k, v] : homeTileIconAlphas) j["homeTileIconAlphas"][k] = v;
   json pm;
   for (int port = 0; port < 2; port++) {
     json arr = json::array();
@@ -563,6 +581,10 @@ void App::updateSurface() {
   input.setMouseToUiScale(winW_ > 0 ? (float)logicalW / (float)winW_ : 1.0f);
   LOGI("UI 缩放：%.2f（输出 %dx%d / 逻辑 %dx%d / 窗口 %dx%d）", uiscale::get(), pixelW,
        pixelH, logicalW, logicalH, winW_, winH_);
+}
+
+void App::saveConfig() {
+  if (!configFile_.empty()) config.save(configFile_);
 }
 
 void App::applyUiScale() {

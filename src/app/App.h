@@ -61,6 +61,10 @@ struct Config {
   bool fullscreenOnLaunch = false;   // 启动游戏时自动全屏（退出游戏恢复）
   int audioBufferMs = 64;      // 音频缓冲毫秒（越大越稳、延迟越高）
   std::map<std::string, std::string> emulatorPaths;  // dolphin/cemu/eden → exe
+  // ★v1.2.9（对齐 Android PadLayout.homeTileIcons / homeTileIconAlphas）：
+  //   FSD 主页磁贴个性化 —— 自定义图标路径与卡片透明度（tileKey → 值）
+  std::map<std::string, std::string> homeTileIcons;      // "platform:NES" → 图片绝对路径
+  std::map<std::string, float> homeTileIconAlphas;      // "platform:NES" → 0.05..1.0
   // 双核心平台的默认核心（platformShortName → coreId，对齐 Android defaultCores；
   // 值格式与 preferredCore 一致：核心文件名 / "<id>-ext"；空 = 每次询问）
   std::map<std::string, std::string> defaultCores;
@@ -119,6 +123,7 @@ class App {
   // —— 杂项 ——
   void toast(const std::string& msg) { toasts_.push_back({msg, 3.5f}); }
   void requestExit() { running_ = false; }
+  void saveConfig();            // ★v1.2.9 立即持久化配置（磁贴个性化等即时生效场景）
   bool isFullscreen() const { return config.fullscreen; }
   void toggleFullscreen();
   void applyFullscreen();   // 按当前 config.fullscreen 应用窗口状态（不翻转）

@@ -5,6 +5,7 @@
 namespace ns {
 
 UiStyle Theme::style_ = UiStyle::Neon;
+bool Theme::lightFsd_ = false;
 
 const Skin& Theme::neon() {
   static const Skin s = [] {
@@ -61,6 +62,39 @@ const Skin& Theme::fsd() {
     k.panelRadius = 10;
     k.chamfer = false;
     k.name = "FSD 经典 (Xbox360 磁贴)";
+    return k;
+  }();
+  return s;
+}
+
+
+// ★v1.2.9 FSD 浅色皮肤（对齐 APK SettingsScreen 默认观感：PixelBackdrop 像素
+// 天空 + White 65% 半透明圆角卡 + 深色文字 0x1E2A3A；卡片圆角 16）
+const Skin& Theme::fsdLight() {
+  static const Skin s = [] {
+    Skin k;
+    k.bg = Color8::hex(0xB7D7F2);
+    k.bgDeep = Color8::hex(0xC8E2F6);
+    k.bgPanel = Color8(255, 255, 255, 166);   // White 65%
+    k.bgPanelHi = Color8(255, 255, 255, 217); // White 85%
+    k.line = Color8::hex(0xD5DEE8);
+    k.accent = Color8::hex(0x2E86E0);
+    k.accentDim = Color8::hex(0x1A5A9E);
+    k.red = Color8::hex(0xE53935);
+    k.blue = Color8::hex(0x2E86E0);
+    k.gold = Color8::hex(0xE8A400);
+    k.green = Color8::hex(0x2E8B57);
+    k.purple = Color8::hex(0x7C4DD4);
+    k.textHi = Color8::hex(0x101A28);
+    k.text = Color8::hex(0x1E2A3A);
+    k.textDim = Color8::hex(0x4A5568);
+    k.btnA = Color8::hex(0x6DBE28);
+    k.btnB = Color8::hex(0xE23B3B);
+    k.btnX = Color8::hex(0x2E86E0);
+    k.btnY = Color8::hex(0xF2C200);
+    k.panelRadius = 16;
+    k.chamfer = false;
+    k.name = "FSD 浅色设置";
     return k;
   }();
   return s;

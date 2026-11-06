@@ -246,7 +246,7 @@ jobs:
 
       - name: Package (.deb, Debian/Ubuntu)
         env:
-          DEB_VERSION: "1.2.6"
+          DEB_VERSION: "1.2.9"
         run: |
           set -eux
           PKG="dist/root"

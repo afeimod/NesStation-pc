@@ -85,7 +85,13 @@ float platformBadge(App& app, float x, float cy, GamePlatform p);
 // —— 图标（矢量绘制，无位图依赖；对应 Material Icons 圆角系）——
 // iconId: 0=无 1=play 2=star 3=gear 4=folder 5=power 6=save 7=load 8=reset
 // 9=gamepad 10=info 11=search 12=grid 13=heart 14=history 15=terminal
-// 16=chip(memory) 17=help 18=logout 19=arrowLeft 20=refresh
+// 16=chip(memory) 17=help 18=logout 19=arrowLeft 20=refresh 21=percent
+// 22=globe 23=bolt
+// ★v1.2.9 FSD 平台磁贴（1:1 对齐 APK FsdHomeScreen.platformIcon）：
+// 24=console(SFC/Switch) 25=phone(GB) 26=phoneWide(GBA) 27=computer(MD)
+// 28=radio(PCE) 29=disc(PSX) 30=book(NDS) 31=ticket(Arcade) 32=cup(Java)
+// 33=sports(DC/对战) 34=tablet(3DS) 35=tv(NGC/Wii) 36=display(PSP)
+// 37=devices(Wii U) 38=image(获取封面) 39=download(安装CIA) 40=network(网络)
 void icon(App& app, int id, const Rect& rc, Color8 c);
 void iconPlay(App& app, const Rect& rc, Color8 c);
 void iconStar(App& app, const Rect& rc, Color8 c, bool filled);
@@ -111,6 +117,30 @@ void iconRefresh(App& app, const Rect& rc, Color8 c);     // 刷新
 void iconPercent(App& app, const Rect& rc, Color8 c);     // 百分比（性能）
 void iconGlobe(App& app, const Rect& rc, Color8 c);       // 在线游戏（Public 地球）
 void iconBolt(App& app, const Rect& rc, Color8 c);        // SWF（Bolt 闪电）
+// ★v1.2.9 平台/工具图标
+void iconConsole(App& app, const Rect& rc, Color8 c);     // 24 主机（SFC/Switch）
+void iconPhone(App& app, const Rect& rc, Color8 c);       // 25 竖向掌机（GB）
+void iconPhoneWide(App& app, const Rect& rc, Color8 c);   // 26 横向掌机（GBA）
+void iconComputer(App& app, const Rect& rc, Color8 c);    // 27 主机+底座（MD）
+void iconRadio(App& app, const Rect& rc, Color8 c);       // 28 收音机（PCE）
+void iconDisc(App& app, const Rect& rc, Color8 c);        // 29 光盘（PSX）
+void iconBook(App& app, const Rect& rc, Color8 c);        // 30 翻盖双屏（NDS）
+void iconTicket(App& app, const Rect& rc, Color8 c);      // 31 街机票券（Arcade）
+void iconCup(App& app, const Rect& rc, Color8 c);         // 32 咖啡杯（Java）
+void iconSports(App& app, const Rect& rc, Color8 c);      // 33 电竞手柄（DC/对战）
+void iconTablet(App& app, const Rect& rc, Color8 c);      // 34 双屏平板（3DS）
+void iconTv(App& app, const Rect& rc, Color8 c);          // 35 电视（NGC/Wii）
+void iconDisplay(App& app, const Rect& rc, Color8 c);     // 36 宽屏显示（PSP）
+void iconDevices(App& app, const Rect& rc, Color8 c);     // 37 双设备（Wii U）
+void iconImage(App& app, const Rect& rc, Color8 c);       // 38 图片（获取封面）
+void iconDownload(App& app, const Rect& rc, Color8 c);    // 39 下载（安装CIA）
+void iconNetwork(App& app, const Rect& rc, Color8 c);     // 40 网络状态
+
+// —— ★v1.2.9 共享背景（各场景按皮肤复用，对齐 APK）——
+// FsdBackdrop（FsdScaffold.kt）：深蓝三段渐变 + 中央放射高光 + 斜向光带 + 底部渐暗
+void fsdWallpaper(App& app);
+// PixelBackdrop（PixelBackdrop.kt）：浅色像素天空 / 漂移云 / 星光 / 海 / 草地
+void pixelSky(App& app, int64_t timeMs);
 
 // 封面卡片（面板 + 封面/占位 + 收藏角标）
 void coverCard(App& app, const Rect& rc, const GameEntry& g, bool selected);

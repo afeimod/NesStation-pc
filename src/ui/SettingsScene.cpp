@@ -62,7 +62,7 @@ class SettingsScene : public Scene {
   }
 
   void update(App& app, float dt, const InputState& in) override {
-    (void)dt;
+    backdropMs_ += (int64_t)(dt * 1000);  // ★v1.2.9 FSD 像素天空动画
     if (in.pressed[(int)Btn::Back]) {
       app.popScene();
       return;
@@ -118,9 +118,21 @@ class SettingsScene : public Scene {
   }
 
   void draw(App& app) override {
+    // ★v1.2.9 FSD 经典模式（对齐 APK SettingsScreen）：PixelBackdrop 像素天空 +
+    //   白 65% 半透明卡 + 深色文字（Theme::fsdLight 浅色皮肤覆盖）；
+    //   Neon 模式不变（NeonBackdrop 深空渐变）。draw 结束恢复深色皮肤，
+    //   防止 toast / 后续场景误用浅色令牌。
+    const bool light = !Theme::isNeon();
+    if (light) Theme::setLightFsd(true);
+    drawInner(app);
+    if (light) Theme::setLightFsd(false);
+  }
+
+  void drawInner(App& app) {
     const Skin& sk = Theme::skin();
     Draw& d = app.draw;
-    // 背景：NeonBackdrop（深空三段渐变 + 顶/底光带）
+    // 背景：FSD → PixelBackdrop 像素天空（APK SettingsScreen 同款）；
+    //       Neon → NeonBackdrop（深空三段渐变 + 顶/底光带）
     drawBackdrop(app);
 
     const char* catNames[kCats] = {"外观", "视频", "显示", "性能", "输入",
@@ -247,8 +259,13 @@ class SettingsScene : public Scene {
                         {"B / Esc", "返回"}});
   }
 
-  // —— 背景 NeonBackdrop ——
+  // —— 背景（★v1.2.9 对齐 APK：FSD=PixelBackdrop 像素天空 / Neon=NeonBackdrop）——
   void drawBackdrop(App& app) {
+    if (!Theme::isNeon()) {
+      // APK SettingsScreen.kt line252：if (!AppBackgroundState.active) PixelBackdrop()
+      w::pixelSky(app, backdropMs_);
+      return;
+    }
     const Skin& sk = Theme::skin();
     Draw& d = app.draw;
     for (int i = 0; i < 40; i++) {
@@ -295,8 +312,8 @@ class SettingsScene : public Scene {
         setStyle(app, 0);
       }
       if (w::styleCard(app, Rect(cx_ + cw + 14, y + 12, cw - 12, ph - 24),
-                       "FSD 经典桌面", "Xbox 360 磁贴流 + 像素天空", !Theme::isNeon(),
-                       Color8::hex(0x3E64AF))) {
+                       "FSD 经典桌面", "Xbox 360 磁贴流 + 深蓝壁纸（v1.2.9 重制）",
+                       !Theme::isNeon(), Color8::hex(0x3E64AF))) {
         setStyle(app, 1);
       }
       (void)f;
@@ -1166,6 +1183,7 @@ class SettingsScene : public Scene {
   static constexpr float kContentTop = 108;
   static constexpr float kRowH = 46;        // 焦点行跟随估算步长
   float cx_ = 248;                          // 内容区左缘（Neon=220 导航+28；FSD=44 单页）
+  int64_t backdropMs_ = 0;                  // ★v1.2.9 FSD 像素天空动画时钟
   int catSel_ = 0;
   int focusArea_ = 0;      // 0 = 分类导航 1 = 内容行
   int lastCat_ = -1;

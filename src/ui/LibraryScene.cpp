@@ -12,6 +12,7 @@
 #include <cmath>
 
 #include "emu/EmuRunner.h"
+#include "ui/FsdChrome.h"
 #include "ui/Scenes.h"
 #include "ui/Widgets.h"
 #include "util/Fs.h"
@@ -23,7 +24,17 @@ class LibraryScene : public Scene {
  public:
   explicit LibraryScene(int platformFilter) : filter_(platformFilter) {}
 
-  void onEnter(App& app) override { rebuild(app); }
+  void onEnter(App& app) override {
+    ip_ = fsdchrome::localIp();
+    statTimer_ = 999;  // 首帧即采样
+    rebuild(app);
+  }
+  void onExit(App& app) override {
+    (void)app;
+    for (auto& kv : baked_)
+      if (kv.second) SDL_DestroyTexture(kv.second);
+    baked_.clear();
+  }
 
   void rebuild(App& app) {
     cats_.clear();
@@ -33,6 +44,25 @@ class LibraryScene : public Scene {
     for (GamePlatform p : allPlatforms()) {
       if (app.library.countFor(p) > 0)
         cats_.push_back({(int)p, platformShortName(p), ""});
+    }
+    // ★v1.2.9 FSD 模式（对齐 APK LibraryScreen）：平台 chips 固定 18 个全量展示
+    //（APK LazyRow 全量 18 平台，无「全部/收藏/最近」chips）；Neon 侧栏仍只显示
+    // 有游戏的平台 —— drawNeon 跳过 count==0 的条目即可。
+    if (!Theme::isNeon()) {
+      static const GamePlatform kApkChipOrder[] = {
+          GamePlatform::NES,  GamePlatform::SFC,   GamePlatform::GB,
+          GamePlatform::GBA,  GamePlatform::DOS,   GamePlatform::ARCADE,
+          GamePlatform::MD,   GamePlatform::PCE,   GamePlatform::NDS,
+          GamePlatform::N3DS, GamePlatform::NGCWII, GamePlatform::WIIU,
+          GamePlatform::PSX,  GamePlatform::PS2,   GamePlatform::JAVA,
+          GamePlatform::DC,   GamePlatform::PSP,   GamePlatform::NSWITCH,
+      };
+      for (GamePlatform p : kApkChipOrder) {
+        bool has = false;
+        for (const auto& c : cats_)
+          if (c.id == (int)p) { has = true; break; }
+        if (!has) cats_.push_back({(int)p, platformShortName(p), ""});
+      }
     }
     if (catSel_ >= (int)cats_.size()) catSel_ = 0;
     if (filter_ != -9) {
@@ -157,18 +187,50 @@ class LibraryScene : public Scene {
           gridSel_ = 0;
         }
       } else {
-        const int cols = columns(app);
-        if (in.pressed[(int)Btn::Up] && gridSel_ - cols >= 0) gridSel_ -= cols;
-        if (in.pressed[(int)Btn::Down] && gridSel_ + cols < N) gridSel_ += cols;
+        // ★v1.2.9 FSD：↑↓ 在平台 chips 间切换（仅平台条目，跳过 头部分类）
+        auto isPlatform = [&](int idx) { return idx >= 0 && idx < (int)cats_.size() &&
+                                                cats_[(size_t)idx].id >= 0; };
+        if (in.pressed[(int)Btn::Up] || in.pressed[(int)Btn::Down]) {
+          const int dir = in.pressed[(int)Btn::Down] ? 1 : -1;
+          int idx = catSel_;
+          for (int k = 0; k < (int)cats_.size(); k++) {
+            idx += dir;
+            if (idx < 0 || idx >= (int)cats_.size()) break;
+            if (isPlatform(idx)) { catSel_ = idx; break; }
+          }
+          refreshGames(app);
+          gridSel_ = 0;
+        }
       }
       if (in.pressed[(int)Btn::Ok]) app.launchGame(games_[(size_t)gridSel_]);
-      if (in.pressed[(int)Btn::Fav]) {
-        app.library.toggleFavorite(games_[(size_t)gridSel_].id);
-        app.library.save();
-        refreshGames(app);
+      if (Theme::isNeon()) {
+        if (in.pressed[(int)Btn::Fav]) {
+          app.library.toggleFavorite(games_[(size_t)gridSel_].id);
+          app.library.save();
+          refreshGames(app);
+        }
+      } else {
+        // ★v1.2.9 FSD（对齐 APK 按键）：X = 搜索开关，Y = 选项（卡片菜单）
+        if (in.pressed[(int)Btn::Fav]) {
+          if (searching_) {
+            stopEditing(app);
+          } else {
+            searching_ = true;
+            app.input.textClear();
+            app.input.textInputStart();
+          }
+        }
+        if (in.pressed[(int)Btn::Option])
+          openCardMenu(app, gridSel_, Vec2((float)app.draw.W / 2, (float)app.draw.H / 2));
       }
     }
     animSel_ += ((float)gridSel_ - animSel_) * std::min(1.0f, dt * 11.0f);
+    // ★v1.2.9 FSD 顶栏系统状态采样（2.5s，对齐 APK FsdTopBar）
+    statTimer_ += dt;
+    if (statTimer_ > 2.5f) {
+      statTimer_ = 0;
+      stats_ = fsdchrome::sampleStats(app.dataDir(), &cpuPrevTotal_, &cpuPrevIdle_);
+    }
   }
 
   void stopEditing(App& app) {
@@ -288,6 +350,9 @@ class LibraryScene : public Scene {
       d.pushClip(listRc);
       float sy = listTop - sideScroll_;
       for (size_t i = 0; i < cats_.size(); i++) {
+        // ★v1.2.9：FSD 模式 rebuild 会补全 18 平台 —— Neon 侧栏只显示有游戏的
+        if (cats_[i].id >= 0 && app.library.countFor((GamePlatform)cats_[i].id) == 0)
+          continue;
         const Rect rc(8, sy, navW - 16, 34);
         if (rc.bottom() < listTop - 40 || rc.y > listBottom + 40) {
           sy += 36;
@@ -524,130 +589,434 @@ class LibraryScene : public Scene {
                         {"右键", "快捷菜单"}, {"B / Esc", "返回"}});
   }
 
-  // ==================== FSD 经典风格 ====================
-  void drawClassic(App& app) {
-    const Skin& sk = Theme::skin();
-    Draw& d = app.draw;
-    const InputState& in = app.input.input();
-    // 背景（NesTheme 深蓝渐变）
-    for (int i = 0; i < 40; i++) {
-      const float t = (float)i / 40;
-      d.rect(Rect(0, d.H * t, d.W, d.H / 40 + 1), sk.bg.lerp(sk.bgDeep, t));
-    }
-    // 顶栏（surface 90%）：返回 + 标题 + 计数 + 导入/刷新
-    {
-      d.rect(Rect(0, 0, (float)d.W, 54), Color8(sk.bgPanel.r, sk.bgPanel.g, sk.bgPanel.b, 230));
-      const Rect back(14, 12, 40, 30);
-      w::iconArrowLeft(app, Rect(back.x + 8, back.cy() - 9, 18, 18),
-                       back.contains(in.mouse) ? sk.accent : sk.text);
-      if (w::activated(app, back, false)) app.popScene();
-      float x = 62;
-      const char* modeTitle = cats_[(size_t)catSel_].id == -2
-                                  ? "收藏"
-                                  : (cats_[(size_t)catSel_].id == -3 ? "最近游玩" : "游戏库");
-      app.font.draw(app.sdlRenderer(), modeTitle, x, 15, 18, sk.textHi, true);
-      x += app.font.textWidth(modeTitle, 18, true) + 12;
-      app.font.draw(app.sdlRenderer(), std::to_string(games_.size()), x, 19, 14, sk.accent,
-                    true);
-      // 右侧图标
-      const Rect imp((float)d.W - 88, 12, 34, 30);
-      const Rect rfs((float)d.W - 46, 12, 34, 30);
-      w::iconFolder(app, Rect(imp.cx() - 9, imp.cy() - 9, 18, 18),
-                    imp.contains(in.mouse) ? sk.accent : sk.text);
-      if (w::activated(app, imp, false)) startAddRomDir(app);
-      w::iconRefresh(app, Rect(rfs.cx() - 9, rfs.cy() - 9, 18, 18),
-                     rfs.contains(in.mouse) ? sk.accent : sk.text);
-      if (w::activated(app, rfs, false)) rescanAll(app);
-    }
-    // 平台过滤 chips（横滑）
-    {
-      float x = 20;
-      const float y = 64;
-      for (size_t i = 0; i < cats_.size(); i++) {
-        const bool selected = catSel_ == (int)i;
-        const std::string& label = cats_[i].name;
-        const float cw = app.font.textWidth(label, 12, true) + 24;
-        const Rect rc(x, y, cw, 28);
-        if (rc.right() > d.W - 20) break;
-        d.roundRect(rc, 14, selected ? sk.accent : sk.bgPanelHi);
-        app.font.drawVCentered(app.sdlRenderer(), label,
-                               rc.cx() - app.font.textWidth(label, 12, selected) / 2, rc.cy(),
-                               12, selected ? Color8::hex(0x081426) : sk.text, selected);
-        if (w::activated(app, rc, false)) {
-          catSel_ = (int)i;
-          refreshGames(app);
-          gridSel_ = 0;
-        }
-        x += cw + 8;
-      }
-    }
-    // 方形封面网格（Adaptive 150dp，间距 14）
-    {
-      const Rect grid(20, 102, (float)d.W - 40, (float)d.H - 148);
-      d.pushClip(grid);
-      const int cols = columns(app);
-      const float cw = (grid.w - 14 * (cols - 1)) / cols;
-      const float cellH = cw + 58;  // 方形封面 + 标题/徽章区
-      // 滚动：滚轮 + 拖拽
-      scroll_ += w::dragScroll(app, grid);
-      if (in.wheel != 0 && grid.contains(in.mouse)) scroll_ -= (float)in.wheel * 60;
-      const float totalH = ((float)games_.size() + cols - 1) / cols * (cellH + 14);
-      const float maxScroll = totalH > grid.h ? totalH - grid.h : 0;
-      scroll_ = std::max(0.0f, std::min(scroll_, maxScroll));
-      for (int idx = 0; idx < (int)games_.size(); idx++) {
-        const int col = idx % cols;
-        const int row = idx / cols;
-        const float gx = grid.x + col * (cw + 14);
-        const float gy = grid.y + row * (cellH + 14) - scroll_;
-        if (gy > grid.bottom() || gy + cellH < grid.y - 60) continue;
-        const GameEntry& g = games_[(size_t)idx];
-        const bool selected = gridSel_ == idx;
-        const Rect card(gx, gy, cw, cellH);
-        d.roundRect(card, 10, sk.bgPanel);
-        d.roundRectOutline(card, 10, selected ? sk.accent : sk.line, selected ? 2.0f : 1.0f);
-        const Rect cover(gx, gy, cw, cw);
-        SDL_Texture* tex = w::coverTexture(app, g);
-        if (tex) {
-          d.textureCrop(tex, cover);
-        } else {
-          w::platformPlaceholder(app, cover, g.platform, g.displayTitle());
-        }
-        // 收藏星
-        if (g.favorite)
-          app.font.draw(app.sdlRenderer(), "★", gx + cw - 24, gy + 6, 15,
-                        Color8(0xF2, 0xC2, 0x00));
-        // 标题 + 徽章
-        app.font.draw(app.sdlRenderer(),
-                      app.font.ellipsize(g.displayTitle(), 12, cw - 14), gx + 8, gy + cw + 8,
-                      12, sk.textHi, true);
-        w::platformBadge(app, gx + 8, gy + cw + 32, g.platform);
-        // 鼠标交互
-        if (card.contains(in.mouse)) {
-          gridSel_ = idx;
-          if (in.mousePressed) {
-            // 单击选中；双击（间隔内二次点击）启动
-            const Uint32 now = SDL_GetTicks();
-            if (selected && now - lastClickMs_ < 400)
-              app.launchGame(games_[(size_t)gridSel_]);
-            lastClickMs_ = now;
-          }
-          if (in.mouseRightPressed) openCardMenu(app, idx, Vec2(in.mouse));
-        }
-      }
-      d.popClip();
-      if (totalH > grid.h) {
-        // ★滚动条可直接拖拽：返回新位置回写 scroll
-        scroll_ = w::scrollIndicator(app, Rect((float)d.W - 14, grid.y, 6, grid.h),
-                                     grid.h / totalH,
-                                     scroll_ / (totalH - grid.h)) *
-                  (totalH - grid.h);
-      }
-    }
-    w::keyHintBar(app, {{"双击", "开始"}, {"F", "收藏"}, {"右键", "快捷菜单"},
-                        {"B / Esc", "返回"}});
+  // ==================== FSD 经典（★v1.2.9 重制：1:1 对齐 APK LibraryScreen） ====================
+  //   FsdTopBar（CPU/内存/存储 + 时钟）
+  //   工具行：面包屑（游戏库 ▪ 当前平台）+ FsdToolButton（搜索/导入ROM/导入文件夹/
+  //           刷新/获取封面）
+  //   搜索框（展开时，深色圆角 + 放大镜）
+  //   平台 chips（固定 18 平台全量，APK 同序；选中蓝渐变白字）
+  //   封面流主体（FsdCoverFlow 186×252dp / 间距 30 / 透视 18° / 步进缩放 0.26 /
+  //               步进淡出 0.32 / 窗口 ±4）：FsdGameCover（深蓝底 + 白 35% 边框 +
+  //               满幅封面 + 左上平台徽标 + 底部渐变 + 游戏名）
+  //   底部三件套：A 启动 / B 主页 / Y 选项 / X 搜索（左）+ 标题横幅（中）+
+  //               N of M 计数（右）
+  //   FsdBottomBar（状态：游戏库 / 空）
+  static float fsdDp(const App& app) {
+    const float dH = (float)app.draw.H / 720.0f;
+    const float dW = (float)app.draw.W / 1280.0f;
+    return std::max(0.7f, std::min(dH, dW));
   }
 
-  // —— 详情 / 重命名 / 右键菜单（PC 扩展，双风格共用）——
+  // 圆角擦除（写 alpha=0 像素）
+  static void eraseCorners(SDL_Renderer* r, int w, int h, int R) {
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 0);
+    for (int dy = 0; dy < R; dy++) {
+      const float dyF = (float)dy + 0.5f;
+      const float dx = (float)std::sqrt((double)R * R - dyF * dyF);
+      const int e = (int)(R - dx);
+      if (e <= 0) continue;
+      SDL_Rect tl{0, dy, e, 1}, tr{w - e, dy, e, 1};
+      SDL_Rect bl{0, h - 1 - dy, e, 1}, br{w - e, h - 1 - dy, e, 1};
+      SDL_RenderFillRect(r, &tl);
+      SDL_RenderFillRect(r, &tr);
+      SDL_RenderFillRect(r, &bl);
+      SDL_RenderFillRect(r, &br);
+    }
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+  }
+
+  // —— FsdGameCover 烘焙（满幅封面 + 边框 + 徽标 + 底部渐变 + 游戏名 + 圆角）——
+  SDL_Texture* coverCardTexture(App& app, const GameEntry& g, int bakeW) {
+    const std::string key =
+        g.id + "|" + g.coverPath + "|" + g.displayTitle() + "|" + std::to_string(bakeW);
+    auto it = baked_.find(key);
+    if (it != baked_.end()) return it->second;
+    if (baked_.size() > 80) {  // 容量上限：整表回收（避免长会话膨胀）
+      for (auto& kv : baked_)
+        if (kv.second) SDL_DestroyTexture(kv.second);
+      baked_.clear();
+    }
+    if (!SDL_RenderTargetSupported(app.sdlRenderer())) return nullptr;
+    const float D = fsdDp(app);
+    const int bw = bakeW, bh = (int)(bakeW * 252.0f / 186.0f);
+    SDL_Renderer* r = app.sdlRenderer();
+    SDL_Texture* tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888,
+                                         SDL_TEXTUREACCESS_TARGET, bw, bh);
+    if (!tex) return nullptr;
+    SDL_Texture* prev = SDL_GetRenderTarget(r);
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderTarget(r, tex);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(r, 0x0D, 0x2C, 0x55, 255);
+    SDL_RenderClear(r);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    const Rect rc(0, 0, (float)bw, (float)bh);
+    const float s = bw / (186 * D);  // 烘焙比例
+    Draw& d = app.draw;
+    // 满幅封面（Crop；无封面 → 平台占位）
+    if (SDL_Texture* cov = w::coverTexture(app, g)) {
+      d.textureCrop(cov, rc);
+    } else {
+      w::platformPlaceholder(app, rc, g.platform, g.displayTitle());
+    }
+    // 底部渐变（透明 → 黑 72%）+ 游戏名（白 12sp 半粗体）
+    {
+      const float gh = 64 * D * s;
+      const int bands = 20;
+      for (int i = 0; i < bands; i++) {
+        const float t = (float)i / bands;
+        d.rect(Rect(rc.x, rc.bottom() - gh + gh * t, rc.w, gh / bands + 1),
+               Color8(0, 0, 0, (uint8_t)(0.72f * 255.0f * t)));
+      }
+      const float fs = 12 * D * s;
+      const std::string title =
+          app.font.ellipsize(g.displayTitle(), (int)fs, (int)(rc.w - 20 * D * s));
+      app.font.draw(app.sdlRenderer(), title, rc.x + 10 * D * s,
+                    rc.bottom() - 6 * D * s - fs, fs, Color8(255, 255, 255), true);
+    }
+    // 左上平台徽标（黑 55% 圆角 5 + 白 9sp 粗体：FC/SFC/GB/...）
+    {
+      const char* label = fsdchrome::platformBadgeLabel(g.platform);
+      const float fs = 9 * D * s;
+      const float tw = app.font.textWidth(label, fs, true);
+      const Rect brc(6 * D * s, 6 * D * s, tw + 12 * D * s, fs + 6 * D * s);
+      d.roundRect(brc, 5 * D * s, Color8(0, 0, 0, 140));
+      app.font.drawVCentered(app.sdlRenderer(), label, brc.x + 6 * D * s, brc.cy(), fs,
+                             Color8(255, 255, 255), true);
+    }
+    // 圆角擦除 + 白 35% 2dp 边框
+    eraseCorners(r, bw, bh, (int)(10 * D * s));
+    d.roundRectOutline(rc, 10 * D * s, Color8(255, 255, 255, 89), 2 * D * s);
+    SDL_SetRenderTarget(r, prev);
+    baked_[key] = tex;
+    return tex;
+  }
+
+  void drawClassic(App& app) {
+    Draw& d = app.draw;
+    const InputState& in = app.input.input();
+    const float D = fsdDp(app);
+    const float W = (float)d.W, H = (float)d.H;
+
+    // —— 背景：FsdBackdrop（自定义主页背景覆盖时带压暗遮罩）——
+    if (!app.config.homeBackground.empty()) {
+      if (SDL_Texture* bgTex = app.texture(app.config.homeBackground)) {
+        d.textureCrop(bgTex, Rect(0, 0, W, H));
+        d.rect(Rect(0, 0, W, H), Color8(0x0A, 0x1D, 0x3A, 140));
+      } else {
+        w::fsdWallpaper(app);
+      }
+    } else {
+      w::fsdWallpaper(app);
+    }
+
+    // —— FsdTopBar ——
+    w::fsdTopBar(app, stats_);
+    float y = w::fsdTopBarH(app);
+
+    // —— 工具行：面包屑 + 工具按钮 ——
+    const float toolRowH = 38 * D;
+    {
+      const int curId = cats_[(size_t)catSel_].id;
+      std::string seg2;
+      if (!searchBuf_.empty())
+        seg2 = "搜索「" + searchBuf_ + "」";
+      else if (curId == -1)
+        seg2 = "全部游戏";
+      else if (curId == -2)
+        seg2 = "收藏";
+      else if (curId == -3)
+        seg2 = "最近游玩";
+      else
+        seg2 = cats_[(size_t)catSel_].name;
+      w::fsdBreadcrumb(app, 34 * D, y + toolRowH * 0.5f, "游戏库", seg2);
+      // 右侧工具按钮（tools[i]：i 越往右越靠屏幕右侧）
+      const float tw = 52 * D, th = toolRowH - 4 * D;
+      struct Tool {
+        int icon;
+        const char* label;
+      };
+      const Tool tools[] = {{11, "搜索"}, {39, "导入ROM"}, {4, "导入文件夹"},
+                            {20, "刷新"}, {38, "获取封面"}};
+      for (int i = 4; i >= 0; i--) {
+        const float tx = W - 24 * D - tw - (float)(4 - i) * (tw + 6 * D);
+        const Rect rc(tx, y + 2 * D, tw, th);
+        if (w::fsdToolButton(app, rc, tools[i].icon, tools[i].label)) {
+          switch (i) {
+            case 0:  // 搜索开关（APK X 键同款）
+              if (searching_) {
+                stopEditing(app);
+              } else {
+                searching_ = true;
+                app.input.textClear();
+                app.input.textInputStart();
+              }
+              break;
+            case 1: {  // 导入ROM：选文件
+              BrowserRequest req;
+              req.title = "导入 ROM 文件";
+              req.mode = 1;
+              req.startDir = app.library.romDirs().empty() ? fsutil::homeDir()
+                                                           : app.library.romDirs().back();
+              req.onPick = [&app](const std::string& file) {
+                importRomFile(app, file);
+              };
+              req.onCancel = [] {};
+              app.pushScene(createFileBrowser(req));
+              break;
+            }
+            case 2:
+              startAddRomDir(app);
+              break;
+            case 3:
+              rescanAll(app);
+              break;
+            case 4:
+              app.covers.requestFetchAllMissing(games_);
+              app.toast("已排队获取 " + std::to_string(games_.size()) + " 个游戏的封面");
+              break;
+          }
+        }
+      }
+    }
+    y += toolRowH;
+
+    // —— 搜索框（展开时）——
+    if (searching_) {
+      const float fh = 36 * D;
+      const Rect field(34 * D, y + 2 * D, W - 68 * D, fh);
+      d.roundRect(field, 10 * D, Color8(0, 0, 0, 90));
+      d.roundRectOutline(field, 10 * D, Color8::hex(0x4F8AC4), 1.4f);
+      w::iconSearch(app, Rect(field.x + 10 * D, field.cy() - 9 * D, 18 * D, 18 * D),
+                    Color8::hex(0x9FB6D4));
+      const std::string txt = searchBuf_.empty() ? "搜索游戏名称…" : searchBuf_;
+      app.font.drawVCentered(
+          app.sdlRenderer(), txt, field.x + 36 * D, field.cy(), 13 * D,
+          searchBuf_.empty() ? Color8::hex(0x9FB6D4) : Color8(255, 255, 255));
+      y += fh + 4 * D;
+    }
+
+    // —— 平台 chips（固定 18，可横向拖动滚动）——
+    {
+      const float chipH = 30 * D;
+      const Rect rowRc(0, y, W, chipH + 4 * D);
+      chipScroll_ += w::dragScroll(app, rowRc);
+      d.pushClip(rowRc);
+      float x = 34 * D - chipScroll_;
+      for (size_t i = 0; i < cats_.size(); i++) {
+        if (cats_[i].id < 0) continue;  // FSD 只展示平台 chips（对齐 APK）
+        const std::string& label = cats_[i].name;
+        const float fs = 12 * D;
+        const float cw = app.font.textWidth(label, fs, true) + 28 * D;
+        if (x + cw > 0 && x < W) {
+          const bool selected = (int)i == catSel_;
+          const Rect rc(x, y + 2 * D, cw, chipH);
+          if (selected) {  // 蓝渐变（2E86E0 → 0D4FA8）
+            for (int b = 0; b < 8; b++) {
+              const float t = (float)b / 8;
+              d.rect(Rect(rc.x, rc.y + rc.h * t, rc.w, rc.h / 8 + 1),
+                     Color8::hex(0x2E86E0).lerp(Color8::hex(0x0D4FA8), t));
+            }
+          } else {
+            d.roundRect(rc, chipH * 0.5f, Color8(255, 255, 255, 31));
+          }
+          d.roundRectOutline(rc, chipH * 0.5f,
+                             selected ? Color8(255, 255, 255, 166)
+                                      : Color8(255, 255, 255, 56),
+                             1);
+          app.font.drawVCentered(app.sdlRenderer(), label,
+                                 rc.cx() - app.font.textWidth(label, fs, selected) / 2,
+                                 rc.cy(), fs,
+                                 selected ? Color8(255, 255, 255)
+                                          : Color8::hex(0x9FB6D4),
+                                 selected);
+          if (w::activated(app, rc, false)) {
+            catSel_ = (int)i;
+            refreshGames(app);
+            gridSel_ = 0;
+            chipScroll_ = 0;
+          }
+        }
+        x += cw + 8 * D;
+      }
+      d.popClip();
+      const float totalW = x + chipScroll_ - 34 * D;
+      const float maxScroll = totalW > W - 68 * D ? totalW - (W - 68 * D) : 0;
+      chipScroll_ = std::max(0.0f, std::min(chipScroll_, maxScroll));
+      y += chipH + 6 * D;
+    }
+
+    // —— 封面流主体（FsdCoverFlow：186×252 / gap30 / tilt18° / fade0.32 / scale0.26）——
+    const float flowBottom = H - w::fsdBottomBarH(app);
+    const Rect flowRc(0, y, W, flowBottom - y);
+    hitCards_.clear();
+    if (games_.empty()) {
+      const std::string main =
+          searchBuf_.empty() ? "该平台还没有游戏"
+                             : "未找到匹配「" + searchBuf_ + "」的游戏";
+      app.font.draw(app.sdlRenderer(), main,
+                    W / 2 - app.font.textWidth(main, 17 * D, true) / 2,
+                    flowRc.cy() - 20 * D, 17 * D, Color8::hex(0xE8F1FF), true);
+      const std::string hint = "点击右上角「导入ROM / 导入文件夹」添加游戏";
+      app.font.draw(app.sdlRenderer(), hint,
+                    W / 2 - app.font.textWidth(hint, 13 * D) / 2, flowRc.cy() + 10 * D,
+                    13 * D, Color8::hex(0x9FB6D4));
+    } else {
+      const float cardW = 186 * D, cardH = 252 * D, gap = 30 * D;
+      const float step = cardW + gap;
+      const float cx = W / 2, cy = flowRc.cy() - 14 * D;
+      const float dCam = 2200 * D;
+      const int N = (int)games_.size();
+      // 鼠标拖拽翻页（松手半步阈值 0.45，上限 16）
+      if (in.mouseHeld && flowRc.contains(in.mouse)) {
+        if (!fsdDragging_) {
+          fsdDragging_ = true;
+          fsdDragLastX_ = in.mouse.x;
+          fsdDragAccum_ = 0;
+        } else {
+          fsdDragAccum_ += in.mouse.x - fsdDragLastX_;
+          fsdDragLastX_ = in.mouse.x;
+        }
+      } else if (fsdDragging_) {
+        int steps = -(int)std::lround(fsdDragAccum_ / (step * 0.45f));
+        steps = std::max(-16, std::min(16, steps));
+        gridSel_ = std::max(0, std::min(N - 1, gridSel_ + steps));
+        app.covers.requestFetch(games_[(size_t)gridSel_]);
+        fsdDragging_ = false;
+      }
+      auto drawCard = [&](int i) {
+        const float pos = (float)i - animSel_;
+        const float ap = std::fabs(pos);
+        const float scale = std::max(0.5f, 1.0f - 0.26f * ap);
+        const float alpha = std::max(0.25f, std::min(1.0f, 1.0f - 0.32f * ap));
+        const float hw = cardW * 0.5f * scale, hh = cardH * 0.5f * scale;
+        const float cxx = cx + pos * step;
+        SDL_Texture* tex = coverCardTexture(app, games_[(size_t)i], (int)(cardW * 1.5f));
+        if (std::fabs(pos) < 0.05f) {
+          const Rect rc(cxx - hw, cy - hh, hw * 2, hh * 2);
+          if (tex) {
+            d.texture(tex, rc, Color8(255, 255, 255, (uint8_t)(alpha * 255)));
+          } else {
+            w::coverCard(app, rc, games_[(size_t)i], true);
+          }
+          hitCards_.push_back({rc, i});
+        } else {
+          const float a = (float)(pos * 18.0f * 3.14159265f / 180.0f);
+          const float ca = std::cos(a), sa = std::sin(a);
+          const float fr = dCam / (dCam + hw * sa);
+          const float fl = dCam / (dCam - hw * sa);
+          const float xr = cxx + hw * ca * fr;
+          const float xl = cxx - hw * ca * fl;
+          const float yl = cy - hh * fl, ybl = cy + hh * fl;
+          const float yr = cy - hh * fr, ybr = cy + hh * fr;
+          const float xy[8] = {xl, yl, xr, yr, xr, ybr, xl, ybl};
+          static const float uv[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+          if (tex) {
+            d.textureQuad(tex, xy, uv, Color8(255, 255, 255, (uint8_t)(alpha * 255)));
+          } else {
+            const Rect rc(cxx - hw, cy - hh, hw * 2, hh * 2);
+            w::coverCard(app, rc, games_[(size_t)i], false);
+          }
+          if (alpha > 0.3f) {
+            const float left = std::min(xl, xr), right = std::max(xl, xr);
+            const float topY = std::min(yl, yr), botY = std::max(ybl, ybr);
+            hitCards_.push_back({Rect(left, topY, right - left, botY - topY), i});
+          }
+        }
+      };
+      for (int dist = 4; dist >= 1; dist--) {
+        for (int sgn : {-1, 1}) {
+          const int i = (int)std::lround(animSel_) + sgn * dist;
+          if (i >= 0 && i < N) drawCard(i);
+        }
+      }
+      drawCard(gridSel_);
+
+      // 鼠标交互：点击非中心卡 = 选中；点击中心卡 = 启动；右键 = 快捷菜单
+      if (in.mousePressed) {
+        for (auto it = hitCards_.rbegin(); it != hitCards_.rend(); ++it) {
+          if (it->first.contains(in.mouse)) {
+            if (it->second == gridSel_)
+              app.launchGame(games_[(size_t)gridSel_]);
+            else {
+              gridSel_ = it->second;
+              app.covers.requestFetch(games_[(size_t)gridSel_]);
+            }
+            break;
+          }
+        }
+      } else if (in.mouseRightPressed) {
+        for (auto it = hitCards_.rbegin(); it != hitCards_.rend(); ++it) {
+          if (it->first.contains(in.mouse)) {
+            gridSel_ = it->second;
+            openCardMenu(app, gridSel_, in.mouse);
+            break;
+          }
+        }
+      } else {
+        for (auto it = hitCards_.rbegin(); it != hitCards_.rend(); ++it) {
+          if (it->first.contains(in.mouse)) {
+            gridSel_ = it->second;
+            break;
+          }
+        }
+      }
+
+      // —— 底部三件套（左：按键提示 / 中：标题横幅 / 右：N of M）——
+      {
+        const float baseY = flowBottom;
+        float hx = 34 * D;
+        const struct {
+          const char* l;
+          const char* t;
+          uint32_t c;
+        } hints[] = {{"A", "启动", 0x6DBE28}, {"B", "主页", 0xE23B3B},
+                     {"Y", "选项", 0xF2C200}, {"X", "搜索", 0x2F7BD9}};
+        for (const auto& h : hints) {
+          const float r = 10 * D;
+          d.circle(hx + r, baseY - 24 * D, r, Color8::hex(h.c).withA(140));
+          d.circle(hx + r, baseY - 24 * D, r * 0.8f, Color8::hex(h.c));
+          app.font.drawVCentered(app.sdlRenderer(), h.l,
+                                 hx + r - app.font.textWidth(h.l, 10 * D, true) / 2,
+                                 baseY - 24 * D, 10 * D, Color8(255, 255, 255), true);
+          hx += 20 * D + 5 * D;
+          app.font.drawVCentered(app.sdlRenderer(), h.t, hx, baseY - 24 * D, 11 * D,
+                                 Color8::hex(0xE8F1FF));
+          hx += app.font.textWidth(h.t, 11 * D) + 14 * D;
+        }
+        // 中：标题横幅（平台 游戏名）
+        const GameEntry& g = games_[(size_t)gridSel_];
+        const std::string title =
+            std::string(platformShortName(g.platform)) + "  " + g.displayTitle();
+        const float bnW = std::min(380 * D, W * 0.5f);
+        w::fsdTitleBanner(app,
+                          Rect(W / 2 - bnW / 2, baseY - 38 * D - 30 * D, bnW, 30 * D),
+                          title);
+        // 右：N of M
+        const std::string cnt = std::to_string(gridSel_ + 1) + " / " + std::to_string(N);
+        const float cw = app.font.textWidth(cnt, 13 * D, true) + 28 * D;
+        w::fsdCounter(app, Rect(W - 34 * D - cw, baseY - 38 * D - 30 * D, cw, 26 * D),
+                      gridSel_ + 1, N);
+      }
+    }
+
+    // —— FsdBottomBar ——
+    w::fsdBottomBar(app, ip_, games_.empty() ? "空" : "游戏库");
+  }
+
+  // 导入单个 ROM 文件（导入ROM 工具按钮）
+  static void importRomFile(App& app, const std::string& file) {
+    const GamePlatform p =
+        sniffRomPlatform(file, platformFromExtension(fsutil::extOf(file)));
+    if (app.library.addRom(file, p)) {
+      app.library.save();
+      app.toast("已导入：" + fsutil::baseOf(file));
+    } else {
+      app.toast("导入失败（文件已入库或不支持的格式）");
+    }
+  }
+
   void updateDetail(App& app, const InputState& in) {
     const int N = 6;
     if (in.pressed[(int)Btn::Up]) detailSel_ = (detailSel_ + N - 1) % N;
@@ -890,6 +1259,16 @@ class LibraryScene : public Scene {
   bool dragging_ = false;
   float dragLastX_ = 0;
   float dragAccum_ = 0;
+  // ★v1.2.9 FSD 封面流（对齐 APK LibraryScreen）
+  float chipScroll_ = 0;          // 平台 chips 横向滚动
+  bool fsdDragging_ = false;      // 封面流鼠标拖拽翻页
+  float fsdDragLastX_ = 0;
+  float fsdDragAccum_ = 0;
+  std::map<std::string, SDL_Texture*> baked_;  // FsdGameCover 烘焙缓存
+  fsdchrome::SysStats stats_;                  // 顶栏系统状态
+  uint64_t cpuPrevTotal_ = 0, cpuPrevIdle_ = 0;
+  float statTimer_ = 999;
+  std::string ip_;                              // 底栏 IP（onEnter 缓存）
 };
 
 }  // namespace

@@ -30,6 +30,8 @@ class Draw {
   void line(float x1, float y1, float x2, float y2, Color8 c, float thickness = 1);
   void circle(float cx, float cy, float r, Color8 c);
   void circleOutline(float cx, float cy, float r, Color8 c, float thickness = 1);
+  // 圆弧（弧度制，从 a0 逆时针到 a1；屏幕坐标系 y 向下）
+  void arc(float cx, float cy, float r, float a0, float a1, Color8 c, float thickness = 1);
 
   // —— 辉光（多层近似）——
   void glowRect(const Rect& rc, float radius, Color8 c, float spread = 14);

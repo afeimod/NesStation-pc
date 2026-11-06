@@ -3,14 +3,19 @@
 // 视觉与交互 1:1 移植自 Android 版：
 //   · NeonHomeScreen.kt + NeonFlow.kt + NeonChrome.kt（时钟条 / 彩色 chip 菜单行 /
 //     3D 封面流[透视缩放+渐隐+辉光] / 信息区 / 按键提示栏）
-//   · FsdHomeScreen.kt + FsdCoverFlow.kt + PixelBackdrop.kt
-//     （像素天空 / 蓝黄对角磁贴 / 底部 Dock）
+//   · FsdHomeScreen.kt + FsdScaffold.kt + FsdTileMenu.kt + FsdCoverFlow.kt
+//     （★v1.2.9：FsdBackdrop 深蓝壁纸 + 三分区磁贴流 + 顶/底状态条）
 // 鼠标：chip / 磁贴 / 封面卡均矩形命中；封面流支持横向拖拽换位。
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <map>
+#include <string>
 
+#include "ui/FsdChrome.h"
 #include "ui/Scenes.h"
 #include "ui/Widgets.h"
 #include "util/Fs.h"
@@ -922,21 +927,239 @@ class NeonHome : public Scene {
   float bgFade_ = 1.0f;
 };
 
-// ==================== FSD 经典磁贴主页 ====================
+// ==================== FSD 经典磁贴主页（★v1.2.9 完全重制） ====================
+// 1:1 对齐 APK FsdHomeScreen.kt + FsdScaffold.kt + FsdTileMenu.kt + FsdCoverFlow.kt：
+//   · 背景 FsdBackdrop（深蓝三段渐变 + 中央放射高光 + 斜向光带 + 底部渐暗；
+//     自定义主页背景图仍可覆盖）—— 不再误用像素天空（那是 APK 设置页的背景）
+//   · FsdTopBar：CPU / 内存 / 存储 实时状态（标签 + 数值 + 迷你进度条，
+//     绿 <70% / 黄 <90% / 红 ≥90%）+ NES STATION + 时钟
+//   · 3 个分区行（垂直封面流：选中行居中放大 1.0，上下行 0.66/0.32 缩放 +
+//     0.55/0.10 变暗，260ms 平滑动画；↑↓ / 滚轮 / 纵向拖拽切换）：
+//       ① 游戏库 —— 全部游戏 + 各平台磁贴（仅显示有游戏的平台；APK 同序 16 平台；
+//          每平台专属图标 + 数量徽标；点击直达该平台封面流）
+//       ② 在线 · 对战 · SWF
+//       ③ 设置 · 关于 · 退出
+//   · 分区标题条：黄色圆点 + 白色粗体大标题（FsdSectionHeader）
+//   · 行内横向封面流：磁贴 220×136dp、步进 244dp、每步缩放 0.18 / 淡出 0.20 /
+//     透视 ±10°（textureQuad 梯形近似）；选中分区中当前磁贴黄色 3dp 高亮边框
+//   · FsdButtonHints：A 选择（绿）/ B 返回（红）彩色圆钮
+//   · FsdBottomBar：网络图标 + 局域网 IP + 状态 + 日期时间（每秒刷新）
+//   · 磁贴（FsdTile）：蓝(2E86E0→0D4FA8)/黄(F7B500→DE8A00)对角分割 +
+//     白色平台图标（可自定义图片）+ 右上数量徽标 + 左下深色粗体标签 +
+//     玻璃斜向高光；整体透明度可调（APK homeTileIconAlphas）
+//   · 磁贴选项（右键 / E 键）：自定义图标（选图片）/ 卡片透明度滑杆 /
+//     应用到全部 / 恢复默认 —— 对齐 APK 长按磁贴对话框，持久化到 config
+// （fsdhome 系统状态/图标映射已移至 ui/FsdChrome.h —— 主页与游戏库共用）
+
+// —— 磁贴选项对话框（对齐 APK「磁贴选项」AlertDialog：透明度滑杆 +
+//    自定义图标 + 应用到全部 + 恢复默认）——
+class FsdTileOptionsScene : public Scene {
+ public:
+  FsdTileOptionsScene(std::string tileKey, std::string tileLabel)
+      : key_(std::move(tileKey)), label_(std::move(tileLabel)) {}
+
+  void onEnter(App& app) override {
+    auto it = app.config.homeTileIconAlphas.find(key_);
+    alpha_ = it == app.config.homeTileIconAlphas.end() ? 1.0f : it->second;
+    custom_ = app.config.homeTileIcons.count(key_) > 0;
+  }
+
+  void update(App& app, float dt, const InputState& in) override {
+    (void)dt;
+    if (in.pressed[(int)Btn::Back] || in.pressed[(int)Btn::Menu]) {
+      app.popScene();
+      return;
+    }
+    if (in.pressed[(int)Btn::Up]) {
+      sliderFocus_ = false;
+      btnFocus_ = (btnFocus_ + 3) % 4;
+      if (btnFocus_ == 2 && !custom_) btnFocus_ = (btnFocus_ + 3) % 4;
+    }
+    if (in.pressed[(int)Btn::Down] && !sliderFocus_) {
+      btnFocus_ = (btnFocus_ + 1) % 4;
+      if (btnFocus_ == 2 && !custom_) btnFocus_ = 3;
+    }
+    if ((in.pressed[(int)Btn::Left] || in.pressed[(int)Btn::Right]) && sliderFocus_) {
+      alpha_ += in.pressed[(int)Btn::Right] ? 0.05f : -0.05f;
+      alpha_ = std::max(0.05f, std::min(1.0f, alpha_));
+      app.config.homeTileIconAlphas[key_] = alpha_;
+      app.saveConfig();
+    }
+    if (in.pressed[(int)Btn::Ok]) {
+      if (sliderFocus_) {
+        sliderFocus_ = false;
+        btnFocus_ = 0;
+      } else if (btnFocus_ == 0) {
+        pickIcon(app);
+      } else if (btnFocus_ == 1) {
+        applyAll(app);
+      } else if (btnFocus_ == 2 && custom_) {
+        resetIcon(app);
+      } else {
+        app.popScene();
+      }
+    }
+  }
+
+  void pickIcon(App& app) {
+    App* appPtr = &app;
+    std::string key = key_;
+    app.popScene();  // 关闭自身，避免文件浏览器叠两层
+    BrowserRequest req;
+    req.title = "选择磁贴图标（" + label_ + "）";
+    req.mode = 3;  // 选图片
+    req.startDir = app.dataDir();
+    req.onPick = [appPtr, key](const std::string& path) {
+      // 拷贝到数据目录 icons/（对齐 APK：filesDir/icons/tile_<key>_<ts>.png）
+      std::string data;
+      if (!fsutil::readFile(path, &data)) {
+        appPtr->toast("无法读取所选图片");
+        return;
+      }
+      std::string safeKey = key;
+      for (char& c : safeKey)
+        if (c == ':' || c == '/' || c == '\\') c = '_';
+      std::string ext = "png";
+      const size_t dot = path.find_last_of('.');
+      if (dot != std::string::npos) {
+        ext = path.substr(dot + 1);
+        for (char& c : ext) c = (char)tolower((unsigned char)c);
+      }
+      const std::string dir = fsutil::join(appPtr->dataDir(), "icons");
+      fsutil::makeDirs(dir);
+      const std::string dest = fsutil::join(
+          dir, "tile_" + safeKey + "_" + std::to_string(time(nullptr)) + "." + ext);
+      if (!fsutil::writeFile(dest, data)) {
+        appPtr->toast("图标保存失败");
+        return;
+      }
+      appPtr->config.homeTileIcons[key] = dest;
+      appPtr->saveConfig();
+      appPtr->toast("已设置磁贴图标（返回主页生效）");
+    };
+    req.onCancel = [] {};
+    app.pushScene(createFileBrowser(req));
+  }
+
+  void applyAll(App& app) {
+    // 一键把当前透明度同步到所有磁贴（对齐 APK「将此透明度应用到所有卡片」）
+    const float v = alpha_;
+    app.config.homeTileIconAlphas["all"] = v;
+    for (GamePlatform p : fsdchrome::kHomePlatformOrder)
+      app.config.homeTileIconAlphas[std::string("platform:") + platformShortName(p)] = v;
+    for (const char* k : {"online", "battle", "swf", "settings", "about", "exit"})
+      app.config.homeTileIconAlphas[k] = v;
+    app.saveConfig();
+    app.toast("已将透明度应用到所有磁贴（返回主页生效）");
+  }
+
+  void resetIcon(App& app) {
+    app.config.homeTileIcons.erase(key_);
+    app.saveConfig();
+    custom_ = false;
+    app.toast("已恢复默认图标（返回主页生效）");
+  }
+
+  void draw(App& app) override {
+    Draw& d = app.draw;
+    const InputState& in = app.input.input();
+    // 遮罩
+    d.rect(Rect(0, 0, (float)d.W, (float)d.H), Color8(0, 0, 0, 132));
+    // 面板
+    const float D = std::max(0.75f, std::min((float)d.H / 720.0f, (float)d.W / 1280.0f));
+    const float pw = std::min(470.0f * D, (float)d.W - 40);
+    const float ph = 330 * D;
+    const Rect panel((float)d.W / 2 - pw / 2, (float)d.H / 2 - ph / 2, pw, ph);
+    d.roundRect(panel, 12 * D, Color8::hex(0x0D2C55, 0xF2));
+    d.roundRectOutline(panel, 12 * D, Color8::hex(0x2E86E0), 1.4f);
+    float y = panel.y + 18 * D;
+    app.font.draw(app.sdlRenderer(), "磁贴选项 · " + label_, panel.x + 20 * D, y, 17 * D,
+                  Color8(255, 255, 255), true);
+    y += 30 * D;
+    app.font.draw(app.sdlRenderer(),
+                  "可为本磁贴设置自定义图标（支持图片）。图标立即生效并持久保存。",
+                  panel.x + 20 * D, y, 12 * D, Color8(0x9F, 0xB6, 0xD4));
+    y += 24 * D;
+    // 透明度行
+    {
+      const Rect row(panel.x + 16 * D, y, pw - 32 * D, 58 * D);
+      d.roundRect(row, 8 * D, Color8(0x06, 0x12, 0x25, 200));
+      app.font.draw(app.sdlRenderer(), "卡片透明度", row.x + 14 * D, row.y + 10 * D,
+                    14 * D, Color8(0xE8, 0xF1, 0xFF), true);
+      char pct[16];
+      snprintf(pct, sizeof(pct), "%d%%", (int)(alpha_ * 100 + 0.5f));
+      app.font.draw(app.sdlRenderer(), pct,
+                    row.right() - 14 * D - app.font.textWidth(pct, 13 * D), row.y + 10 * D,
+                    13 * D, Color8(0x9F, 0xB6, 0xD4));
+      const Rect slider(row.x + 14 * D, row.y + 34 * D, row.w - 28 * D, 16 * D);
+      float v01 = (alpha_ - 0.05f) / 0.95f;
+      const bool hadFocus = sliderFocus_;
+      if (w::sliderRow(app, slider, "", v01, hadFocus)) {
+        alpha_ = 0.05f + v01 * 0.95f;
+        app.config.homeTileIconAlphas[key_] = alpha_;
+        app.saveConfig();
+      }
+      // 鼠标/键盘焦点切换
+      if (in.mousePressed && row.contains(in.mouse)) sliderFocus_ = true;
+      if (in.pressed[(int)Btn::Down] && sliderFocus_) {
+        sliderFocus_ = false;
+        btnFocus_ = 0;
+      }
+      y += 66 * D;
+    }
+    // 按钮：自定义图标 / 应用到全部 / 恢复默认(有自定义时) / 关闭
+    const float bw = (pw - 32 * D - 10 * D) / 2;
+    pickRect_ = Rect(panel.x + 16 * D, y, bw, 40 * D);
+    allRect_ = Rect(pickRect_.right() + 10 * D, y, bw, 40 * D);
+    resetRect_ = Rect(panel.x + 16 * D, y + 48 * D, bw, 40 * D);
+    closeRect_ = Rect(resetRect_.right() + 10 * D, y + 48 * D, bw, 40 * D);
+    if (w::primaryButton(app, pickRect_, "自定义图标") || w::activated(app, pickRect_, btnFocus_ == 0 && !sliderFocus_))
+      pickIcon(app);
+    if (w::button(app, allRect_, "应用到全部磁贴", btnFocus_ == 1 && !sliderFocus_))
+      applyAll(app);
+    if (custom_) {
+      if (w::button(app, resetRect_, "恢复默认图标", btnFocus_ == 2 && !sliderFocus_))
+        resetIcon(app);
+    } else {
+      d.roundRect(resetRect_, 8 * D, Color8(0x06, 0x12, 0x25, 140));
+      app.font.drawVCentered(app.sdlRenderer(), "（无自定义图标）", resetRect_.x + 14 * D,
+                             resetRect_.cy(), 12 * D, Color8(0x5E, 0x6F, 0x85));
+    }
+    if (w::button(app, closeRect_, "关闭", btnFocus_ == 3 && !sliderFocus_)) app.popScene();
+  }
+
+ private:
+  std::string key_, label_;
+  float alpha_ = 1.0f;
+  bool custom_ = false;
+  bool sliderFocus_ = true;
+  int btnFocus_ = 0;
+  Rect pickRect_, allRect_, resetRect_, closeRect_;
+};
+
 class FsdHome : public Scene {
  public:
   ~FsdHome() { baked_.clear(); }
 
   struct Tile {
-    const char* label;
-    int iconId;
-    std::string badge;  // 右上角徽标（空 = 无）
-    int action;
+    std::string key;    // "all" / "platform:NES" / "online" / ...
+    std::string label;  // 显示名
+    int iconId = 9;     // 矢量图标
+    std::string badge;  // 右上徽标（空=无）
+  };
+  struct Section {
+    std::string key, title;
+    std::vector<Tile> tiles;
+    int sel = 0;
+    float animSel = 0;  // 行内动画位
   };
 
   void onEnter(App& app) override {
+    timeMs_ = 0;
     rebuild(app);
-    animSel_ = (float)sel_;
+    animSec_ = (float)secSel_;
+    ip_ = fsdchrome::localIp();
+    lastStats_ = 0;
   }
   void onExit(App& app) override {
     (void)app;
@@ -945,139 +1168,215 @@ class FsdHome : public Scene {
     baked_.clear();
   }
 
+  static float dpOf(const App& app) {
+    const float dH = (float)app.draw.H / 720.0f;
+    const float dW = (float)app.draw.W / 1280.0f;
+    return std::max(0.7f, std::min(dH, dW));
+  }
+
+  float tileAlpha(const App& app, const std::string& key) const {
+    auto it = app.config.homeTileIconAlphas.find(key);
+    if (it == app.config.homeTileIconAlphas.end()) return 1.0f;
+    return std::max(0.05f, std::min(1.0f, it->second));
+  }
+
   void rebuild(App& app) {
-    tiles_ = {
-        {"游戏库", 12, std::to_string(app.library.games().size()), 0},
-        {"收藏", 13, std::to_string(app.library.favorites().size()), 1},
-        {"最近", 14, "", 2},
-        {"核心管理", 16, "PC", 3},
-        {"设置", 3, "", 4},
-        {"关于", 17, "", 5},
-        {"退出", 18, "", 6},
-    };
+    // —— 分区结构（对齐 APK sections）——
+    sections_.clear();
+    Section lib;
+    lib.key = "library";
+    lib.title = "游戏库";
+    Tile all;
+    all.key = "all";
+    all.label = "全部游戏";
+    all.iconId = 12;
+    all.badge = std::to_string(app.library.games().size());
+    lib.tiles.push_back(all);
+    for (GamePlatform p : fsdchrome::kHomePlatformOrder) {
+      const int n = app.library.countFor(p);
+      if (n <= 0) continue;
+      Tile t;
+      t.key = std::string("platform:") + platformShortName(p);
+      t.label = platformShortName(p);
+      t.iconId = fsdchrome::platformTileIcon(p);
+      t.badge = std::to_string(n);
+      lib.tiles.push_back(t);
+    }
+    lib.sel = std::min(libSel_, (int)lib.tiles.size() - 1);
+    if (lib.sel < 0) lib.sel = 0;
+    lib.animSel = (float)lib.sel;
+    sections_.push_back(std::move(lib));
+
+    Section online;
+    online.key = "online";
+    online.title = "在线 · 对战 · SWF";
+    online.tiles = {{"online", "在线游戏", 22, ""},
+                    {"battle", "对战平台", 33, ""},
+                    {"swf", "SWF/Flash", 1, ""}};
+    online.sel = std::min(onlineSel_, (int)online.tiles.size() - 1);
+    online.animSel = (float)online.sel;
+    sections_.push_back(std::move(online));
+
+    Section sys;
+    sys.key = "system";
+    sys.title = "设置 · 关于 · 退出";
+    sys.tiles = {{"settings", "设置", 3, ""},
+                 {"about", "关于", 17, ""},
+                 {"exit", "退出", 18, ""}};
+    sys.sel = std::min(sysSel_, (int)sys.tiles.size() - 1);
+    sys.animSel = (float)sys.sel;
+    sections_.push_back(std::move(sys));
+
+    libCount_ = (int)app.library.games().size();
+    // 个性化指纹（图标/透明度改动 → 重建）
+    persoFp_ = personalizationFp(app);
+    if (secSel_ >= (int)sections_.size()) secSel_ = 0;
     app.covers.requestFetchAllMissing(app.library.games());
   }
 
+  static std::string personalizationFp(const App& app) {
+    std::string fp;
+    for (const auto& kv : app.config.homeTileIcons) fp += kv.first + ">" + kv.second + ";";
+    for (const auto& kv : app.config.homeTileIconAlphas)
+      fp += kv.first + "~" + std::to_string(kv.second) + ";";
+    return fp;
+  }
+
+  void activate(App& app, const Tile& t) {
+    if (t.key == "all") {
+      // 对齐 APK：FSD 模式「全部游戏」进入游戏库（默认 NES 平台页 ——
+      // LibraryScreen initialPlatform ?: GamePlatform.NES）
+      app.pushScene(createLibraryScene((int)GamePlatform::NES));
+    } else if (t.key.rfind("platform:", 0) == 0) {
+      const std::string pn = t.key.substr(9);
+      app.pushScene(createLibraryScene((int)platformFromString(pn)));
+    } else if (t.key == "online") {
+      app.toast("在线游戏需要 NesStation 在线服务（Android 版功能），PC 版暂未提供");
+    } else if (t.key == "battle") {
+      app.toast("对战平台需要 NesStation 在线服务（Android 版功能），PC 版暂未提供");
+    } else if (t.key == "swf") {
+      app.toast("SWF 小游戏为 Android 版专属功能，PC 版暂未提供");
+    } else if (t.key == "settings") {
+      app.pushScene(createSettingsScene());
+    } else if (t.key == "about") {
+      app.pushScene(createAboutScene());
+    } else if (t.key == "exit") {
+      app.pushScene(createMessageScene(
+          "退出 NesStation？", "确定要退出应用吗？未保存的进度将按设置自动存档。",
+          false, "退出", [appPtr = &app]() { appPtr->requestExit(); }));
+    }
+  }
+
+  // ============ 输入 ============
   void update(App& app, float dt, const InputState& in) override {
     timeMs_ += (int64_t)(dt * 1000);
-    const float diff = (float)sel_ - animSel_;
-    if (std::fabs(diff) < 0.003f)
-      animSel_ = (float)sel_;
-    else
-      animSel_ += diff * std::min(1.0f, dt * 11.0f);
-
-    if ((int)app.library.games().size() != libCount_) {
-      libCount_ = (int)app.library.games().size();
-      rebuild(app);
+    animSec_ += ((float)secSel_ - animSec_) * std::min(1.0f, dt * 10.0f);
+    if (std::fabs((float)secSel_ - animSec_) < 0.003f) animSec_ = (float)secSel_;
+    for (auto& s : sections_) {
+      s.animSel += ((float)s.sel - s.animSel) * std::min(1.0f, dt * 10.0f);
+      if (std::fabs((float)s.sel - s.animSel) < 0.003f) s.animSel = (float)s.sel;
+    }
+    // 库或个性化变化 → 重建（记住三个分区的选中位）
+    {
+      const int cnt = (int)app.library.games().size();
+      if (cnt != libCount_) {
+        libSel_ = sections_.empty() ? 0 : sections_[0].sel;
+        onlineSel_ = sections_.size() > 1 ? sections_[1].sel : 0;
+        sysSel_ = sections_.size() > 2 ? sections_[2].sel : 0;
+        rebuild(app);
+      } else if (personalizationFp(app) != persoFp_) {
+        libSel_ = sections_.empty() ? 0 : sections_[0].sel;
+        onlineSel_ = sections_.size() > 1 ? sections_[1].sel : 0;
+        sysSel_ = sections_.size() > 2 ? sections_[2].sel : 0;
+        rebuild(app);
+        // 重建后烘焙表里旧磁贴纹理已在 rebuild 前清理？—— 烘焙键含图标路径，
+        // 个性化改动只会新增键；旧纹理留在缓存无害（数量有限）。
+      }
     }
 
     if (in.pressed[(int)Btn::Back]) {
-      homeAction(app, 6);
+      app.pushScene(createMessageScene(
+          "退出 NesStation？", "确定要退出应用吗？未保存的进度将按设置自动存档。",
+          false, "退出", [appPtr = &app]() { appPtr->requestExit(); }));
       return;
     }
 
-    const int N = (int)tiles_.size();
-    const float tileW = tileWidth(app);
+    Section& cur = sections_[(size_t)secSel_];
+    const int N = (int)cur.tiles.size();
 
-    // 鼠标拖拽磁贴流
-    if (in.mouseHeld && in.mouse.y > 70 && in.mouse.y < app.draw.H - 70) {
+    // 键盘导航：↑↓ 切分区，←→ 切磁贴，Enter 激活，E 磁贴选项
+    if (in.pressed[(int)Btn::Up] && secSel_ > 0) secSel_--;
+    if (in.pressed[(int)Btn::Down] && secSel_ < (int)sections_.size() - 1) secSel_++;
+    if (in.pressed[(int)Btn::Left] && cur.sel > 0) cur.sel--;
+    if (in.pressed[(int)Btn::Right] && cur.sel < N - 1) cur.sel++;
+    if (in.pressed[(int)Btn::Ok]) activate(app, cur.tiles[(size_t)cur.sel]);
+    if (in.pressed[(int)Btn::Option])
+      app.pushScene(std::unique_ptr<Scene>(
+          new FsdTileOptionsScene(cur.tiles[(size_t)cur.sel].key,
+                                  cur.tiles[(size_t)cur.sel].label)));
+    if (in.pressed[(int)Btn::Menu]) app.pushScene(createSettingsScene());
+    // 滚轮：切分区
+    if (in.wheel != 0) {
+      int next = secSel_ - in.wheel;
+      secSel_ = std::max(0, std::min((int)sections_.size() - 1, next));
+    }
+
+    // 鼠标拖拽：横向 → 行内翻页；纵向（>48dp）→ 切分区
+    const float D = dpOf(app);
+    if (in.mouseHeld && flowArea(app).contains(in.mouse)) {
       if (!dragging_) {
         dragging_ = true;
         dragLastX_ = in.mouse.x;
-        dragAccum_ = 0;
+        dragLastY_ = in.mouse.y;
+        dragAccX_ = 0;
+        dragAccY_ = 0;
       } else {
-        dragAccum_ += in.mouse.x - dragLastX_;
+        dragAccX_ += in.mouse.x - dragLastX_;
+        dragAccY_ += in.mouse.y - dragLastY_;
         dragLastX_ = in.mouse.x;
-        const float step = tileW * 0.6f * 0.5f;
-        while (dragAccum_ > step && sel_ > 0) {
-          sel_--;
-          dragAccum_ -= step;
+        dragLastY_ = in.mouse.y;
+        // 纵向：拖过 48dp 立即切分区（一次性，需回拖再触发）
+        if (std::fabs(dragAccY_) > 48 * D && std::fabs(dragAccY_) > std::fabs(dragAccX_)) {
+          if (dragAccY_ < 0 && secSel_ < (int)sections_.size() - 1) secSel_++;
+          else if (dragAccY_ > 0 && secSel_ > 0) secSel_--;
+          dragAccY_ = 0;
+          dragAccX_ = 0;
         }
-        while (dragAccum_ < -step && sel_ < N - 1) {
-          sel_++;
-          dragAccum_ += step;
-        }
-        dragAccum_ = std::max(-step, std::min(step, dragAccum_));
       }
-    } else {
+    } else if (dragging_) {
+      // 松手：横向按半步翻页（0.45，上限 16 步 —— APK maxSwipeSteps）
+      const float step = 244 * D;
+      int steps = -(int)std::lround(dragAccX_ / (step * 0.45f));
+      steps = std::max(-16, std::min(16, steps));
+      Section& s = sections_[(size_t)secSel_];
+      s.sel = std::max(0, std::min((int)s.tiles.size() - 1, s.sel + steps));
       dragging_ = false;
     }
-
-    // 上帧磁贴点击改为 draw 内直接处理；这里只做键盘导航
-    if (in.pressed[(int)Btn::Left] && sel_ > 0) sel_--;
-    if (in.pressed[(int)Btn::Right] && sel_ < N - 1) sel_++;
-    if (in.pressed[(int)Btn::Ok]) homeAction(app, tiles_[(size_t)sel_].action);
-    if (in.pressed[(int)Btn::Menu]) app.pushScene(createSettingsScene());
   }
 
-  float tileWidth(App& app) const {
-    return std::max(170.0f, std::min(240.0f, (float)app.draw.W * 0.165f));
+  Rect flowArea(App& app) const {
+    const float D = dpOf(app);
+    const float top = w::fsdTopBarH(app) + 10 * D;
+    const float bottom = (float)app.draw.H - w::fsdBottomBarH(app) - 44 * D;
+    return Rect(0, top, (float)app.draw.W, bottom - top);
   }
 
-  // —— 磁贴内容（烘焙与无渲染目标回退共用；alpha 用于侧贴渐隐）——
-  void drawTileContent(App& app, const Tile& t, const Rect& rc, float alpha) {
-    Draw& d = app.draw;
-    const uint8_t A = (uint8_t)(alpha * 255);
-    const float w = rc.w, h = rc.h;
-    // 底色（安全网）
-    d.roundRect(rc, 10, Color8(0x0D, 0x2C, 0x55, A));
-    // 对角渐变：上蓝（右高左低斜线）、下黄；分割线 (0,0.68h)→(w,0.42h)
-    const Color8 navy = Color8::hex(0x1565C0), blue = Color8::hex(0x2196F3);
-    const Color8 amber = Color8::hex(0xF9A825), yellow = Color8::hex(0xFDD835);
-    const int rows = (int)h;
-    for (int y = 0; y < rows; y++) {
-      const float fy = (float)y + rc.y;
-      const float splitX = rc.x + w * (0.68f - (float)y / h) / 0.26f;
-      const float tTop = std::min(1.0f, std::max(0.0f, (float)y / (h * 0.68f)));
-      const float tBot =
-          std::min(1.0f, std::max(0.0f, ((float)y - h * 0.42f) / (h * 0.58f)));
-      Color8 cTop = navy.lerp(blue, tTop), cBot = amber.lerp(yellow, tBot);
-      cTop.a = A;
-      cBot.a = A;
-      if (splitX < rc.x + w) {
-        const float sx = std::max(rc.x, splitX);
-        d.rect(Rect(sx, fy, rc.x + w - sx, 1), cTop);
-      }
-      if (splitX > rc.x) {
-        const float ex = std::min(rc.x + w, splitX);
-        d.rect(Rect(rc.x, fy, ex - rc.x, 1), cBot);
-      }
-      const float bandX = rc.x + w * (0.62f - 0.30f * (float)y / h);
-      if (bandX < rc.x + w) {
-        const float bx = std::max(rc.x, bandX);
-        d.rect(Rect(bx, fy, rc.x + w - bx, 1), Color8(255, 255, 255, (uint8_t)(13 * alpha)));
-      }
-    }
-    // 白色图标（顶部居中）
-    w::icon(app, t.iconId, Rect(rc.x + w / 2 - w * 0.07f, rc.y + h * 0.14f, w * 0.14f,
-                                w * 0.14f),
-            Color8(255, 255, 255, A));
-    // 左下标签
-    app.font.draw(app.sdlRenderer(), t.label, rc.x + rc.w * 0.045f,
-                  rc.bottom() - h * 0.24f, h * 0.115f,
-                  Color8(255, 255, 255, A), true);
-    // 右上徽标
-    if (!t.badge.empty()) {
-      const float tw = app.font.textWidth(t.badge, 11, true);
-      const Rect brc(rc.right() - tw - 26, rc.y + 8, tw + 16, 21);
-      d.roundRect(brc, 4, Color8(0x1A, 0x4E, 0x8A, (uint8_t)(204 * alpha)));
-      app.font.drawVCentered(app.sdlRenderer(), t.badge, brc.x + 8, brc.cy(), 11,
-                             Color8(255, 255, 255, A), true);
-    }
-  }
-
-  // —— 磁贴烘焙：蓝黄对角渐变 + 高光 + 白图标 + 左下标签 + 右上徽标 + 圆角 ——
+  // —— 磁贴烘焙：蓝/黄对角渐变 + 高光 + 图标 + 徽标 + 深色标签 + 圆角 ——
   SDL_Texture* tileTexture(App& app, const Tile& t) {
-    const std::string key = std::string(t.label) + "|" + t.badge;
+    auto iit = app.config.homeTileIcons.find(t.key);
+    const std::string customIcon =
+        iit != app.config.homeTileIcons.end() ? iit->second : "";
+    const std::string key = t.key + "|" + t.badge + "|" + customIcon;
     auto it = baked_.find(key);
     if (it != baked_.end()) return it->second;
-    // 无渲染目标支持 → nullptr，调用方走平面绘制
     if (!SDL_RenderTargetSupported(app.sdlRenderer())) return nullptr;
 
-    const int bw = 330, bh = (int)(330 * 0.68f);  // ~1.5×
+    const float D = dpOf(app);
+    const int bw = std::max(8, (int)(220 * D * 1.5f));
+    const int bh = std::max(8, (int)(136 * D * 1.5f));
     SDL_Renderer* r = app.sdlRenderer();
-    SDL_Texture* tex =
-        SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, bw, bh);
+    SDL_Texture* tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888,
+                                         SDL_TEXTUREACCESS_TARGET, bw, bh);
     if (!tex) return nullptr;
     SDL_Texture* prev = SDL_GetRenderTarget(r);
     SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
@@ -1086,221 +1385,313 @@ class FsdHome : public Scene {
     SDL_SetRenderDrawColor(r, 0x0D, 0x2C, 0x55, 255);
     SDL_RenderClear(r);
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-
-    drawTileContent(app, t, Rect(0, 0, (float)bw, (float)bh), 1.0f);
-
-    eraseRoundedCorners(r, bw, bh, 12);
+    drawTileContent(app, t, customIcon, Rect(0, 0, (float)bw, (float)bh), 1.0f);
+    eraseRoundedCorners(r, bw, bh, (int)(10 * D * 1.5f));
     SDL_SetRenderTarget(r, prev);
     baked_[key] = tex;
     return tex;
   }
 
-  void drawPixelBackdrop(App& app) {
+  // —— 磁贴内容（烘焙与软件渲染回退共用；alpha 用于侧贴渐隐）——
+  void drawTileContent(App& app, const Tile& t, const std::string& customIcon,
+                       const Rect& rc, float alpha) {
     Draw& d = app.draw;
-    const float W = (float)d.W, H = (float)d.H;
-    // 天空（浅蓝渐变）
-    const Color8 skyTop = Color8::hex(0xB7D7F2), skyBot = Color8::hex(0xC8E2F6);
-    for (int i = 0; i < 40; i++) {
-      const float t = (float)i / 40;
-      d.rect(Rect(0, H * t, W, H / 40 + 1), skyTop.lerp(skyBot, t));
+    const float D = dpOf(app);
+    const uint8_t A = (uint8_t)(alpha * 255);
+    const float w = rc.w, h = rc.h;
+    const float s = w / (220 * D);  // 烘焙比例（相对设计 220dp）
+    // 底色
+    d.roundRect(rc, 10 * D * s, Color8(0x0D, 0x2C, 0x55, A));
+    // 1. 蓝色基底（垂直渐变 2E86E0 → 0D4FA8）
+    const Color8 blueTop = Color8::hex(0x2E86E0), blueBot = Color8::hex(0x0D4FA8);
+    for (int i = 0; i < 24; i++) {
+      const float t2 = (float)i / 24;
+      Color8 c = blueTop.lerp(blueBot, t2);
+      c.a = A;
+      d.rect(Rect(rc.x, rc.y + h * t2, w, h / 24 + 1), c);
     }
-    // 像素云（漂移）
-    struct Cloud {
-      float x, y, scale, drift;
-    };
-    static const Cloud clouds[] = {
-        {0.08f, 0.18f, 1.4f, 0.000020f}, {0.32f, 0.10f, 1.0f, 0.000014f},
-        {0.62f, 0.22f, 1.7f, 0.000010f}, {0.86f, 0.08f, 1.2f, 0.000018f},
-    };
-    static const char* pattern[] = {"  ####  ", " ###### ", "########",
-                                    " ###### ", "  ####  "};
-    const Color8 cloudC = Color8::hex(0xF5F7FB), cloudS = Color8::hex(0xCAD3DF);
-    for (const auto& c : clouds) {
-      const float dx = std::fmod((float)((double)timeMs_ * c.drift), W);
-      const float cx = c.x * W + dx;
-      const float unit = 18.0f * c.scale;
-      for (int row = 0; row < 5; row++) {
-        for (int col = 0; col < 8; col++) {
-          if (pattern[row][col] != '#') continue;
-          float px = cx + (col - 4) * unit;
-          // 环绕
-          if (px > W) px -= W;
-          if (px + unit < 0) px += W;
-          d.rect(Rect(px, c.y * H + (row - 2) * unit, unit, unit),
-                 row >= 3 ? cloudS : cloudC);
-        }
+    // 2. 黄色对角块（左低右高斜线 0.62h → 0.38h；F7B500 → DE8A00）
+    const Color8 yTop = Color8::hex(0xF7B500), yBot = Color8::hex(0xDE8A00);
+    const int rows = (int)h;
+    for (int y = 0; y < rows; y++) {
+      const float fy = (float)y;
+      const float splitX = rc.x + w * (0.38f + (1.0f - fy / h) * 0.24f);
+      if (splitX < rc.x + w) {
+        const float sx = std::max(rc.x, splitX);
+        const float tBot = std::min(1.0f, std::max(0.0f, fy / h));
+        Color8 c = yTop.lerp(yBot, tBot);
+        c.a = A;
+        d.rect(Rect(sx, rc.y + fy, rc.x + w - sx, 1), c);
       }
     }
-    // 星光闪烁
-    struct Sparkle {
-      float x, y, size, phase;
-    };
-    static const Sparkle sparks[] = {
-        {0.10f, 0.12f, 14, 0.6f}, {0.25f, 0.06f, 18, 0.4f}, {0.45f, 0.14f, 12, 0.8f},
-        {0.78f, 0.05f, 16, 0.5f}, {0.92f, 0.16f, 14, 0.7f},
-    };
-    for (const auto& s : sparks) {
-      const float blink =
-          (std::sin((double)timeMs_ / 1000.0 * 2.0 + s.phase * 6.2831853) + 1.0f) / 2.0f;
-      const float a = (60.0f + blink * 195.0f) / 255.0f;
-      const Color8 col = Color8(255, 255, 255, (uint8_t)(128 * a));
-      const float cx = s.x * W, cy = s.y * H;
-      d.circleOutline(cx, cy, s.size / 2, col, 2);
-      d.line(cx - s.size, cy, cx + s.size, cy, col, 2);
-      d.line(cx, cy - s.size, cx, cy + s.size, col, 2);
+    // 3. 对角分界高光细线（白 35%，2px）
+    {
+      Color8 c(255, 255, 255, (uint8_t)(0.35f * A));
+      d.line(rc.x, rc.y + h * 0.62f, rc.x + w, rc.y + h * 0.38f, c, 2 * s);
     }
-    // 海
-    const float seaY = H * 0.74f;
-    const Color8 seaTop = Color8::hex(0x4F8AC4), seaBot = Color8::hex(0x2F5C8C);
-    for (int i = 0; i < 20; i++) {
-      const float t = (float)i / 20;
-      d.rect(Rect(0, seaY + (H - seaY) * t, W, (H - seaY) / 20 + 1),
-             seaTop.lerp(seaBot, t));
+    // 4. 玻璃斜向高光（左上白 6% 平行四边形）
+    for (int y = 0; y < (int)h; y++) {
+      const float t2 = (float)y / h;
+      // 左边从 x0 向 x2 收缩，右边从 x1 向 x0 收缩
+      const float ga = rc.x + (w * 0.10f) * t2;
+      const float ge = rc.x + (w * 0.45f) * (1.0f - t2);
+      if (ge > ga)
+        d.rect(Rect(ga, rc.y + y, ge - ga, 1),
+               Color8(255, 255, 255, (uint8_t)(0.06f * A)));
     }
-    for (float x = 0; x < W; x += 24) {
-      d.rect(Rect(x, seaY + 4, 12, 2), Color8(255, 255, 255, 102));
+    // 图标：自定义图片优先（顶部居中，44dp，Fit）；否则白色矢量图标
+    const float iconSize = 44 * D * s;
+    const Rect iconRc(rc.x + w / 2 - iconSize / 2, rc.y + 18 * D * s, iconSize, iconSize);
+    bool drewCustom = false;
+    if (!customIcon.empty()) {
+      SDL_Texture* tex = app.texture(customIcon);
+      if (tex) {
+        d.textureAspect(tex, iconRc, Color8(255, 255, 255, A));
+        drewCustom = true;
+      }
     }
-    // 草地
-    const float grassY = H * 0.84f;
-    const Color8 gTop = Color8::hex(0x7BB36A), gDeep = Color8::hex(0x4F8C4A);
-    for (int i = 0; i < 16; i++) {
-      const float t = (float)i / 16;
-      d.rect(Rect(0, grassY + (H - grassY) * t, W, (H - grassY) / 16 + 1),
-             gTop.lerp(gDeep, t));
+    if (!drewCustom) w::icon(app, t.iconId, iconRc, Color8(255, 255, 255, A));
+    // 徽标（右上：黑 35% 圆角底 + 白粗体 11sp）
+    if (!t.badge.empty()) {
+      const float fs = 11 * D * s;
+      const float tw = app.font.textWidth(t.badge, fs, true);
+      const Rect brc(rc.right() - tw - 16 * D * s - 10 * D * s, rc.y + 10 * D * s,
+                     tw + 16 * D * s, 17 * D * s);
+      d.roundRect(brc, 10 * D * s, Color8(0, 0, 0, (uint8_t)(0.35f * A)));
+      app.font.drawVCentered(app.sdlRenderer(), t.badge, brc.x + 8 * D * s, brc.cy(), fs,
+                             Color8(255, 255, 255, A), true);
     }
-    for (float x = 0; x < W; x += 10) {
-      d.rect(Rect(x, grassY - 3, 2, 6), Color8::hex(0x6BA45A));
+    // 标签（左下：深色 0x1A1206 粗体 15sp —— 落在黄色块上，APK 同色）
+    {
+      const float fs = 15 * D * s;
+      const std::string label = app.font.ellipsize(t.label, (int)fs, (int)(w - 24 * D * s));
+      app.font.draw(app.sdlRenderer(), label, rc.x + 12 * D * s,
+                    rc.bottom() - 8 * D * s - fs, fs, Color8(0x1A, 0x12, 0x06, A), true);
     }
   }
 
+  // ============ 绘制 ============
   void draw(App& app) override {
     Draw& d = app.draw;
     const InputState& in = app.input.input();
-    const int N = (int)tiles_.size();
-    const float tileW = tileWidth(app);
-    const float tileH = tileW * 0.68f;
-    const float cy = app.draw.H * 0.46f;
+    const float D = dpOf(app);
+    const float W = (float)d.W, H = (float)d.H;
 
-    // —— 像素天空背景 ——
-    // ★v1.2.6 自定义主页背景（设置 → 外观 → 主页背景；两套风格通用，
-    //   对齐 Android AppSettings.homeBackgroundUri）：
-    //   选择图片后替代像素天空（aspect-fill 不变形 + 轻压暗保证文字可读）
+    // —— 背景（FsdBackdrop；自定义背景图覆盖）——
     if (!app.config.homeBackground.empty()) {
       SDL_Texture* bgTex = app.texture(app.config.homeBackground);
       if (bgTex) {
-        d.textureCrop(bgTex, Rect(0, 0, (float)d.W, (float)d.H));
-        d.rect(Rect(0, 0, (float)d.W, (float)d.H), Color8(0x0D, 0x1A, 0x30, 110));
+        d.textureCrop(bgTex, Rect(0, 0, W, H));
+        d.rect(Rect(0, 0, W, H), Color8(0x0A, 0x1D, 0x3A, 140));
       } else {
-        drawPixelBackdrop(app);
+        w::fsdWallpaper(app);
       }
     } else {
-      drawPixelBackdrop(app);
+      w::fsdWallpaper(app);
     }
 
-    // —— 顶部状态条 ——
-    {
-      // 半透明深色横带（白云漂过时保证白字可读）
-      d.rect(Rect(0, 0, (float)d.W, 58), Color8(0x0D, 0x2C, 0x55, 120));
-      const Color8 white = Color8(255, 255, 255, 255);
-      float x = 30;
-      app.font.draw(app.sdlRenderer(), "NesStation", x, 20, 22, white, true);
-      x += app.font.textWidth("NesStation", 22, true) + 8;
-      // ★版本徽章：一眼确认所跑构建
-      app.font.draw(app.sdlRenderer(), appVersionText(), x, 30, 12,
-                    Color8(255, 255, 255, 235), true);
-      x += app.font.textWidth(appVersionText(), 12, true) + 10;
-      app.font.draw(app.sdlRenderer(), "GameBox for PC", x, 30, 12,
-                    Color8(255, 255, 255, 235), true);
-      const std::string right =
-          std::to_string(app.library.games().size()) + " GAMES · 18 PLATFORMS";
-      app.font.draw(app.sdlRenderer(), right,
-                    (float)d.W - 30 - app.font.textWidth(right, 12, true), 30, 12,
-                    Color8(255, 255, 255, 245), true);
-    }
+    // —— FsdTopBar ——
+    w::fsdTopBar(app, stats_);
 
-    // —— 磁贴流 ——
+    // —— 分区垂直封面流 ——
     hitTiles_.clear();
-    for (int dist = 4; dist >= 1; dist--) {
-      for (int sgn : {-1, 1}) {
-        const int i = sel_ + sgn * dist;
-        if (i < 0 || i >= N) continue;
-        const float ad = std::fabs((float)i - animSel_);
-        const int dir = (i < animSel_) ? -1 : 1;
-        const float scale = std::max(0.62f, 1.0f - 0.11f * ad);
-        const float alpha = std::min(0.85f, std::max(0.15f, 0.92f - 0.18f * ad));
-        const float cx = (float)d.W / 2 + dir * ad * tileW * 0.66f;
-        const float w = tileW * scale, h = tileH * scale;
-        const Rect rc(cx - w / 2, cy - h / 2, w, h);
-        SDL_Texture* tex = tileTexture(app, tiles_[(size_t)i]);
-        if (tex) {
-          d.texture(tex, rc, Color8(255, 255, 255, (uint8_t)(alpha * 255)));
-        } else {
-          drawTileContent(app, tiles_[(size_t)i], rc, alpha);  // 软件渲染回退
+    {
+      const Rect area = flowArea(app);
+      const float flowStep = (190 + 28) * D;  // rowH + gapY（APK）
+      const float cy = area.cy();
+      // 距离远的先画：dist 2,1 再 0（选中行最上层）
+      for (int dist = 2; dist >= 0; dist--) {
+        const int sgnLo = -1, sgnHi = 1, sgnSelf = 0;
+        const int sgns[3] = {sgnHi, sgnLo, sgnSelf};
+        for (int si = 0; si < 3; si++) {
+          if (dist == 0 && si != 2) continue;
+          if (dist != 0 && si == 2) continue;
+          const int i = secSel_ + sgns[si] * dist;
+          if (i < 0 || i >= (int)sections_.size()) continue;
+          const float pos = (float)i - animSec_;
+          const float ap = std::fabs(pos);
+          const float scale = std::max(0.5f, 1.0f - 0.34f * ap);
+          const float alpha = std::max(0.35f, std::min(1.0f, 1.0f - 0.45f * ap));
+          const float rowCy = cy + pos * flowStep;
+          drawSectionRow(app, sections_[(size_t)i], i == secSel_, rowCy, scale, alpha);
         }
-        if (alpha > 0.3f) hitTiles_.push_back({rc, i});
+      }
+    }
+
+    // 命中处理
+    handleMouse(app, in);
+
+    // —— FsdButtonHints（A 选择 / B 返回）——
+    w::fsdButtonHints(app, H - w::fsdBottomBarH(app) - 32 * D,
+                       {{"A", "选择", 0x6DBE28}, {"B", "返回", 0xE23B3B}});
+
+    // —— FsdBottomBar ——
+    w::fsdBottomBar(app, ip_, "主菜单");
+
+    // 2.5s 刷新系统状态
+    sampleTimers(app);
+  }
+
+  void drawSectionRow(App& app, Section& s, bool focused, float rowCy, float scale,
+                      float alpha) {
+    Draw& d = app.draw;
+    const float D = dpOf(app);
+    const float itemW = 220 * D, itemH = 136 * D;
+    const float headerH = 30 * D;
+    // 行整体内容：header + 10dp + tiles → 垂直居中于 rowCy
+    const float contentH = headerH + 10 * D + itemH;
+    const float top = rowCy - contentH * 0.5f * scale;
+
+    // 分区标题条（黄点 + 白粗体大标题 —— FsdSectionHeader，与中心磁贴左缘对齐）
+    {
+      const float dotR = 6 * D * scale;
+      const float hy = top + headerH * 0.5f * scale;
+      const float x = (float)d.W * 0.5f - itemW * 0.5f * scale;
+      d.circle(x + dotR, hy, dotR,
+               Color8(0xF7, 0xB5, 0x00, (uint8_t)(255 * alpha)));
+      app.font.draw(app.sdlRenderer(), s.title, x + dotR * 2 + 12 * D * scale,
+                    hy - 10 * D * scale, 20 * D * scale,
+                    Color8(255, 255, 255, (uint8_t)(255 * alpha)), true);
+    }
+
+    // 行内横向封面流（visibleHalfWindow=5）
+    const float tilesTop = top + (headerH + 10 * D) * scale;
+    const float cyT = tilesTop + itemH * 0.5f * scale;
+    const int N = (int)s.tiles.size();
+    const float cx0 = (float)d.W * 0.5f;
+    const float dCam = 2200 * D;  // 透视相机距离（px）
+    for (int dist = 5; dist >= 1; dist--) {
+      for (int sgn : {-1, 1}) {
+        const int i = (int)std::lround(s.animSel) + sgn * dist;
+        if (i < 0 || i >= N) continue;
+        drawFlowTile(app, s, i, cx0, cyT, scale, alpha, focused, dCam);
       }
     }
     if (N > 0) {
-      // 中心磁贴（选中：放大 + 外发光 + 描边）
-      const Rect rc((float)d.W / 2 - tileW / 2, cy - tileH / 2, tileW, tileH);
-      d.glowRect(rc, 10, Color8(0x2E, 0x86, 0xE0, 150), 16);
-      SDL_Texture* tex = tileTexture(app, tiles_[(size_t)sel_]);
-      if (tex) {
-        d.texture(tex, rc);
-      } else {
-        drawTileContent(app, tiles_[(size_t)sel_], rc, 1.0f);
-      }
-      d.roundRectOutline(rc, 10, Color8::hex(0x2E86E0), 3);
-      hitTiles_.push_back({rc, sel_});
+      drawFlowTile(app, s, s.sel, cx0, cyT, scale, alpha, focused, dCam);
     }
-    // 命中检测（倒序：上层优先）+ 悬停跟随 + 点击直达
+  }
+
+  void drawFlowTile(App& app, Section& s, int i, float cx0, float cyT, float rowScale,
+                    float rowAlpha, bool focused, float dCam) {
+    Draw& d = app.draw;
+    const float D = dpOf(app);
+    const float itemW = 220 * D, itemH = 136 * D, gap = 24 * D;
+    const float step = itemW + gap;
+    const float pos = (float)i - s.animSel;
+    const float ap = std::fabs(pos);
+    const float cardScale = std::max(0.5f, 1.0f - 0.18f * ap);
+    const float scale = cardScale * rowScale;
+    const float alpha = std::max(0.25f, std::min(1.0f, 1.0f - 0.20f * ap)) * rowAlpha;
+    const Tile& t = s.tiles[(size_t)i];
+    const float tAlpha = alpha * tileAlpha(app, t.key);
+    const float hw = itemW * 0.5f * scale, hh = itemH * 0.5f * scale;
+    const float cxx = cx0 + pos * step * rowScale;
+
+    SDL_Texture* tex = tileTexture(app, t);
+    const int secIdx = (int)(&s - sections_.data());
+    if (std::fabs(pos) < 0.05f) {
+      // 中心磁贴：正对用户
+      const Rect rc(cxx - hw, cyT - hh, hw * 2, hh * 2);
+      // 选中分区中当前磁贴：黄色 3dp 高亮边框 + 辉光
+      if (focused && i == s.sel && tAlpha > 0.25f)
+        d.glowRect(rc, 10 * D, Color8(0xF7, 0xB5, 0x00, 110), 12);
+      if (tex) {
+        d.texture(tex, rc, Color8(255, 255, 255, (uint8_t)(tAlpha * 255)));
+      } else {
+        drawTileContent(app, t, "", rc, tAlpha);
+      }
+      if (focused && i == s.sel && tAlpha > 0.25f)
+        d.roundRectOutline(rc, 10 * D, Color8::hex(0xF7B500), 3 * D);
+      if (tAlpha > 0.25f) hitTiles_.push_back({rc, {secIdx, i}});
+    } else {
+      // 侧贴：透视梯形（rotationY = pos*10°，cameraDistance 近似）
+      const float a = (float)(pos * 10.0f * 3.14159265f / 180.0f);
+      const float ca = std::cos(a), sa = std::sin(a);
+      const float fr = dCam / (dCam + hw * sa);
+      const float fl = dCam / (dCam - hw * sa);
+      const float xr = cxx + hw * ca * fr;
+      const float xl = cxx - hw * ca * fl;
+      const float yl = cyT - hh * fl, ybl = cyT + hh * fl;
+      const float yr = cyT - hh * fr, ybr = cyT + hh * fr;
+      const float xy[8] = {xl, yl, xr, yr, xr, ybr, xl, ybl};
+      static const float uv[8] = {0, 0, 1, 0, 1, 1, 0, 1};
+      if (tex) {
+        d.textureQuad(tex, xy, uv, Color8(255, 255, 255, (uint8_t)(tAlpha * 255)));
+      } else {
+        const Rect rc(cxx - hw, cyT - hh, hw * 2, hh * 2);
+        drawTileContent(app, t, "", rc, tAlpha);
+      }
+      if (tAlpha > 0.30f) {
+        const float left = std::min(xl, xr), right = std::max(xl, xr);
+        const float topY = std::min(yl, yr), botY = std::max(ybl, ybr);
+        hitTiles_.push_back({Rect(left, topY, right - left, botY - topY), {secIdx, i}});
+      }
+    }
+  }
+
+  void handleMouse(App& app, const InputState& in) {
     if (in.mousePressed) {
-      int hit = -1;
+      // 倒序：上层（选中行/中心贴）优先
       for (auto it = hitTiles_.rbegin(); it != hitTiles_.rend(); ++it) {
         if (it->first.contains(in.mouse)) {
-          hit = it->second;
-          break;
+          const int sec = it->second.first, tile = it->second.second;
+          if (sec != secSel_) {
+            secSel_ = sec;  // 先选中该行（APK：点击未选中行任意磁贴）
+            sections_[(size_t)sec].sel = tile;
+          } else if (tile == sections_[(size_t)sec].sel) {
+            activate(app, sections_[(size_t)sec].tiles[(size_t)tile]);
+          } else {
+            sections_[(size_t)sec].sel = tile;
+          }
+          return;
         }
       }
-      if (hit >= 0) {
-        if (hit == sel_)
-          homeAction(app, tiles_[(size_t)sel_].action);
-        else
-          sel_ = hit;
+    } else if (in.mouseRightPressed) {
+      for (auto it = hitTiles_.rbegin(); it != hitTiles_.rend(); ++it) {
+        if (it->first.contains(in.mouse)) {
+          const int sec = it->second.first, tile = it->second.second;
+          secSel_ = sec;
+          sections_[(size_t)sec].sel = tile;
+          const Tile& t = sections_[(size_t)sec].tiles[(size_t)tile];
+          app.pushScene(std::unique_ptr<Scene>(new FsdTileOptionsScene(t.key, t.label)));
+          return;
+        }
       }
     } else {
+      // 悬停跟随选中（仅当前分区）
       for (auto it = hitTiles_.rbegin(); it != hitTiles_.rend(); ++it) {
-        if (it->first.contains(in.mouse)) {
-          sel_ = it->second;
+        if (it->first.contains(in.mouse) && it->second.first == secSel_) {
+          sections_[(size_t)secSel_].sel = it->second.second;
           break;
         }
       }
     }
+  }
 
-    // —— 底部 Dock（半透明玻璃条）——
-    {
-      const float dockY = (float)d.H - 46;
-      d.rect(Rect(0, dockY, (float)d.W, 46), Color8(0x0D, 0x2C, 0x55, 136));
-      app.font.draw(app.sdlRenderer(), tiles_[(size_t)sel_].label, 30, dockY + 13, 16,
-                    Color8(255, 255, 255, 255), true);
-      const std::string hint = "←→ 切换 · Enter 确认 · Esc 返回 · 鼠标点击 / 拖拽";
-      app.font.draw(app.sdlRenderer(), hint,
-                    (float)d.W - 30 - app.font.textWidth(hint, 11), dockY + 17, 11,
-                    Color8(255, 255, 255, 204));
+  void sampleTimers(App& app) {
+    if (timeMs_ - lastStats_ > 2500 || lastStats_ == 0) {
+      lastStats_ = timeMs_;
+      stats_ = fsdchrome::sampleStats(app.dataDir(), &cpuPrevTotal_, &cpuPrevIdle_);
     }
   }
 
  private:
-  std::vector<Tile> tiles_;
+  std::vector<Section> sections_;
+  int secSel_ = 0;
+  float animSec_ = 0;
+  int libSel_ = 0, onlineSel_ = 0, sysSel_ = 0;
   std::map<std::string, SDL_Texture*> baked_;
-  int sel_ = 0;
-  float animSel_ = 0;
   int libCount_ = -1;
+  std::string persoFp_;
   int64_t timeMs_ = 0;
-  std::vector<std::pair<Rect, int>> hitTiles_;
+  int64_t lastStats_ = 0;
+  uint64_t cpuPrevTotal_ = 0, cpuPrevIdle_ = 0;
+  fsdchrome::SysStats stats_;
+  std::string ip_;
+  std::vector<std::pair<Rect, std::pair<int, int>>> hitTiles_;
   bool dragging_ = false;
-  float dragLastX_ = 0;
-  float dragAccum_ = 0;
+  float dragLastX_ = 0, dragLastY_ = 0, dragAccX_ = 0, dragAccY_ = 0;
 };
 
 }  // namespace

@@ -180,6 +180,20 @@ void Draw::circleOutline(float cx, float cy, float r, Color8 c, float thickness)
   }
 }
 
+void Draw::arc(float cx, float cy, float r, float a0, float a1, Color8 c,
+               float thickness) {
+  if (r <= 0) return;
+  float span = a1 - a0;
+  while (span < 0) span += 6.2831853f;
+  const int segs = std::max(2, (int)(std::fabs(span) / 0.22f) + 1);
+  const float step = span / segs;
+  for (int i = 0; i < segs; i++) {
+    const float t0 = a0 + i * step, t1 = a0 + (i + 1) * step;
+    line(cx + std::cos(t0) * r, cy + std::sin(t0) * r, cx + std::cos(t1) * r,
+         cy + std::sin(t1) * r, c, thickness);
+  }
+}
+
 void Draw::glowRect(const Rect& rc, float radius, Color8 c, float spread) {
   for (int i = 4; i >= 1; i--) {
     const float m = spread * (float)i / 4.0f;

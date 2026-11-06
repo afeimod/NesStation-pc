@@ -541,6 +541,24 @@ void icon(App& app, int id, const Rect& rc, Color8 c) {
     case 21: iconPercent(app, rc, c); break;
     case 22: iconGlobe(app, rc, c); break;
     case 23: iconBolt(app, rc, c); break;
+    // ★v1.2.9 FSD 平台磁贴（对齐 APK platformIcon / FsdToolButton）
+    case 24: iconConsole(app, rc, c); break;
+    case 25: iconPhone(app, rc, c); break;
+    case 26: iconPhoneWide(app, rc, c); break;
+    case 27: iconComputer(app, rc, c); break;
+    case 28: iconRadio(app, rc, c); break;
+    case 29: iconDisc(app, rc, c); break;
+    case 30: iconBook(app, rc, c); break;
+    case 31: iconTicket(app, rc, c); break;
+    case 32: iconCup(app, rc, c); break;
+    case 33: iconSports(app, rc, c); break;
+    case 34: iconTablet(app, rc, c); break;
+    case 35: iconTv(app, rc, c); break;
+    case 36: iconDisplay(app, rc, c); break;
+    case 37: iconDevices(app, rc, c); break;
+    case 38: iconImage(app, rc, c); break;
+    case 39: iconDownload(app, rc, c); break;
+    case 40: iconNetwork(app, rc, c); break;
     default: break;
   }
 }
@@ -950,6 +968,378 @@ void platformPlaceholder(App& app, const Rect& rc, GamePlatform p, const std::st
     app.font.draw(app.sdlRenderer(), app.font.ellipsize(lines[i], 12, inner.w),
                   inner.cx() - lw / 2, ty, 12, Color8(255, 255, 255, 217));
     ty += 16;
+  }
+}
+
+// —— ★v1.2.9 FSD 主页平台磁贴专属图标（1:1 对齐 APK FsdHomeScreen.platformIcon）——
+// Material Rounded 风格矢量重绘：每个平台类别一枚可辨识图标，不再千篇一律手柄。
+
+void iconConsole(App& app, const Rect& rc, Color8 c) {  // 24 VideogameAsset（SFC/Switch）
+  Draw& d = app.draw;
+  const float x = rc.x, y = rc.y + rc.h * 0.28f, w = rc.w, h = rc.h * 0.44f;
+  d.roundRectOutline(Rect(x, y, w, h), h * 0.32f, c, 2.2f);
+  const float u = std::min(w, h);
+  // 左十字键
+  const float ccx = x + w * 0.22f, ccy = y + h / 2;
+  d.line(ccx - u * 0.13f, ccy, ccx + u * 0.13f, ccy, c, 2.2f);
+  d.line(ccx, ccy - u * 0.13f, ccx, ccy + u * 0.13f, c, 2.2f);
+  // 右双按钮
+  d.circle(x + w * 0.72f, y + h * 0.34f, u * 0.075f, c);
+  d.circle(x + w * 0.84f, y + h * 0.62f, u * 0.075f, c);
+}
+
+void iconPhone(App& app, const Rect& rc, Color8 c) {  // 25 Smartphone（GB 竖向掌机）
+  Draw& d = app.draw;
+  const float w = rc.w * 0.56f, h = rc.h * 0.9f;
+  const float x = rc.cx() - w / 2, y = rc.y + rc.h * 0.05f;
+  d.roundRectOutline(Rect(x, y, w, h), w * 0.18f, c, 2.2f);
+  d.line(x + w * 0.32f, y + h * 0.09f, x + w * 0.68f, y + h * 0.09f, c, 2);
+  d.circle(x + w / 2, y + h * 0.93f, std::max(1.5f, w * 0.045f), c);
+  d.line(x + w * 0.28f, y + h * 0.2f, x + w * 0.72f, y + h * 0.2f, c, 1.4f);
+}
+
+void iconPhoneWide(App& app, const Rect& rc, Color8 c) {  // 26 MobileFriendly（GBA 横向掌机）
+  Draw& d = app.draw;
+  const float w = rc.w * 0.92f, h = rc.h * 0.56f;
+  const float x = rc.x + rc.w * 0.04f, y = rc.y + rc.h * 0.22f;
+  d.roundRectOutline(Rect(x, y, w, h), h * 0.34f, c, 2.2f);
+  const float u = std::min(w, h);
+  d.line(x + w * 0.16f, y + h / 2, x + w * 0.3f, y + h / 2, c, 2);
+  d.line(x + w * 0.19f, y + h * 0.3f, x + w * 0.19f, y + h * 0.7f, c, 2);
+  d.circle(x + w * 0.74f, y + h * 0.36f, u * 0.06f, c);
+  d.circle(x + w * 0.85f, y + h * 0.64f, u * 0.06f, c);
+}
+
+void iconComputer(App& app, const Rect& rc, Color8 c) {  // 27 Computer（MD 主机）
+  Draw& d = app.draw;
+  const float w = rc.w * 0.9f, h = rc.h * 0.58f;
+  const float x = rc.x + rc.w * 0.05f, y = rc.y + rc.h * 0.08f;
+  d.roundRectOutline(Rect(x, y, w, h), h * 0.16f, c, 2.2f);
+  d.line(x + w * 0.08f, y + h * 0.26f, x + w * 0.6f, y + h * 0.26f, c, 1.6f);
+  d.line(x + w * 0.08f, y + h * 0.48f, x + w * 0.42f, y + h * 0.48f, c, 1.6f);
+  d.circle(x + w * 0.82f, y + h * 0.37f, h * 0.07f, c);
+  // 底座
+  d.line(x + w * 0.38f, y + h, x + w * 0.34f, y + h * 1.24f, c, 2.2f);
+  d.line(x + w * 0.62f, y + h, x + w * 0.66f, y + h * 1.24f, c, 2.2f);
+  d.line(x + w * 0.24f, y + h * 1.24f, x + w * 0.76f, y + h * 1.24f, c, 2.2f);
+}
+
+void iconRadio(App& app, const Rect& rc, Color8 c) {  // 28 Radio（PCE 小白机）
+  Draw& d = app.draw;
+  // 天线
+  d.line(rc.x + rc.w * 0.72f, rc.y + rc.h * 0.3f, rc.x + rc.w * 0.9f, rc.y + rc.h * 0.04f, c, 2);
+  const float w = rc.w * 0.86f, h = rc.h * 0.52f;
+  const float x = rc.x + rc.w * 0.07f, y = rc.y + rc.h * 0.3f;
+  d.roundRectOutline(Rect(x, y, w, h), h * 0.18f, c, 2.2f);
+  d.circleOutline(x + w * 0.3f, y + h / 2, h * 0.28f, c, 2);
+  d.circle(x + w * 0.3f, y + h / 2, h * 0.07f, c);
+  d.line(x + w * 0.64f, y + h * 0.3f, x + w * 0.88f, y + h * 0.3f, c, 1.8f);
+  d.line(x + w * 0.64f, y + h * 0.56f, x + w * 0.88f, y + h * 0.56f, c, 1.8f);
+}
+
+void iconDisc(App& app, const Rect& rc, Color8 c) {  // 29 Album（PSX 光盘）
+  Draw& d = app.draw;
+  const float R = rc.minDim() * 0.44f;
+  d.circleOutline(rc.cx(), rc.cy(), R, c, 2.2f);
+  d.circleOutline(rc.cx(), rc.cy(), R * 0.34f, c, 2);
+  d.circle(rc.cx(), rc.cy(), R * 0.08f, c);
+  d.arc(rc.cx(), rc.cy(), R * 0.78f, -0.5f, 0.9f, c, 1.6f);
+}
+
+void iconBook(App& app, const Rect& rc, Color8 c) {  // 30 MenuBook（NDS 翻盖双屏）
+  Draw& d = app.draw;
+  // 左右两页
+  d.line(rc.cx(), rc.y + rc.h * 0.14f, rc.cx(), rc.y + rc.h * 0.92f, c, 2.2f);
+  d.line(rc.x + rc.w * 0.08f, rc.y + rc.h * 0.2f, rc.cx() - rc.w * 0.03f, rc.y + rc.h * 0.14f, c, 2);
+  d.line(rc.x + rc.w * 0.08f, rc.y + rc.h * 0.2f, rc.x + rc.w * 0.08f, rc.y + rc.h * 0.9f, c, 2);
+  d.line(rc.x + rc.w * 0.08f, rc.y + rc.h * 0.9f, rc.cx(), rc.y + rc.h * 0.92f, c, 2);
+  d.line(rc.x + rc.w * 0.92f, rc.y + rc.h * 0.2f, rc.cx() + rc.w * 0.03f, rc.y + rc.h * 0.14f, c, 2);
+  d.line(rc.x + rc.w * 0.92f, rc.y + rc.h * 0.2f, rc.x + rc.w * 0.92f, rc.y + rc.h * 0.9f, c, 2);
+  d.line(rc.x + rc.w * 0.92f, rc.y + rc.h * 0.9f, rc.cx(), rc.y + rc.h * 0.92f, c, 2);
+  // 页面行
+  d.line(rc.x + rc.w * 0.17f, rc.y + rc.h * 0.4f, rc.cx() - rc.w * 0.08f, rc.y + rc.h * 0.38f, c, 1.4f);
+  d.line(rc.x + rc.w * 0.17f, rc.y + rc.h * 0.58f, rc.cx() - rc.w * 0.08f, rc.y + rc.h * 0.56f, c, 1.4f);
+  d.line(rc.x + rc.w * 0.83f, rc.y + rc.h * 0.4f, rc.cx() + rc.w * 0.08f, rc.y + rc.h * 0.38f, c, 1.4f);
+  d.line(rc.x + rc.w * 0.83f, rc.y + rc.h * 0.58f, rc.cx() + rc.w * 0.08f, rc.y + rc.h * 0.56f, c, 1.4f);
+}
+
+void iconTicket(App& app, const Rect& rc, Color8 c) {  // 31 LocalPlay（街机厅票券）
+  Draw& d = app.draw;
+  const float x = rc.x + rc.w * 0.04f, y = rc.y + rc.h * 0.22f;
+  const float w = rc.w * 0.92f, h = rc.h * 0.56f;
+  d.roundRectOutline(Rect(x, y, w, h), h * 0.16f, c, 2.2f);
+  // 两侧半圆缺口（近似：贴背景色圆盖住边线两侧）—— 用两段竖虚线表达撕边
+  const float u = std::min(w, h);
+  d.line(x + w * 0.18f, y + h * 0.22f, x + w * 0.18f, y + h * 0.78f, c, 1.6f);
+  d.line(x + w * 0.82f, y + h * 0.22f, x + w * 0.82f, y + h * 0.78f, c, 1.6f);
+  // 中央星形（街机星星）
+  const float R = u * 0.2f, r2 = R * 0.45f;
+  for (int i = 0; i < 10; i++) {
+    const float a0 = -1.5707963f + (float)i * 0.6283185f;
+    const float a1 = -1.5707963f + (float)(i + 1) * 0.6283185f;
+    const float r0 = (i % 2 == 0) ? R : r2, r1 = (i % 2 == 0) ? r2 : R;
+    d.line(x + w * 0.5f + std::cos(a0) * r0, y + h / 2 + std::sin(a0) * r0,
+           x + w * 0.5f + std::cos(a1) * r1, y + h / 2 + std::sin(a1) * r1, c, 1.8f);
+  }
+}
+
+void iconCup(App& app, const Rect& rc, Color8 c) {  // 32 LocalCafe（Java 咖啡）
+  Draw& d = app.draw;
+  const float x = rc.x + rc.w * 0.18f, y = rc.y + rc.h * 0.24f;
+  const float w = rc.w * 0.5f, h = rc.h * 0.46f;
+  // 杯体
+  d.line(x, y, x + w * 0.08f, y + h, c, 2.2f);
+  d.line(x + w * 0.08f, y + h, x + w * 0.92f, y + h, c, 2.2f);
+  d.line(x + w * 0.92f, y + h, x + w, y, c, 2.2f);
+  d.line(x, y, x + w, y, c, 2.2f);
+  // 杯柄
+  d.arc(x + w * 1.02f, y + h * 0.35f, w * 0.26f, -1.2f, 1.2f, c, 2.2f);
+  // 热气
+  d.arc(x + w * 0.3f, rc.y + rc.h * 0.1f, rc.h * 0.06f, 0.3f, 2.6f, c, 1.5f);
+  d.arc(x + w * 0.62f, rc.y + rc.h * 0.1f, rc.h * 0.06f, 0.3f, 2.6f, c, 1.5f);
+}
+
+void iconSports(App& app, const Rect& rc, Color8 c) {  // 33 SportsEsports（DC/对战平台）
+  Draw& d = app.draw;
+  const float w = rc.w * 0.94f, h = rc.h * 0.5f;
+  const float x = rc.x + rc.w * 0.03f, y = rc.y + rc.h * 0.26f;
+  // 两侧握柄圆 + 中央连接（手柄轮廓）
+  d.circleOutline(x + h * 0.5f, y + h * 0.5f, h * 0.5f, c, 2.2f);
+  d.circleOutline(x + w - h * 0.5f, y + h * 0.5f, h * 0.5f, c, 2.2f);
+  d.line(x + h * 0.5f, y, x + w - h * 0.5f, y, c, 2.2f);
+  d.line(x + h * 0.5f, y + h, x + w - h * 0.5f, y + h, c, 2.2f);
+  // 左十字键
+  const float ccx = x + w * 0.3f, ccy = y + h * 0.5f;
+  const float u = h * 0.3f;
+  d.line(ccx - u, ccy, ccx + u, ccy, c, 2);
+  d.line(ccx, ccy - u, ccx, ccy + u, c, 2);
+  // 右四键
+  const float bcx = x + w * 0.72f;
+  d.circle(bcx, ccy - h * 0.24f, u * 0.22f, c);
+  d.circle(bcx, ccy + h * 0.24f, u * 0.22f, c);
+  d.circle(bcx - h * 0.26f, ccy, u * 0.22f, c);
+  d.circle(bcx + h * 0.26f, ccy, u * 0.22f, c);
+}
+
+void iconTablet(App& app, const Rect& rc, Color8 c) {  // 34 TabletAndroid（3DS）
+  Draw& d = app.draw;
+  const float w = rc.w * 0.74f, h = rc.h * 0.86f;
+  const float x = rc.cx() - w / 2, y = rc.y + rc.h * 0.07f;
+  d.roundRectOutline(Rect(x, y, w, h), w * 0.12f, c, 2.2f);
+  // 双屏分割线（3DS 特征）
+  d.line(x + w * 0.1f, y + h * 0.46f, x + w * 0.9f, y + h * 0.46f, c, 2);
+  d.line(x + w * 0.22f, y + h * 0.22f, x + w * 0.78f, y + h * 0.22f, c, 1.4f);
+  d.line(x + w * 0.22f, y + h * 0.68f, x + w * 0.78f, y + h * 0.68f, c, 1.4f);
+  d.circle(x + w / 2, y + h * 0.96f, std::max(1.5f, w * 0.03f), c);
+}
+
+void iconTv(App& app, const Rect& rc, Color8 c) {  // 35 Tv（NGC/Wii 电视主机）
+  Draw& d = app.draw;
+  const float w = rc.w * 0.94f, h = rc.h * 0.6f;
+  const float x = rc.x + rc.w * 0.03f, y = rc.y + rc.h * 0.06f;
+  d.roundRectOutline(Rect(x, y, w, h), h * 0.12f, c, 2.2f);
+  // 天线
+  d.line(x + w * 0.24f, y, x + w * 0.1f, rc.y, c, 2);
+  d.line(x + w * 0.76f, y, x + w * 0.9f, rc.y, c, 2);
+  // 底座
+  d.line(x + w * 0.44f, y + h, x + w * 0.4f, y + h * 1.18f, c, 2.2f);
+  d.line(x + w * 0.56f, y + h, x + w * 0.6f, y + h * 1.18f, c, 2.2f);
+  d.line(x + w * 0.28f, y + h * 1.18f, x + w * 0.72f, y + h * 1.18f, c, 2.2f);
+}
+
+void iconDisplay(App& app, const Rect& rc, Color8 c) {  // 36 SmartDisplay（PSP 宽屏）
+  Draw& d = app.draw;
+  const float w = rc.w * 0.96f, h = rc.h * 0.56f;
+  const float x = rc.x + rc.w * 0.02f, y = rc.y + rc.h * 0.22f;
+  d.roundRectOutline(Rect(x, y, w, h), h * 0.26f, c, 2.2f);
+  // 中央播放三角
+  const float cx = x + w / 2, cy = y + h / 2, s = h * 0.26f;
+  d.line(cx - s * 0.7f, cy - s, cx - s * 0.7f, cy + s, c, 2.2f);
+  d.line(cx - s * 0.7f, cy - s, cx + s, cy, c, 2.2f);
+  d.line(cx - s * 0.7f, cy + s, cx + s, cy, c, 2.2f);
+}
+
+void iconDevices(App& app, const Rect& rc, Color8 c) {  // 37 Devices（Wii U 双设备）
+  Draw& d = app.draw;
+  // 后方显示器
+  const float mw = rc.w * 0.62f, mh = rc.h * 0.44f;
+  const float mx = rc.x + rc.w * 0.04f, my = rc.y + rc.h * 0.08f;
+  d.roundRectOutline(Rect(mx, my, mw, mh), mh * 0.12f, c, 2.2f);
+  d.line(mx + mw * 0.5f, my + mh, mx + mw * 0.5f, my + mh * 1.16f, c, 2);
+  d.line(mx + mw * 0.28f, my + mh * 1.16f, mx + mw * 0.72f, my + mh * 1.16f, c, 2);
+  // 前方掌机
+  const float pw = rc.w * 0.34f, ph = rc.h * 0.4f;
+  const float px = rc.x + rc.w * 0.6f, py = rc.y + rc.h * 0.5f;
+  d.roundRectOutline(Rect(px, py, pw, ph), ph * 0.2f, c, 2.2f);
+  d.circle(px + pw / 2, py + ph * 0.86f, std::max(1.2f, pw * 0.04f), c);
+}
+
+void iconImage(App& app, const Rect& rc, Color8 c) {  // 38 ImageIcon（获取封面）
+  Draw& d = app.draw;
+  d.roundRectOutline(rc.inset(rc.w * 0.06f, rc.h * 0.06f, rc.w * 0.06f, rc.h * 0.06f),
+                     rc.minDim() * 0.12f, c, 2.2f);
+  const float x = rc.x + rc.w * 0.2f, y = rc.y + rc.h * 0.62f;
+  d.line(x, y, x + rc.w * 0.14f, y - rc.h * 0.16f, c, 2.2f);
+  d.line(x + rc.w * 0.14f, y - rc.h * 0.16f, x + rc.w * 0.28f, y, c, 2.2f);
+  d.line(x + rc.w * 0.28f, y, x + rc.w * 0.42f, y - rc.h * 0.22f, c, 2.2f);
+  d.line(x + rc.w * 0.42f, y - rc.h * 0.22f, x + rc.w * 0.6f, y + rc.h * 0.04f, c, 2.2f);
+  d.circle(rc.x + rc.w * 0.66f, rc.y + rc.h * 0.28f, rc.minDim() * 0.09f, c);
+}
+
+void iconDownload(App& app, const Rect& rc, Color8 c) {  // 39 Download（安装CIA）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), top = rc.y + rc.h * 0.12f, bot = rc.y + rc.h * 0.62f;
+  d.line(cx, top, cx, bot, c, 2.4f);
+  d.line(cx - rc.w * 0.16f, bot - rc.h * 0.16f, cx, bot, c, 2.4f);
+  d.line(cx + rc.w * 0.16f, bot - rc.h * 0.16f, cx, bot, c, 2.4f);
+  d.line(rc.x + rc.w * 0.2f, rc.y + rc.h * 0.82f, rc.x + rc.w * 0.8f, rc.y + rc.h * 0.82f, c, 2.4f);
+}
+
+void iconNetwork(App& app, const Rect& rc, Color8 c) {  // 40 NetworkCheck（网络状态）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), cy = rc.bottom() - rc.h * 0.12f;
+  d.arc(cx, cy, rc.minDim() * 0.16f, -2.356f, -0.785f, c, 2);
+  d.arc(cx, cy, rc.minDim() * 0.32f, -2.356f, -0.785f, c, 2);
+  d.arc(cx, cy, rc.minDim() * 0.48f, -2.356f, -0.785f, c, 2);
+  d.circle(cx, cy, std::max(1.4f, rc.minDim() * 0.05f), c);
+}
+
+// —— ★v1.2.9 共享背景（1:1 对齐 APK）——
+
+// FsdBackdrop（FsdScaffold.kt drawFsdBackdrop）：
+//   深蓝三段渐变（0A1D3A→123B6E→081426）+ 中央放射高光（2E6DB4 35%）+
+//   5 条 24° 斜向光带（白 4%~8%）+ 3 根细亮线 + 底部 04101F 渐暗。
+void fsdWallpaper(App& app) {
+  Draw& d = app.draw;
+  const float W = (float)d.W, H = (float)d.H;
+  const Color8 bgTop = Color8::hex(0x0A1D3A), bgMid = Color8::hex(0x123B6E),
+               bgBot = Color8::hex(0x081426);
+  // 基底：三段垂直渐变（0 → 0.45 → 1）
+  for (int i = 0; i < 48; i++) {
+    const float t = (float)i / 48;
+    const Color8 c = t < 0.45f ? bgTop.lerp(bgMid, t / 0.45f)
+                               : bgMid.lerp(bgBot, (t - 0.45f) / 0.55f);
+    d.rect(Rect(0, H * t, W, H / 48 + 1), c);
+  }
+  // 中央放射高光（concentric 圆近似 radialGradient）
+  {
+    const float cx = W * 0.5f, cy = H * 0.35f;
+    const float R = std::max(W, H) * 0.75f;
+    const int layers = 14;
+    for (int i = layers; i >= 1; i--) {
+      const float r = R * (float)i / layers;
+      const uint8_t a = (uint8_t)(0.35f * 255.0f * (1.0f - (float)i / (layers + 1.0f)));
+      d.circle(cx, cy, r, Color8(0x2E, 0x6D, 0xB4, a));
+    }
+  }
+  // 斜向光带（24° 旋转平行扫光）：每条 = 沿带宽方向的半透明平行斜线
+  {
+    struct Streak { float xFrac, widthFrac, alpha; };
+    static const Streak streaks[] = {
+        {0.12f, 0.22f, 0.05f}, {0.38f, 0.10f, 0.07f}, {0.52f, 0.28f, 0.04f},
+        {0.72f, 0.12f, 0.08f}, {0.88f, 0.20f, 0.05f},
+    };
+    const float slope = std::tan(24.0f * 3.14159265f / 180.0f);  // dx/dy
+    for (const auto& s : streaks) {
+      const float cx = W * s.xFrac, half = W * s.widthFrac * 0.5f;
+      const int lines = (int)(W * s.widthFrac / 6.0f) + 2;
+      for (int i = 0; i <= lines; i++) {
+        const float t = (float)i / lines;              // 0..1 横跨带宽
+        const float profile = 1.0f - std::fabs(t - 0.5f) * 2.0f;  // 中间亮两侧暗
+        const uint8_t a = (uint8_t)(255.0f * s.alpha * profile);
+        if (a == 0) continue;
+        const float x0 = cx - half + W * s.widthFrac * t;
+        d.line(x0, -H * 0.2f, x0 - slope * H * 1.3f, H * 1.1f,
+               Color8(255, 255, 255, a), 5.5f);
+      }
+    }
+    // 细亮线（3 根，白 10%）
+    static const float xf[] = {0.30f, 0.62f, 0.83f};
+    for (float x : xf)
+      d.line(W * x, -H * 0.2f, W * x - slope * H * 1.3f, H * 1.1f,
+             Color8(255, 255, 255, 26), 2.6f);
+  }
+  // 底部渐暗（0.72H → 1：04101F 0 → 55%）
+  for (int i = 0; i < 12; i++) {
+    const float t = (float)i / 12;
+    const float y = H * (0.72f + 0.28f * t);
+    const uint8_t a = (uint8_t)(0.55f * 255.0f * t);
+    d.rect(Rect(0, y, W, H * 0.28f / 12 + 1), Color8(0x04, 0x10, 0x1F, a));
+  }
+}
+
+// PixelBackdrop（PixelBackdrop.kt）：浅色像素天空（B7D7F2→C8E2F6）+ 4 朵漂移
+// 像素云 + 5 点星光闪烁 + 海（4F8AC4→2F5C8C）+ 草地（7BB36A→4F8C4A）。
+void pixelSky(App& app, int64_t timeMs) {
+  Draw& d = app.draw;
+  const float W = (float)d.W, H = (float)d.H;
+  // 天空
+  const Color8 skyTop = Color8::hex(0xB7D7F2), skyBot = Color8::hex(0xC8E2F6);
+  for (int i = 0; i < 40; i++) {
+    const float t = (float)i / 40;
+    d.rect(Rect(0, H * t, W, H / 40 + 1), skyTop.lerp(skyBot, t));
+  }
+  // 像素云（漂移）
+  struct Cloud { float x, y, scale, drift; };
+  static const Cloud clouds[] = {
+      {0.08f, 0.18f, 1.4f, 0.000020f}, {0.32f, 0.10f, 1.0f, 0.000014f},
+      {0.62f, 0.22f, 1.7f, 0.000010f}, {0.86f, 0.08f, 1.2f, 0.000018f},
+  };
+  static const char* pattern[] = {"  ####  ", " ###### ", "########",
+                                  " ###### ", "  ####  "};
+  const Color8 cloudC = Color8::hex(0xF5F7FB), cloudS = Color8::hex(0xCAD3DF);
+  for (const auto& c : clouds) {
+    const float dx = std::fmod((float)((double)timeMs * c.drift), W);
+    const float cx = c.x * W + dx;
+    const float unit = 18.0f * c.scale;
+    for (int row = 0; row < 5; row++) {
+      for (int col = 0; col < 8; col++) {
+        if (pattern[row][col] != '#') continue;
+        float px = cx + (col - 4) * unit;
+        if (px > W) px -= W;
+        if (px + unit < 0) px += W;
+        d.rect(Rect(px, c.y * H + (row - 2) * unit, unit, unit),
+               row >= 3 ? cloudS : cloudC);
+      }
+    }
+  }
+  // 星光闪烁
+  struct Sparkle { float x, y, size, phase; };
+  static const Sparkle sparks[] = {
+      {0.10f, 0.12f, 14, 0.6f}, {0.25f, 0.06f, 18, 0.4f}, {0.45f, 0.14f, 12, 0.8f},
+      {0.78f, 0.05f, 16, 0.5f}, {0.92f, 0.16f, 14, 0.7f},
+  };
+  for (const auto& s : sparks) {
+    const float blink =
+        (std::sin((double)timeMs / 1000.0 * 2.0 + s.phase * 6.2831853) + 1.0f) / 2.0f;
+    const float a = (60.0f + blink * 195.0f) / 255.0f;
+    const Color8 col = Color8(255, 255, 255, (uint8_t)(128 * a));
+    const float cx = s.x * W, cy = s.y * H;
+    d.circleOutline(cx, cy, s.size / 2, col, 2);
+    d.line(cx - s.size, cy, cx + s.size, cy, col, 2);
+    d.line(cx, cy - s.size, cx, cy + s.size, col, 2);
+  }
+  // 海
+  const float seaY = H * 0.74f;
+  const Color8 seaTop = Color8::hex(0x4F8AC4), seaBot = Color8::hex(0x2F5C8C);
+  for (int i = 0; i < 20; i++) {
+    const float t = (float)i / 20;
+    d.rect(Rect(0, seaY + (H - seaY) * t, W, (H - seaY) / 20 + 1),
+           seaTop.lerp(seaBot, t));
+  }
+  for (float x = 0; x < W; x += 24) {
+    d.rect(Rect(x, seaY + 4, 12, 2), Color8(255, 255, 255, 102));
+  }
+  // 草地
+  const float grassY = H * 0.84f;
+  const Color8 gTop = Color8::hex(0x7BB36A), gDeep = Color8::hex(0x4F8C4A);
+  for (int i = 0; i < 16; i++) {
+    const float t = (float)i / 16;
+    d.rect(Rect(0, grassY + (H - grassY) * t, W, (H - grassY) / 16 + 1),
+           gTop.lerp(gDeep, t));
+  }
+  for (float x = 0; x < W; x += 10) {
+    d.rect(Rect(x, grassY - 3, 2, 6), Color8::hex(0x6BA45A));
   }
 }
 

@@ -34,13 +34,23 @@ class Theme {
   static void setStyle(UiStyle s);
   static UiStyle style() { return style_; }
   static bool isNeon() { return style_ == UiStyle::Neon; }
-  static const Skin& skin() { return style_ == UiStyle::Neon ? neon() : fsd(); }
+  // ★v1.2.9 FSD 浅色页覆盖（对齐 APK SettingsScreen：PixelBackdrop 像素天空 +
+  //   白 65% 半透明卡片 + 深色文字）：仅 FSD 皮肤的设置页等浅色场景开启；
+  //   skin() 在 开 && FSD 时返回 fsdLight()，其余不变。
+  static void setLightFsd(bool on) { lightFsd_ = on; }
+  static bool lightFsd() { return lightFsd_; }
+  static const Skin& skin() {
+    if (style_ == UiStyle::Fsd && lightFsd_) return fsdLight();
+    return style_ == UiStyle::Neon ? neon() : fsd();
+  }
 
   static const Skin& neon();
   static const Skin& fsd();
+  static const Skin& fsdLight();
 
  private:
   static UiStyle style_;
+  static bool lightFsd_;
 };
 
 // 按皮肤画面板（切角/圆角自动选择）
