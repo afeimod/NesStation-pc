@@ -1,5 +1,13 @@
 #pragma once
 
+// ★NesStation 修正（对齐上游 Cemu main 分支同款修复）：
+//   wxWidgets 的 wx/msw/private.h 定义了函数式宏 #define GetHwnd() ((HWND)GetHWND())。
+//   含 wxgui.h 的源文件（如 CafeSystem.cpp）再经 Renderer.h → 本文件包含
+//   <dxgi1_4.h>（→ dxgi1_2.h）时，IDXGISwapChain1::GetHwnd( 被宏展开为
+//   ((HWND)GetHWND())( → Windows SDK 10.0.26100 的 dxgi1_2.h(1319,43)
+//   error C2059: syntax error: '('（本次 EMU cemu · windows-x64 的死因，
+//   与 SDK 版本无关——任何 SDK 的 dxgi1_2.h 都有该声明）。
+#undef GetHwnd
 #include <dxgi1_4.h>
 //#include <atlbase.h>
 

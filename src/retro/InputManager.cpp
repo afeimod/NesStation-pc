@@ -338,12 +338,13 @@ void InputManager::handleEvent(const SDL_Event& ev) {
       if (textEditing_) textBuf_ += ev.text.text;
       break;
     case SDL_MOUSEMOTION:
-      ui_.mouse = Vec2((float)ev.motion.x, (float)ev.motion.y);
-      mouseDxAccum_ += (float)ev.motion.xrel;
-      mouseDyAccum_ += (float)ev.motion.yrel;
+      // ★v1.2.7：窗口点数 → 设计单位（与渲染器逻辑坐标系一致）
+      ui_.mouse = Vec2((float)ev.motion.x * mouseToUi_, (float)ev.motion.y * mouseToUi_);
+      mouseDxAccum_ += (float)ev.motion.xrel * mouseToUi_;
+      mouseDyAccum_ += (float)ev.motion.yrel * mouseToUi_;
       break;
     case SDL_MOUSEBUTTONDOWN:
-      ui_.mouse = Vec2((float)ev.button.x, (float)ev.button.y);
+      ui_.mouse = Vec2((float)ev.button.x * mouseToUi_, (float)ev.button.y * mouseToUi_);
       if (ev.button.button == SDL_BUTTON_LEFT) {
         if (!mouseHeldNow_) {
           mouseHeldNow_ = true;
@@ -361,7 +362,7 @@ void InputManager::handleEvent(const SDL_Event& ev) {
       }
       break;
     case SDL_MOUSEBUTTONUP:
-      ui_.mouse = Vec2((float)ev.button.x, (float)ev.button.y);
+      ui_.mouse = Vec2((float)ev.button.x * mouseToUi_, (float)ev.button.y * mouseToUi_);
       if (ev.button.button == SDL_BUTTON_LEFT) {
         mouseHeldNow_ = false;
         mouseReleasedAccum_ = true;

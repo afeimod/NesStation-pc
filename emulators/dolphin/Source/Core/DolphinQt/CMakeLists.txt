@@ -16,7 +16,20 @@ if (WIN32)
     set(DOLPHIN_QT_HOST_ROOT "${DOLPHIN_QT_X64_ROOT}")
   endif()
 
-  list(APPEND CMAKE_PREFIX_PATH "${DOLPHIN_QT_ROOT}")
+  # ★NesStation 修正（run 421xxxx EMU dolphin · windows-x64 死因）：
+  #   仓库内置的 Externals/Qt 快照不含任何二进制（bin/*.exe 与 *.dll 均未
+  #   入库，bin/ 下只有 3 个 .py 脚本），却仍被无条件追加进 CMAKE_PREFIX_PATH。
+  #   find_package(Qt6 …) 本体因 -DQt6_DIR 命中外部安装的 Qt 而成功，但
+  #   Qt6Core 的 _qt_internal_find_tool_dependencies → find_package(Qt6CoreTools)
+  #   按前缀搜索会优先命中内置快照的 Qt6CoreTools —— 它引用的 syncqt.exe
+  #   等工具目标全部缺失 → CMake 直接 FATAL。
+  #   仅当内置 Qt 完整（bin/qmake.exe 存在）时才追加；否则依赖外部 Qt
+  #   （Qt6_DIR / CMAKE_PREFIX_PATH，如 install-qt-action 预装的 6.8.3）。
+  if (EXISTS "${DOLPHIN_QT_HOST_ROOT}/bin/qmake.exe")
+    list(APPEND CMAKE_PREFIX_PATH "${DOLPHIN_QT_ROOT}")
+  else()
+    message(STATUS "Externals 内置 Qt 不完整（无 bin/qmake.exe），改用外部安装的 Qt")
+  endif()
 endif()
 
 set(CMAKE_AUTOMOC ON)
@@ -588,6 +601,19 @@ if (WIN32)
   get_filename_component(QT_BINARY_DIRECTORY "${MOC_EXECUTABLE_LOCATION}" DIRECTORY)
   find_program(WINDEPLOYQT_EXE windeployqt HINTS "${QT_BINARY_DIRECTORY}" REQUIRED)
   find_program(QTPATHS_EXE NAMES qtpaths6 qtpaths HINTS "${QT_BINARY_DIRECTORY}" REQUIRED)
+
+  # ★NesStation 修正：使用外部 Qt（内置 Externals/Qt 快照不完整）时，
+  #   target_qt.conf 的 Prefix/HostPrefix 必须指向实际使用的 Qt 安装根，
+  #   否则 windeployqt 经 qtpaths 会在被剥掉二进制的内置目录里找
+  #   plugins/translations → POST_BUILD 部署失败（编译全部成功后仍挂）。
+  if (NOT EXISTS "${DOLPHIN_QT_HOST_ROOT}/bin/qmake.exe")
+    get_filename_component(_QT_REAL_ROOT "${QT_BINARY_DIRECTORY}" DIRECTORY)
+    if (EXISTS "${_QT_REAL_ROOT}/bin/qmake.exe")
+      message(STATUS "部署 qt.conf 指向外部 Qt：${_QT_REAL_ROOT}")
+      set(DOLPHIN_QT_ROOT "${_QT_REAL_ROOT}")
+      set(DOLPHIN_QT_HOST_ROOT "${_QT_REAL_ROOT}")
+    endif()
+  endif()
 
   # We don't use target_qt.conf/qtpaths.bat from a Qt build because they use absolute paths.
   configure_file(

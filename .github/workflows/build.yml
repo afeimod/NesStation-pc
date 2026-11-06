@@ -399,6 +399,11 @@ jobs:
           #   glslangValidator 程序（src/video_core/host_shaders/CMakeLists.txt
           #   find_program），修完 Qt 后的下一个必挂点；Debian 12 提供
           #   glslang-tools 12.0.0（支持 spirv1.3 与 --quiet）双架构
+          # ★v1.2.7：+libqt6opengl6-dev —— qt6-charts-dev 依赖链需要 Qt6OpenGL 的
+          #   CMake 配置，但 Debian 12 不把它作为依赖拉入；该官方包自带
+          #   完整的 cmake/Qt6OpenGL/（Config/Targets 全套），优先使用。
+          #   （旧版只靠手写 shim，而 shim 的 Qt6OpenGLConfig.cmake 忘了入库
+          #   → cp 直接报错，本次 eden linux-x64 的死因）
           apt-get update -qq
           apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config git curl ca-certificates \
@@ -407,32 +412,33 @@ jobs:
             libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
             libcurl4-openssl-dev libvulkan-dev libsdl2-dev \
             qt6-base-dev qt6-tools-dev qt6-svg-dev qt6-charts-dev \
-            qt6-base-private-dev glslang-tools \
+            qt6-base-private-dev glslang-tools libqt6opengl6-dev \
             libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
             zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
             libglvnd-dev libusb-1.0-0-dev \
             libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
             libavformat-dev libavfilter-dev
 
-      - name: Qt6OpenGL shim（Eden · 修复 Debian 12 打包缺陷）
-        # ★v1.2.6：Debian 12 的 qt6-base-dev 6.4.2+dfsg-10 漏装 Qt6OpenGL
-        #   模块的 CMake 配置（cmake/Qt6OpenGL/ 仅有
-        #   Qt6OpenGLConfigVersionImpl.cmake），而 qt6-charts-dev 的
-        #   Qt6Charts 依赖 Qt6OpenGL 6.4.2 → find_package(Qt6 … COMPONENTS
-        #   Charts) 必挂（本次 eden linux-x64/arm64 的死因）。
-        #   库本体（libQt6OpenGL.so.6，随 qt6-base-dev 依赖链安装）与头文件
-        #   都在，只缺 CMake 配置；用仓库自带的 shim 补进系统 cmake 目录。
-        #   （该 shim 已在真实 Debian 12 的 Qt 配置文件组合下验证通过）
+      - name: Qt6OpenGL shim（Eden · 官方配置缺失时的兜底）
+        # ★v1.2.7：优先用上面 apt 安装的 libqt6opengl6-dev 官方配置；
+        #   仅当系统 cmake 目录仍无 Qt6OpenGLConfig.cmake 时才装手写 shim
+        #   （shim 两个文件本次已全部入库，不再出现 cp cannot stat）
         if: matrix.emu == 'eden'
         run: |
           set -eux
           ARCH="$(gcc -dumpmachine)"
-          QT_CMAKE_DIR="/usr/lib/${ARCH}/cmake"
-          mkdir -p "${QT_CMAKE_DIR}/Qt6OpenGL"
+          QT_CMAKE_DIR="/usr/lib/${ARCH}/cmake/Qt6OpenGL"
+          if [ -f "${QT_CMAKE_DIR}/Qt6OpenGLConfig.cmake" ]; then
+            echo "（libqt6opengl6-dev 官方 Qt6OpenGL CMake 配置已就绪，无需 shim）"
+            ls -la "${QT_CMAKE_DIR}/" | head -20
+            exit 0
+          fi
+          echo "（官方配置缺失，安装仓库自带 shim 兜底）"
+          mkdir -p "${QT_CMAKE_DIR}"
           cp -v scripts/qt6-opengl-shim/Qt6OpenGLConfig.cmake \
                 scripts/qt6-opengl-shim/Qt6OpenGLConfigVersion.cmake \
-                "${QT_CMAKE_DIR}/Qt6OpenGL/"
-          ls -la "${QT_CMAKE_DIR}/Qt6OpenGL/"
+                "${QT_CMAKE_DIR}/"
+          ls -la "${QT_CMAKE_DIR}/"
 
       - name: ccache 加速重建（dolphin）
         if: matrix.emu == 'dolphin'
@@ -591,6 +597,8 @@ jobs:
           #   Debian 12 提供 2.26.5 满足版本下限）
           # ★v1.2.6：+qt6-base-private-dev（Dolphin qpa 私有头）+
           #   glslang-tools（Eden 构建期着色器编译器）—— 同 linux-x64
+          # ★v1.2.7：+libqt6opengl6-dev —— 官方 Qt6OpenGL CMake 配置
+          #   （arm64 同样提供；详见 linux-x64 同名步骤说明）
           apt-get update -qq
           apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build pkg-config git curl ca-certificates \
@@ -599,25 +607,31 @@ jobs:
             libxrandr-dev libpulse-dev libasound2-dev libbluetooth-dev \
             libcurl4-openssl-dev libvulkan-dev libsdl2-dev \
             qt6-base-dev qt6-tools-dev qt6-svg-dev qt6-charts-dev \
-            qt6-base-private-dev glslang-tools \
+            qt6-base-private-dev glslang-tools libqt6opengl6-dev \
             libboost-all-dev libfmt-dev liblz4-dev nlohmann-json3-dev \
             zlib1g-dev libzstd-dev libopus-dev libssl-dev libgl1-mesa-dev \
             libglvnd-dev libusb-1.0-0-dev \
             libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
             libavformat-dev libavfilter-dev
 
-      - name: Qt6OpenGL shim（Eden · 修复 Debian 12 打包缺陷）
-        # ★v1.2.6：同 linux-x64 —— 补齐 Debian 12 漏装的 Qt6OpenGL CMake 配置
+      - name: Qt6OpenGL shim（Eden · 官方配置缺失时的兜底）
+        # ★v1.2.7：同 linux-x64 —— 官方配置优先，shim 兜底
         if: matrix.emu == 'eden'
         run: |
           set -eux
           ARCH="$(gcc -dumpmachine)"
-          QT_CMAKE_DIR="/usr/lib/${ARCH}/cmake"
-          mkdir -p "${QT_CMAKE_DIR}/Qt6OpenGL"
+          QT_CMAKE_DIR="/usr/lib/${ARCH}/cmake/Qt6OpenGL"
+          if [ -f "${QT_CMAKE_DIR}/Qt6OpenGLConfig.cmake" ]; then
+            echo "（libqt6opengl6-dev 官方 Qt6OpenGL CMake 配置已就绪，无需 shim）"
+            ls -la "${QT_CMAKE_DIR}/" | head -20
+            exit 0
+          fi
+          echo "（官方配置缺失，安装仓库自带 shim 兜底）"
+          mkdir -p "${QT_CMAKE_DIR}"
           cp -v scripts/qt6-opengl-shim/Qt6OpenGLConfig.cmake \
                 scripts/qt6-opengl-shim/Qt6OpenGLConfigVersion.cmake \
-                "${QT_CMAKE_DIR}/Qt6OpenGL/"
-          ls -la "${QT_CMAKE_DIR}/Qt6OpenGL/"
+                "${QT_CMAKE_DIR}/"
+          ls -la "${QT_CMAKE_DIR}/"
 
       - name: ccache 加速重建（dolphin）
         if: matrix.emu == 'dolphin'
@@ -721,12 +735,15 @@ jobs:
         run: choco install -y --no-progress pkgconfiglite
 
       - name: Install glslangValidator (Eden)
-        # ★v1.2.6：Eden 的 src/video_core/host_shaders/CMakeLists.txt 在配置期
-        #   find_program(glslangValidator)，缺失即 FATAL
-        #   （run 42019801015 EMU eden · windows-x64 的死因；Linux 侧用
-        #   apt 的 glslang-tools，Windows 无官方包，用 Khronos 官方发布件：
-        #   glslang-16.6.0-windows-x86_64-release.zip，13MB，含
-        #   bin/glslangValidator.exe）
+        # ★v1.2.7：glslang 官方发布件从 14.x 起把 glslangValidator 更名为
+        #   glslang —— 16.6.0 的 zip 里只有 bin/glslang.exe（已实测核实），
+        #   旧步骤只找 glslangValidator.exe 必抛 "not found in archive"
+        #   （本次 EMU eden · windows-x64 的死因）。
+        #   修复：两个名字都找；找到 glslang.exe 时复制一份旧名
+        #   glslangValidator.exe —— Eden 的 host_shaders/CMakeLists.txt
+        #   find_program(GLSLANGVALIDATOR "glslangValidator")（本次已同步
+        #   改为 NAMES glslangValidator glslang 双名兼容），复制旧名保证
+        #   两个版本都能命中。
         if: ${{ matrix.emu == 'eden' }}
         shell: pwsh
         run: |
@@ -736,11 +753,21 @@ jobs:
           $zip = "$env:TEMP/glslang.zip"
           Invoke-WebRequest -Uri "https://github.com/KhronosGroup/glslang/releases/download/16.6.0/glslang-16.6.0-windows-x86_64-release.zip" -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath $dst -Force
+          # 新版发布件叫 glslang.exe，旧版叫 glslangValidator.exe —— 都接受
           $bin = Get-ChildItem -Path $dst -Recurse -Filter glslangValidator.exe | Select-Object -First 1
-          if (-not $bin) { throw "glslangValidator.exe not found in archive" }
-          Write-Output "glslangValidator: $($bin.FullName)"
+          if (-not $bin) {
+            $bin = Get-ChildItem -Path $dst -Recurse -Filter glslang.exe | Select-Object -First 1
+          }
+          if (-not $bin) { throw "archive 中既无 glslang.exe 也无 glslangValidator.exe" }
+          Write-Output "glslang: $($bin.FullName)"
           & $bin.FullName --version
-          Add-Content $env:GITHUB_PATH (Split-Path -Parent $bin.FullName)
+          $bindir = Split-Path -Parent $bin.FullName
+          # 复制一份旧名（find_program 兼容；同目录同内容，无副作用）
+          if ($bin.Name -ne "glslangValidator.exe") {
+            Copy-Item $bin.FullName (Join-Path $bindir "glslangValidator.exe") -Force
+            Write-Output "已复制为 glslangValidator.exe（find_program 兼容名）"
+          }
+          Add-Content $env:GITHUB_PATH $bindir
 
       - name: vcpkg binary cache (cemu)
         if: ${{ matrix.emu == 'cemu' }}

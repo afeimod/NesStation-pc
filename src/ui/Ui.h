@@ -5,6 +5,20 @@
 
 namespace ns {
 
+// —— 全局 UI 缩放（★v1.2.7 整体 UI 放大）——
+// 设计坐标（draw.W/H 与所有场景里的字体/间距/卡片尺寸）→ 设备物理像素 的比值。
+// 旧版：逻辑尺寸 = 窗口点数，高 DPI 屏上字形位图被 GPU 线性放大 → 又小又糊。
+// 新版：按输出像素高度自动放大（720p=1.0 / 1080p=1.5 / 1440p=2.0 / 4K=3.0），
+// 字形按 设计时号 × 该系数 烘焙，渲染 1:1 落到物理像素 → 清晰。
+// FontCache / VideoBridge / InputManager 在各自入口读取该值。
+namespace uiscale {
+inline float g_value = 1.0f;  // C++17 inline 变量：设计单位 → 设备像素
+inline float get() { return g_value; }
+inline void set(float s) {
+  g_value = s < 0.5f ? 0.5f : (s > 5.0f ? 5.0f : s);
+}
+}  // namespace uiscale
+
 struct Vec2 {
   float x = 0, y = 0;
   Vec2() = default;

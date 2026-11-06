@@ -182,14 +182,18 @@ void VideoBridge::drawScreenPart(SDL_Renderer* r, SDL_Texture* tex, const SDL_Re
       break;
     case ScalingMode::IntegerScale: {
       if (texW > 0 && texH > 0 && dst.w > 0 && dst.h > 0) {
-        int sx = (int)(dst.w / (float)texW);
-        int sy = (int)(dst.h / (float)texH);
+        // ★v1.2.7：整数倍数按【设备像素】计算（dst 是设计单位，渲染时还会
+        //   乘 UI 缩放；若只按设计单位取整，150%/200% 缩放下整数缩放不再
+        //   像素完美）。倍数确定后再折回设计单位定位。
+        const float devScale = uiscale::get();
+        const int sx = (int)((dst.w * devScale) / (float)texW);
+        const int sy = (int)((dst.h * devScale) / (float)texH);
         if (sx < 1 && sy < 1) {
           target = dst.withAspectFit(gameAspect);
         } else {
           const int s = sx < 1 ? sy : (sy < 1 ? sx : (sx < sy ? sx : sy));
-          const float w = texW * (float)s;
-          const float h = texH * (float)s;
+          const float w = texW * (float)s / devScale;
+          const float h = texH * (float)s / devScale;
           target = Rect(dst.cx() - w / 2, dst.cy() - h / 2, w, h);
         }
       }

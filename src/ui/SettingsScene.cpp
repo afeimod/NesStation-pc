@@ -304,7 +304,7 @@ class SettingsScene : public Scene {
     }
     // 界面
     {
-      const float ph = 62;
+      const float ph = 38 * 2 + 12;
       y = beginBlock(app, y, "界面", ph);
       const Rect rc(cx_ + 12, y, (float)app.draw.W - cx_ - 50, 38);
       const bool f = rowFocus();
@@ -313,7 +313,28 @@ class SettingsScene : public Scene {
         app.applyFullscreen();
         saveConfig(app);
       }
-      y += 38 + 12 + 14;
+      y += 38;
+      // ★v1.2.7 整体界面缩放（字体/标题/菜单/卡片统一放大，高 DPI 不发糊）
+      {
+        const Rect rc2(cx_ + 12, y, (float)app.draw.W - cx_ - 50, 38);
+        std::vector<std::string> scales = {"自动", "100%", "125%", "150%", "175%", "200%"};
+        const int vals[] = {0, 100, 125, 150, 175, 200};
+        int sel = 0;
+        for (int i = 0; i < 6; i++)
+          if (app.config.uiScalePercent == vals[i]) {
+            sel = i;
+            break;
+          }
+        const bool f2 = rowFocus();
+        w::blockRow(app, rc2, "界面缩放",
+                    "字体/标题/菜单/卡片整体放大；自动 = 1080p 150%、4K 300%", f2);
+        if (w::spinnerChip(app, rc2, scales, sel, f2)) {
+          app.config.uiScalePercent = vals[sel];
+          app.applyUiScale();
+          saveConfig(app);
+        }
+        y += 38 + 12 + 14;
+      }
     }
     // ★v1.2.6 主页背景（对齐 Android AppSettings.homeBackgroundUri：
     //   自定义背景图两套风格通用；空 = 默认背景）

@@ -83,6 +83,11 @@ class InputManager {
   void textInputStart();
   void textInputStop();
 
+  // ★v1.2.7 鼠标坐标 → UI 设计单位 的折算系数（窗口点数 → 逻辑坐标）。
+  //   渲染器逻辑尺寸不再等于窗口点数（高 DPI / UI 缩放），
+  //   所有 UI 命中测试在设计单位下进行，事件坐标需同比例折算。
+  void setMouseToUiScale(float s) { mouseToUi_ = s > 0.0f ? s : 1.0f; }
+
  private:
   void openGamepads();
   void setUiBtn(Btn b, bool down);
@@ -100,6 +105,7 @@ class InputManager {
   bool mouseRightPressedAccum_ = false;
   int wheelAccum_ = 0;
   float mouseDxAccum_ = 0, mouseDyAccum_ = 0;
+  float mouseToUi_ = 1.0f;  // ★v1.2.7 窗口点数 → 设计单位
 
   // 长按重复
   float repeatTimer_[(int)Btn::Count] = {};

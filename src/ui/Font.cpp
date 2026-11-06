@@ -9,6 +9,13 @@
 
 namespace ns {
 
+// ★v1.2.7 设备像素烘焙：设计字号 × 全局 UI 缩放 = 实际烘焙/度量像素。
+// 渲染坐标系为设计单位（渲染器逻辑尺寸 = 输出像素 / 缩放），字形位图
+// 按设备像素烘焙后 1:1 落盘，不再被 GPU 二次放大 → 高 DPI 下不再发糊。
+static float fontDeviceSize(float designSize) {
+  return designSize * uiscale::get();
+}
+
 std::vector<uint32_t> utf8ToCodepoints(const std::string& s) {
   std::vector<uint32_t> out;
   out.reserve(s.size());
@@ -271,22 +278,34 @@ const FontCache::Glyph& FontCache::bake(Atlas& atlas, float size, bool bold, uin
 
 float FontCache::draw(SDL_Renderer* r, const std::string& utf8, float x, float y,
                       float size, Color8 color, bool bold) {
-  Atlas& atlas = atlasFor(size, bold);
+  const float devSize = fontDeviceSize(size);   // 设备像素烘焙字号
+  // 图集数量熔断：多次窗口缩放会累积不同缩放档的图集，超限全量释放
+  //（字形懒重建，代价只有首帧几十毫秒）
+  if (atlases_.size() > 32) {
+    for (auto& kv : atlases_)
+      if (kv.second.tex) SDL_DestroyTexture(kv.second.tex);
+    atlases_.clear();
+  }
+  Atlas& atlas = atlasFor(devSize, bold);
   bakeRenderer_ = r;
+  const float s = uiscale::get();
   const auto cps = utf8ToCodepoints(utf8);
   float penX = x;
   for (uint32_t cp : cps) {
     if (cp == '\n') continue;
-    const Glyph& g = bake(atlas, size, bold, cp);
+    const Glyph& g = bake(atlas, devSize, bold, cp);
     if (g.w > 0 && g.h > 0 && atlas.tex) {
       SDL_SetTextureColorMod(atlas.tex, color.r, color.g, color.b);
       SDL_SetTextureAlphaMod(atlas.tex, color.a);
+      // 基线/偏移按设计字号；位图尺寸从设备像素折回设计单位，
+      // 四边形经渲染器缩放后恰好在设备像素上 1:1 呈现
       const float baseline = y + size * 0.8f;
       const SDL_Rect src{g.px, g.py, g.w, g.h};
-      const SDL_Rect dst{(int)(penX + g.xoff), (int)(baseline + g.yoff), g.w, g.h};
+      const SDL_Rect dst{(int)(penX + g.xoff / s), (int)(baseline + g.yoff / s),
+                         (int)(g.w / s + 0.5f), (int)(g.h / s + 0.5f)};
       SDL_RenderCopy(r, atlas.tex, &src, &dst);
     }
-    penX += g.advance;
+    penX += g.advance / s;
   }
   return penX - x;
 }
@@ -301,12 +320,14 @@ float FontCache::textWidth(const std::string& utf8, float size, bool bold) {
   // bake() 需要渲染器（bakeRenderer_）才能建图集纹理；若在首次 draw 之前
   // 经 textWidth 烘焙，字形会以 px=py=0 入缓存却从未上传 —— 永久不可见
   // （曾导致主页徽标 NES·STATION 整串消失）。
+  // ★v1.2.7：按设备像素度量后折回设计单位，与 draw() 的推进量严格一致。
   stbtt_fontinfo* font =
       (bold && boldFont_) ? reinterpret_cast<stbtt_fontinfo*>(boldFont_)
                           : reinterpret_cast<stbtt_fontinfo*>(regFont_);
   if (!font) font = reinterpret_cast<stbtt_fontinfo*>(regFont_);
   if (!font) return 0;
-  const float scale = stbtt_ScaleForPixelHeight(font, size);
+  const float devSize = fontDeviceSize(size);
+  const float scale = stbtt_ScaleForPixelHeight(font, devSize);
   const auto cps = utf8ToCodepoints(utf8);
   float w = 0;
   for (uint32_t cp : cps) {
@@ -314,7 +335,7 @@ float FontCache::textWidth(const std::string& utf8, float size, bool bold) {
     stbtt_GetCodepointHMetrics(font, cp, &adv, &lsb);
     w += (float)adv * scale;
   }
-  return w;
+  return w / uiscale::get();
 }
 
 float FontCache::lineHeight(float size) const { return size * 1.35f; }
@@ -331,16 +352,19 @@ std::vector<std::string> FontCache::wrap(const std::string& utf8, float size,
     cur.clear();
     w = 0;
   };
-  Atlas& atlas = atlasFor(size, bold);
+  const float devSize = fontDeviceSize(size);
+  const float inv = 1.0f / uiscale::get();
+  Atlas& atlas = atlasFor(devSize, bold);
   for (uint32_t cp : cps) {
     if (cp == '\n') {
       flush();
       continue;
     }
-    const Glyph& g = bake(atlas, size, bold, cp);
-    if (w + g.advance > maxWidth && !cur.empty()) flush();
+    const Glyph& g = bake(atlas, devSize, bold, cp);
+    const float adv = g.advance * inv;  // 折回设计单位
+    if (w + adv > maxWidth && !cur.empty()) flush();
     cur.push_back(cp);
-    w += g.advance;
+    w += adv;
   }
   flush();
   return lines;
@@ -351,14 +375,17 @@ std::string FontCache::ellipsize(const std::string& utf8, float size, float maxW
   if (textWidth(utf8, size, bold) <= maxWidth) return utf8;
   const float dots = textWidth("…", size, bold);
   const auto cps = utf8ToCodepoints(utf8);
-  Atlas& atlas = atlasFor(size, bold);
+  const float devSize = fontDeviceSize(size);
+  const float inv = 1.0f / uiscale::get();
+  Atlas& atlas = atlasFor(devSize, bold);
   float w = 0;
   std::vector<uint32_t> out;
   for (uint32_t cp : cps) {
-    const Glyph& g = bake(atlas, size, bold, cp);
-    if (w + g.advance + dots > maxWidth) break;
+    const Glyph& g = bake(atlas, devSize, bold, cp);
+    const float adv = g.advance * inv;  // 折回设计单位
+    if (w + adv + dots > maxWidth) break;
     out.push_back(cp);
-    w += g.advance;
+    w += adv;
   }
   return codepointsToUtf8(out) + "…";
 }

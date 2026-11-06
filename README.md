@@ -8,6 +8,32 @@ C++17 + SDL2 单二进制原生实现，libretro 核心进程内加载（RetroAr
 
 ---
 
+## 📦 v1.2.7 更新（2026-11-06）
+
+**① 整体 UI 放大（用户反馈：字体/标题/菜单/图标卡片太小、发糊）**
+
+| 旧版根因 | 修复 |
+| --- | --- |
+| 逻辑坐标 = 窗口点数，字体/间距/卡片全是固定设计像素 → 1080p+ 大窗口整体偏小 | 渲染器逻辑尺寸 = **输出物理像素 ÷ UI 缩放**，全部绘制走同一变换：矢量元素（菜单/卡片/面板）在设备分辨率光栅化，字号/标题/芯片/图标卡片整体放大 |
+| 窗口开 `ALLOW_HIGHDPI`，高 DPI（150%）下渲染输出是点数的 1.5 倍，字形位图被 GPU 线性拉伸 → 发糊 | 字形按 **设计字号 × 缩放系数** 烘焙，1:1 落到物理像素（配合 `SDL_RenderGetScale` 对齐渲染器实际缩放），彻底消除模糊 |
+| 默认窗口固定 1280×720，2K/4K 桌面起小窗 | 默认窗口 = 桌面 75%（钳 1280×720 ~ 1920×1080） |
+
+- 自动缩放按输出像素高度相对 720 基准：720p=100% / **1080p=150%** / 1440p=200% / **4K=300%**（0.125 步进平滑过渡）
+- 设置 → 外观 → 界面新增 **「界面缩放」**：自动 / 100% / 125% / 150% / 175% / 200%（持久化 `uiScalePercent`）
+- 鼠标坐标同步折算到设计坐标系（点击/拖拽命中不受缩放影响）；整数缩放（像素完美）按设备像素取整，150%/200% 缩放下依然整数对齐
+
+**② CI 修复（对照用户提供的完整日志，6 个失败 job 的根因逐一实证修复）**
+
+| 失败 job | 根因（日志原文） | 修复 |
+| --- | --- | --- |
+| EMU cemu · windows-x64 | wxWidgets 的 `wx/msw/private.h` 定义 `#define GetHwnd() ((HWND)GetHWND())`；CafeSystem.cpp 先含 wx 再经 Renderer.h→`<dxgi1_4.h>`，`IDXGISwapChain1::GetHwnd(`（dxgi1_2.h 1319,43）被宏展开 → `error C2059` | `DXGIWrapper.h` 头部 `#undef GetHwnd`（对齐上游 Cemu main 同款修复） |
+| EMU dolphin · windows-x64 | 仓库内置 `Externals/Qt` 快照不含任何二进制（bin/ 只有 3 个 .py），仍被无条件追加进 `CMAKE_PREFIX_PATH`；Qt6Core 依赖链的 `find_package(Qt6CoreTools)` 命中残缺内置配置 → `syncqt.exe` 缺失 FATAL | 仅当内置 Qt 完整（有 `bin/qmake.exe`）才追加；部署用 target_qt.conf 同步指向真实 Qt 安装根（否则 windeployqt POST_BUILD 必挂） |
+| EMU eden · windows-x64 | glslang 官方发布件 14.x 起 `glslangValidator` 更名 `glslang`——16.6.0 zip 只有 `bin/glslang.exe`，旧步骤只找旧名即抛错 | 工作流双名查找 + 复制旧名兼容；Eden `find_program` 同步改为 `NAMES glslangValidator glslang` |
+| EMU eden · linux-x64 / arm64 | `scripts/qt6-opengl-shim/Qt6OpenGLConfig.cmake` 从未入库（只提交了 ConfigVersion）→ `cp: cannot stat` 秒退 | 首选 apt 安装 **libqt6opengl6-dev**（官方包自带完整 Qt6OpenGL CMake 配置，已核实 bookworm 文件清单）；补齐缺失的 shim 文件作为官方配置异常时的兜底 |
+| Bundle Windows x64 | 上游三个模拟器全挂 →「没有任何模拟器构建成功」 | 随上述三项修复联动恢复 |
+
+---
+
 ## 📦 v1.2.3 更新（2026-11-05）
 
 **修复（对照用户提供的完整 CI 日志，4 个根因全部实证）**

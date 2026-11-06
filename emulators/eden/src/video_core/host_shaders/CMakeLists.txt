@@ -83,7 +83,10 @@ if (PLATFORM_HAIKU)
     set(GLSLANGVALIDATOR "glslang")
 else()
     # Normal sane platform who doesn't have a CRASHING glslangValidator
-    find_program(GLSLANGVALIDATOR "glslangValidator")
+    # ★NesStation 修正：glslang 官方发布件自 14.x 起 glslangValidator 更名
+    #   为 glslang（Debian 的 glslang-tools 仍提供旧名；Windows 官方 zip
+    #   只有 bin/glslang.exe）—— 两个名字都接受，任一在 PATH 即可。
+    find_program(GLSLANGVALIDATOR NAMES glslangValidator glslang)
 endif()
 
 if ("${GLSLANGVALIDATOR}" STREQUAL "GLSLANGVALIDATOR-NOTFOUND")

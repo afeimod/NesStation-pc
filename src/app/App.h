@@ -28,7 +28,7 @@ class EmuRunner;
 
 // —— 版本号（CMake 注入；本地直编 g++ 时回退）——
 #ifndef NESSTATION_VERSION
-#define NESSTATION_VERSION "1.2.6"
+#define NESSTATION_VERSION "1.2.7"
 #endif
 inline const char* appVersionText() { return "v" NESSTATION_VERSION; }
 
@@ -42,6 +42,8 @@ struct Config {
   bool audioMuted = false;
   bool fullscreen = false;
   bool showFps = false;
+  int uiScalePercent = 0;      // ★v1.2.7 整体 UI 缩放：0=自动 / 100~300 固定百分比
+                               //（字体/标题/菜单/卡片统一放大，高 DPI 不再发糊）
   bool autoSaveState = true;   // 退出游戏自动存 slot 0
   bool scanRecursive = true;
   int fastForwardSpeed = 4;    // 快进倍速：0 关 / 2 / 4 / 6 / 8 / 16（对齐 Android SettingsStore）
@@ -111,6 +113,8 @@ class App {
   bool isFullscreen() const { return config.fullscreen; }
   void toggleFullscreen();
   void applyFullscreen();   // 按当前 config.fullscreen 应用窗口状态（不翻转）
+  void applyUiScale();      // ★v1.2.7 按当前 config.uiScalePercent 重算界面缩放
+  float currentUiScale() const { return uiscale::get(); }
   int width() const { return winW_; }
   int height() const { return winH_; }
   const std::string& dataDir() const { return dataDir_; }
@@ -135,6 +139,7 @@ class App {
   void pumpEvents();
   void frame();
   void drawToasts(float dt);
+  void updateSurface();   // ★v1.2.7 窗口/像素尺寸变化 → 逻辑尺寸+UI缩放+鼠标映射全量重算
 
   SDL_Window* window_ = nullptr;
   SDL_Renderer* renderer_ = nullptr;

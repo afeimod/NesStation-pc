@@ -34,6 +34,7 @@ void Config::load(const std::string& file) {
     audioMuted = j.value("audioMuted", false);
     fullscreen = j.value("fullscreen", false);
     showFps = j.value("showFps", false);
+    uiScalePercent = j.value("uiScalePercent", 0);   // ★v1.2.7 界面缩放
     autoSaveState = j.value("autoSaveState", true);
     fastForwardSpeed = j.value("fastForwardSpeed", 4);  // 0关/2/4/6/8/16（对齐 Android SettingsStore）
     scanRecursive = j.value("scanRecursive", true);
@@ -76,6 +77,7 @@ void Config::save(const std::string& file) const {
   j["audioMuted"] = audioMuted;
   j["fullscreen"] = fullscreen;
   j["showFps"] = showFps;
+  j["uiScalePercent"] = uiScalePercent;   // ★v1.2.7 界面缩放
   j["autoSaveState"] = autoSaveState;
   j["fastForwardSpeed"] = fastForwardSpeed;
   j["scanRecursive"] = scanRecursive;
@@ -276,9 +278,34 @@ bool App::init() {
 
   const Uint32 flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
                        (config.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+  // ★v1.2.7：数据目录与配置【提前到窗口创建之前】读取——
+  //   旧顺序里 config.load 在窗口/渲染器之后，fullscreen 与本次新增的
+  //   uiScalePercent 在启动首帧都取不到用户值（固定缩放 150% 开局仍 100%）。
+  dataDir_ = fsutil::dataDir();
+  fsutil::makeDirs(dataDir_);
+  logInit(fsutil::join(dataDir_, "nesstation.log"));
+  LOGI("NesStation PC 启动（数据目录 %s）", dataDir_.c_str());
+  configFile_ = fsutil::join(dataDir_, "config.json");
+  config.load(configFile_);
+
+  // ★v1.2.7：默认窗口按桌面 75% 起（钳在 1280×720 ~ 1920×1080）。
+  //   旧版固定 1280×720，在 2K/4K 桌面上起一个相对过小的小窗；
+  //   配合按分辨率自动放大的 UI 缩放，首次启动即达到合适观感。
+  int defW = 1280, defH = 720;
+  {
+    SDL_DisplayMode dm{};
+    if (SDL_GetDesktopDisplayMode(0, &dm) == 0 && dm.w >= 1280 && dm.h >= 720) {
+      defW = dm.w * 3 / 4;
+      defH = dm.h * 3 / 4;
+      if (defW < 1280) defW = 1280;
+      if (defH < 720) defH = 720;
+      if (defW > 1920) defW = 1920;
+      if (defH > 1080) defH = 1080;
+    }
+  }
   window_ = SDL_CreateWindow(std::string("NesStation ").append(appVersionText()).c_str(),
                              SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                             winW_, winH_, flags);
+                             defW, defH, flags);
   if (!window_) {
     LOGE("创建窗口失败：%s", SDL_GetError());
     return false;
@@ -294,20 +321,11 @@ bool App::init() {
       return false;
     }
   }
-  SDL_GetWindowSize(window_, &winW_, &winH_);
-  SDL_RenderSetLogicalSize(renderer_, winW_, winH_);
+  updateSurface();  // ★v1.2.7 逻辑尺寸/UI 缩放/鼠标映射一次性就绪（config 已加载）
 
-  draw.begin(renderer_, winW_, winH_);
   setWindowIcon();
 
-  // 数据目录与子系统
-  dataDir_ = fsutil::dataDir();
-  fsutil::makeDirs(dataDir_);
-  logInit(fsutil::join(dataDir_, "nesstation.log"));
-  LOGI("NesStation PC 启动（数据目录 %s）", dataDir_.c_str());
-
-  configFile_ = fsutil::join(dataDir_, "config.json");
-  config.load(configFile_);
+  // 主题 / 按键映射 / 子系统（数据目录与 config 已在窗口创建前就绪）
   Theme::setStyle(config.uiStyle == 1 ? UiStyle::Fsd : UiStyle::Neon);
   input.setMapping(config.padMapping);
 
@@ -380,12 +398,16 @@ void App::setWindowIcon() {
 
 bool App::saveScreenshot(const std::string& pngPath) {
   if (!renderer_) return false;
-  SDL_Rect vp{};
-  SDL_RenderGetViewport(renderer_, &vp);
+  // ★v1.2.7：按渲染器输出尺寸（设备像素）整帧截取 —— 旧版取视口，
+  //   UI 缩放后视口是逻辑单位（如 853×480），ReadPixels 会把它当设备像素
+  //   用，150% 缩放下只截到左上角一小块；nullptr = 整个渲染目标。
+  int pixelW = 0, pixelH = 0;
+  SDL_GetRendererOutputSize(renderer_, &pixelW, &pixelH);
+  if (pixelW <= 0 || pixelH <= 0) return false;
   SDL_Surface* surf =
-      SDL_CreateRGBSurfaceWithFormat(0, vp.w, vp.h, 32, SDL_PIXELFORMAT_ABGR8888);
+      SDL_CreateRGBSurfaceWithFormat(0, pixelW, pixelH, 32, SDL_PIXELFORMAT_ABGR8888);
   if (!surf) return false;
-  if (SDL_RenderReadPixels(renderer_, &vp, SDL_PIXELFORMAT_ABGR8888, surf->pixels,
+  if (SDL_RenderReadPixels(renderer_, nullptr, SDL_PIXELFORMAT_ABGR8888, surf->pixels,
                            surf->pitch) != 0) {
     SDL_FreeSurface(surf);
     LOGW("截图失败：%s", SDL_GetError());
@@ -395,6 +417,72 @@ bool App::saveScreenshot(const std::string& pngPath) {
                                 surf->pitch);
   SDL_FreeSurface(surf);
   return ok != 0;
+}
+
+// —— ★v1.2.7 窗口表面 → 逻辑尺寸 / UI 缩放 / 鼠标映射 全量重算 ——
+// 旧版问题（用户反馈“整体 UI 太小很模糊”的双重根因）：
+//   1) 逻辑尺寸 = 窗口点数，所有字体/间距/卡片是固定设计像素 → 1080p+
+//      大窗口与 4K/高分屏上整体偏小；
+//   2) 窗口开了 ALLOW_HIGHDPI，高 DPI（如 150%）下渲染器输出是点数的
+//      1.5 倍，字形位图被 GPU 线性拉伸 → 发糊。
+// 新方案：
+//   · 渲染器逻辑尺寸 = 输出像素 / UI 缩放（宽高比一致，无黑边），
+//     所有绘制走同一变换，矢量元素在设备分辨率上光栅化；
+//   · 字形按 设计时号 × 缩放 烘焙（Font.cpp），1:1 落到物理像素 → 清晰；
+//   · 自动缩放按输出像素高度相对 720 基准：720p=100% / 1080p=150% /
+//     1440p=200% / 4K=300%；设置里可固定 100%~200%。
+void App::updateSurface() {
+  if (!renderer_ || !window_) return;
+  SDL_GetWindowSize(window_, &winW_, &winH_);
+  int pixelW = winW_, pixelH = winH_;
+  SDL_GetRendererOutputSize(renderer_, &pixelW, &pixelH);
+  if (pixelW <= 0 || pixelH <= 0) {
+    pixelW = winW_;
+    pixelH = winH_;
+  }
+
+  float scale;
+  if (config.uiScalePercent > 0) {
+    scale = config.uiScalePercent / 100.0f;
+    // ★防裁切：固定百分比不得把设计空间压到最低设计尺寸（960×540，
+    //   与 SDL_SetWindowMinimumSize 一致）以下 —— 720p 窗口强行 150% 会让
+    //   设计空间跌到 853×480，底部按键提示等元素被挤出屏幕。
+    //   例：1280×720 窗口最高 133%（=960×540）；1920×1080 才放行 150%。
+    const float maxByW = (float)pixelW / 960.0f;
+    const float maxByH = (float)pixelH / 540.0f;
+    const float maxScale = std::min(maxByW, maxByH);
+    if (scale > maxScale) scale = maxScale;
+  } else {
+    scale = (float)pixelH / 720.0f;
+    // 0.125 步进：连续调窗口大小时档位过渡平滑（也避免图集碎片化）
+    scale = std::floor(scale * 8.0f + 0.5f) / 8.0f;
+    if (pixelH >= 720 && scale < 1.0f) scale = 1.0f;  // 可读性下限
+  }
+  if (scale < 0.5f) scale = 0.5f;
+  if (scale > 5.0f) scale = 5.0f;
+
+  const int logicalW = (int)((float)pixelW / scale + 0.5f);
+  const int logicalH = (int)((float)pixelH / scale + 0.5f);
+  if (logicalW <= 0 || logicalH <= 0) return;
+  SDL_RenderSetLogicalSize(renderer_, logicalW, logicalH);
+  // 取渲染器实际生效缩放（逻辑尺寸整数化带来的微差已包含在内），
+  // 字形烘焙与它对齐 → 位图在设备像素上 1:1 呈现
+  float rx = 1.0f, ry = 1.0f;
+  SDL_RenderGetScale(renderer_, &rx, &ry);
+  uiscale::set(rx > 0.0f ? rx : scale);
+  draw.begin(renderer_, logicalW, logicalH);
+  // 鼠标事件坐标是窗口点数 → 折算到设计单位（拖拽/点击命中测试共用）
+  input.setMouseToUiScale(winW_ > 0 ? (float)logicalW / (float)winW_ : 1.0f);
+  LOGI("UI 缩放：%.2f（输出 %dx%d / 逻辑 %dx%d / 窗口 %dx%d）", uiscale::get(), pixelW,
+       pixelH, logicalW, logicalH, winW_, winH_);
+}
+
+void App::applyUiScale() {
+  updateSurface();
+  toast(std::string("界面缩放：") +
+        (config.uiScalePercent > 0
+             ? std::to_string(config.uiScalePercent) + "%"
+             : "自动（当前 " + std::to_string((int)(uiscale::get() * 100 + 0.5f)) + "%）"));
 }
 
 void App::toggleFullscreen() {
@@ -534,9 +622,7 @@ void App::pumpEvents() {
         break;
       case SDL_WINDOWEVENT:
         if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-          SDL_GetWindowSize(window_, &winW_, &winH_);
-          SDL_RenderSetLogicalSize(renderer_, winW_, winH_);
-          draw.begin(renderer_, winW_, winH_);
+          updateSurface();  // ★v1.2.7 统一入口：逻辑尺寸+缩放+鼠标映射
         }
         break;
       default:

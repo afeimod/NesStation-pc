@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(NesStation VERSION 1.2.6 LANGUAGES C CXX
+project(NesStation VERSION 1.2.7 LANGUAGES C CXX
         DESCRIPTION "NesStation PC - Multi-platform retro game station for Windows/Linux")
 
 # ---------------------------------------------------------------------------
