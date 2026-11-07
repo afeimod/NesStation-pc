@@ -6,6 +6,12 @@
 #include <mutex>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -14,6 +20,7 @@
 #include "retro/AudioBridge.h"
 #include "retro/InputManager.h"
 #include "retro/VideoBridge.h"
+#include "util/Fs.h"
 #include "util/Log.h"
 
 namespace ns {
@@ -23,7 +30,8 @@ LibretroCore* g_activeCore = nullptr;  // 回调跳板（单会话）
 
 void* nsDlopen(const char* path) {
 #ifdef _WIN32
-  return (void*)LoadLibraryA(path);
+  // ★v1.3.0 宽字符：中文路径的核心 dll 也能加载（旧版 LoadLibraryA 按 ACP 解）
+  return (void*)LoadLibraryW(fsutil::toWide(path).c_str());
 #else
   return dlopen(path, RTLD_NOW | RTLD_LOCAL);
 #endif
@@ -220,7 +228,7 @@ bool LibretroCore::loadGame(const std::string& romPath) {
 
   std::vector<uint8_t> data;
   if (!needsFullpath_) {
-    FILE* f = fopen(romPath.c_str(), "rb");
+    FILE* f = fsutil::openFile(romPath, "rb");  // ★v1.3.0 中文路径可用
     if (f) {
       fseek(f, 0, SEEK_END);
       const long sz = ftell(f);

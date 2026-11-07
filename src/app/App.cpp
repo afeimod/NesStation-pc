@@ -416,14 +416,28 @@ bool App::init() {
     return false;
   }
   SDL_SetWindowMinimumSize(window_, 960, 540);
+  // ★v1.3.0 渲染器回退链：加速+VSync → 加速（无 VSync，应用内已按墙钟节流）
+  //   → 软件。旧版二段回退在个别驱动/远程桌面下直接落到软件渲染，
+  //   输出未与刷新同步 → 画面割裂块闪烁；现在保留加速无同步档，并记录后端。
   renderer_ = SDL_CreateRenderer(
       window_, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+  if (!renderer_) {
+    LOGW("加速+VSync 渲染器失败：%s；尝试加速（无同步）", SDL_GetError());
+    renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
+  }
   if (!renderer_) {
     LOGW("加速渲染器失败，回退软件：%s", SDL_GetError());
     renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
     if (!renderer_) {
       LOGE("创建渲染器失败：%s", SDL_GetError());
       return false;
+    }
+  }
+  {
+    SDL_RendererInfo ri{};
+    if (SDL_GetRendererInfo(renderer_, &ri) == 0) {
+      LOGI("渲染后端：%s（%s）", ri.name,
+           (ri.flags & SDL_RENDERER_PRESENTVSYNC) ? "VSync 开" : "VSync 关");
     }
   }
   updateSurface();  // ★v1.2.7 逻辑尺寸/UI 缩放/鼠标映射一次性就绪（config 已加载）

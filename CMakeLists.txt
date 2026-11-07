@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(NesStation VERSION 1.2.9 LANGUAGES C CXX
+project(NesStation VERSION 1.3.0 LANGUAGES C CXX
         DESCRIPTION "NesStation PC - Multi-platform retro game station for Windows/Linux")
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,12 @@ endif()
 if(MSVC)
   # ★v1.2.9 FSD 顶/底栏（FsdChrome.cpp）：winsock 局域网 IP 探测
   target_link_libraries(nesstation PRIVATE ws2_32)
+endif()
+
+if(WIN32)
+  # ★v1.3.0 系统原生文件对话框（util/NativeDialogs.cpp）：COM IFileDialog
+  #   + SHGetFolderPathW（util/Fs.cpp 中文用户目录）
+  target_link_libraries(nesstation PRIVATE ole32 shell32)
 endif()
 
 if(TARGET SDL2::SDL2main)

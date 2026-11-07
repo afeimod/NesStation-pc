@@ -395,7 +395,7 @@ class SettingsScene : public Scene {
             app.invalidateTexture(dest);
             app.toast("已设置自定义主页背景");
           };
-          app.pushScene(createFileBrowser(req));
+          browsePath(app, req);
         }
         y += 38;
       }
@@ -771,7 +771,7 @@ class SettingsScene : public Scene {
               app.toast("已添加目录，正在后台扫描…");
             }
           };
-          app.pushScene(createFileBrowser(req));
+          browsePath(app, req);
         }
         const Rect btn(rc.right() - 100, rc.y + 7, 92, 28);
         if (w::button(app, btn, "＋ 添加", false, 13, true)) {
@@ -794,7 +794,7 @@ class SettingsScene : public Scene {
               app.toast("已添加目录，正在后台扫描…");
             }
           };
-          app.pushScene(createFileBrowser(req));
+          browsePath(app, req);
         }
         y += 46;
       }
@@ -976,8 +976,18 @@ class SettingsScene : public Scene {
                 app.toast("已打开 " + e->name + " 官网下载页");
               }
             } else {
+              // ★v1.3.0：已就绪 → 明确展示实际使用的模拟器与路径（用户此前
+              //   点进来只看到「下载独立模拟器」——内置的其实已在，只是
+              //   旧版探测不到）。跳到外置核心区块可查看详情/手动选择。
+              std::string found;
+              for (const auto* c : exts)
+                if (!c->foundPath.empty()) {
+                  found = c->name + " → " + c->foundPath;
+                  break;
+                }
               catSel_ = 6;
-              app.toast("见下方「外置核心」区块");
+              app.toast(found.empty() ? "已就绪（详见下方「外置核心」区块）"
+                                      : "已就绪：" + found);
             }
           }
         }
@@ -1133,7 +1143,7 @@ class SettingsScene : public Scene {
               app.config.save(fsutil::join(app.dataDir(), "config.json"));
               app.toast("已配置 " + id);
             };
-            app.pushScene(createFileBrowser(req));
+            browsePath(app, req);
           }
         }
         y += 96;

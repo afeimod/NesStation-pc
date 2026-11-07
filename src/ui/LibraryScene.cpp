@@ -262,7 +262,7 @@ class LibraryScene : public Scene {
                 "」页…（大目录可能需要一些时间）");
     };
     req.onCancel = [] {};
-    app.pushScene(createFileBrowser(req));
+    browsePath(app, req);
   }
 
   // ★v1.2.11 导入单个 ROM 文件（APK 导入ROM 按钮：当前平台页 hint）
@@ -276,7 +276,7 @@ class LibraryScene : public Scene {
       importRomFile(app, file, tabHint);
     };
     req.onCancel = [] {};
-    app.pushScene(createFileBrowser(req));
+    browsePath(app, req);
   }
 
   // ★v1.2.11 刷新（APK refreshList 核心隔离）：平台页只重扫该平台导入的
@@ -1249,7 +1249,7 @@ class LibraryScene : public Scene {
           app.pushScene(createMessageScene("无法设置封面", err));
         }
       };
-      app.pushScene(createFileBrowser(req));
+      browsePath(app, req);
     }});
     // ★v1.2.6 核心选项（该平台已装核心的选项面板 —— 对齐 Android 核心设置）
     items.push_back({16, "核心选项", "", false, [&app, g]() {

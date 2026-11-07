@@ -75,6 +75,9 @@ std::string EmuRunner::start(App& app, const GameEntry& game) {
   }
 
   teardown(app);
+  // ★v1.3.0 视频会话重置：像素格式/帧状态回默认（防上一核心格式残留
+  //   导致颜色错乱），随后由核心 SET_PIXEL_FORMAT 声明覆盖
+  app.video.beginSession();
   core_.reset(new LibretroCore(app.audio, app.video, app.input));
   // 核心键 = 实际解析到的核心（可能是替代核心，如 3DS 的 Citra）
   coreKey_ = fsutil::stemOf(fsutil::baseOf(corePath));

@@ -1,6 +1,7 @@
 // NesStation PC — 文件系统工具（路径、目录遍历、可移植数据目录）
 #pragma once
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -62,5 +63,19 @@ std::string dataDir();
 void setDataDirOverrideForTests(const std::string& dir);
 
 std::string pathDisplay(const std::string& path);      // 路径展示（统一分隔符）
+
+// ★v1.3.0 Windows 中文路径根治：进程内字符串一律 UTF-8，所有 OS 边界
+//   显式转 UTF-16。旧版 std::filesystem::path(std::string)/fopen/CreateProcessA
+//   在中文系统上走 GBK（ACP）编解码：文件名返回 GBK 字节 → 界面口口乱码；
+//   UTF-8 路径传给 fopen 直接失败 → 中文目录下 ROM 读取/扫描/嗅探全挂。
+#ifdef _WIN32
+std::wstring toWide(const std::string& utf8);   // UTF-8 → UTF-16
+std::string toUtf8(const std::wstring& wide);   // UTF-16 → UTF-8
+#endif
+
+// 可移植 fopen：路径为 UTF-8（Windows 内部 _wfopen，中文路径可用）
+FILE* openFile(const std::string& utf8Path, const char* mode);
+// 可移植 system：命令为 UTF-8（Windows 内部 _wsystem，中文路径可用）
+int runCommand(const std::string& utf8Cmd);
 
 }  // namespace fsutil

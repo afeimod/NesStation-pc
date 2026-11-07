@@ -255,7 +255,7 @@ bool CoreManager::downloadOne(const std::string& coreFile, std::string* err) {
       std::string("curl -fSL --retry 3 --retry-delay 3 --connect-timeout 15 "
                   "--max-time 300 -A NesStationPC/1.1 -o ") +
       shellQuote(zipPath) + " " + shellQuote(url);
-  const int rc = std::system(cmd.c_str());
+  const int rc = fsutil::runCommand(cmd);
   if (rc != 0 || !fsutil::isFile(zipPath)) {
     fsutil::removeFile(zipPath);
     if (err) *err = "下载失败（" + coreFile + "：本架构可能无预编译包）";
@@ -270,7 +270,7 @@ bool CoreManager::downloadOne(const std::string& coreFile, std::string* err) {
   };
   bool extracted = false;
   for (const auto& ex : extractors) {
-    if (std::system(ex.c_str()) == 0) {
+    if (fsutil::runCommand(ex) == 0) {
       extracted = true;
       break;
     }

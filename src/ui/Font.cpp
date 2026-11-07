@@ -5,6 +5,7 @@
 
 #include <stb_truetype.h>
 
+#include "util/Fs.h"
 #include "util/Log.h"
 
 namespace ns {
@@ -80,7 +81,7 @@ FontCache::~FontCache() {
 
 bool FontCache::load(const std::string& regularTtf, const std::string& boldTtf) {
   auto loadFile = [](const std::string& p, std::vector<uint8_t>* out) -> bool {
-    FILE* f = fopen(p.c_str(), "rb");
+    FILE* f = fsutil::openFile(p, "rb");
     if (!f) return false;
     fseek(f, 0, SEEK_END);
     const long sz = ftell(f);

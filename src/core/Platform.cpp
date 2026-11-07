@@ -35,7 +35,7 @@ std::string normalizeAlias(const std::string& value) {
 
 // 读取文件头部 n 字节
 static bool readHead(const std::string& path, size_t n, std::vector<uint8_t>* out) {
-  FILE* f = fopen(path.c_str(), "rb");
+  FILE* f = fsutil::openFile(path, "rb");
   if (!f) return false;
   out->resize(n);
   const size_t got = fread(out->data(), 1, n, f);
@@ -58,7 +58,7 @@ static std::vector<std::string> zipInnerExts(const std::string& path) {
   if (fsize == 0 || fsize > (uint64_t)1 << 31) return exts;
   const size_t tailLen = (size_t)(fsize < 66000 ? fsize : 66000);
   std::vector<uint8_t> tail;
-  FILE* f = fopen(path.c_str(), "rb");
+  FILE* f = fsutil::openFile(path, "rb");
   if (!f) return exts;
   tail.resize(tailLen);
   if (fseek(f, (long)(fsize - tailLen), SEEK_SET) != 0) {
@@ -86,7 +86,7 @@ static std::vector<std::string> zipInnerExts(const std::string& path) {
   if (count == 0 || count > 4096 || cdOff >= fsize) return exts;
   std::vector<uint8_t> cd;
   cd.resize((size_t)std::min<uint64_t>(1 << 18, fsize - cdOff));
-  f = fopen(path.c_str(), "rb");
+  f = fsutil::openFile(path, "rb");
   if (!f) return exts;
   if (fseek(f, (long)cdOff, SEEK_SET) != 0) {
     fclose(f);

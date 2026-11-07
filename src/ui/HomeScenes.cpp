@@ -858,7 +858,7 @@ class NeonHome : public Scene {
           app.pushScene(createMessageScene("无法设置封面", err));
         }
       };
-      app.pushScene(createFileBrowser(req));
+      browsePath(app, req);
     }});
     // ★v1.2.6 核心选项（该平台已装核心的选项面板 —— 对齐 Android 核心设置）
     items.push_back({16, "核心选项", "", false, [&app, g]() {
@@ -1041,7 +1041,7 @@ class FsdTileOptionsScene : public Scene {
       appPtr->toast("已设置磁贴图标（返回主页生效）");
     };
     req.onCancel = [] {};
-    app.pushScene(createFileBrowser(req));
+    browsePath(app, req);
   }
 
   void applyAll(App& app) {

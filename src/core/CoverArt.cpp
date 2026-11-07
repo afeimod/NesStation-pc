@@ -1,5 +1,6 @@
 #include "core/CoverArt.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -93,10 +94,10 @@ bool CoverArt::downloadTo(const std::string& url, const std::string& dest) {
   const std::string cmd = "curl -sL --max-time 25 -A 'NesStationPC/1.0' -o '" + tmp +
                           "' '" + url + "' >/dev/null 2>&1";
 #endif
-  const int rc = std::system(cmd.c_str());
+  const int rc = fsutil::runCommand(cmd);
   if (rc != 0) return false;
   // PNG 魔数校验
-  FILE* f = fopen(tmp.c_str(), "rb");
+  FILE* f = fsutil::openFile(tmp, "rb");
   if (!f) return false;
   unsigned char magic[8] = {0};
   const size_t rd = fread(magic, 1, 8, f);
@@ -106,7 +107,12 @@ bool CoverArt::downloadTo(const std::string& url, const std::string& dest) {
     remove(tmp.c_str());
     return false;
   }
+  // ★v1.3.0 rename 走宽字符（中文数据目录）
+#ifdef _WIN32
+  return _wrename(fsutil::toWide(tmp).c_str(), fsutil::toWide(dest).c_str()) == 0;
+#else
   return std::rename(tmp.c_str(), dest.c_str()) == 0;
+#endif
 }
 
 void CoverArt::requestFetch(const GameEntry& g) {

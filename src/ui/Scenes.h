@@ -44,6 +44,11 @@ struct BrowserRequest {
 };
 std::unique_ptr<Scene> createFileBrowser(const BrowserRequest& req);
 
+// ★v1.3.0 统一浏览入口：优先系统原生对话框（Windows 资源管理器同款
+//   IFileDialog / Linux zenity、kdialog —— 全盘符可见、中文文件名原生正常），
+//   系统对话框不可用时回退内置浏览器场景。取消 → onCancel。
+void browsePath(App& app, const BrowserRequest& req);
+
 // 模拟器场景（EmuRunner 专用，由 EmuRunner 推入）
 std::unique_ptr<Scene> createEmulatorScene();
 

@@ -134,6 +134,7 @@ class App {
   const std::string& dataDir() const { return dataDir_; }
   void drawButtonHints();          // 底部手柄按键提示栏（场景共用）
   SDL_Renderer* sdlRenderer() { return renderer_; }
+  SDL_Window* window() { return window_; }  // ★v1.3.0 原生对话框父窗口
 
   // 截图当前帧存 PNG（F12 快捷键 / 无头自检共用）
   bool saveScreenshot(const std::string& pngPath);

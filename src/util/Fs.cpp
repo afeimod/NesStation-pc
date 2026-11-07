@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -9,7 +10,15 @@
 #include <sstream>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#include <shlobj.h>   // SHGetFolderPathW / CSIDL_*（中文用户目录）
+#include <wchar.h>    // _wsystem / 宽字符函数
 #else
 #include <dirent.h>
 #include <sys/stat.h>
@@ -29,7 +38,62 @@ std::string normalizeSep(std::string s) {
     if (c == '\\') c = '/';
   return s;
 }
+
+#ifdef _WIN32
+// Windows 统一入口：UTF-8 字符串 → UTF-16 的 std::filesystem::path。
+// stdfs::path(std::string) 在 MSVC 按 ACP（中文系统 = GBK）解码，绝不能用。
+std::filesystem::path widenPath(const std::string& utf8) {
+  if (utf8.empty()) return std::filesystem::path();
+  return std::filesystem::path(toWide(utf8));
+}
+#endif
+
 }  // namespace
+
+// —— ★v1.3.0 UTF-8 ↔ UTF-16（Windows 专用）——————————————————————
+
+#ifdef _WIN32
+std::wstring toWide(const std::string& utf8) {
+  if (utf8.empty()) return std::wstring();
+  const int need = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), (int)utf8.size(),
+                                       nullptr, 0);
+  if (need <= 0) return std::wstring();
+  std::wstring out((size_t)need, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, utf8.data(), (int)utf8.size(), &out[0], need);
+  return out;
+}
+
+std::string toUtf8(const std::wstring& wide) {
+  if (wide.empty()) return std::string();
+  const int need = WideCharToMultiByte(CP_UTF8, 0, wide.data(), (int)wide.size(),
+                                       nullptr, 0, nullptr, nullptr);
+  if (need <= 0) return std::string();
+  std::string out((size_t)need, '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide.data(), (int)wide.size(), &out[0], need,
+                      nullptr, nullptr);
+  return out;
+}
+#endif
+
+FILE* openFile(const std::string& utf8Path, const char* mode) {
+#ifdef _WIN32
+  // mode 是 ASCII，直接逐字符扩宽
+  std::wstring wmode;
+  for (const char* p = mode; p && *p; ++p) wmode.push_back((wchar_t)*p);
+  return _wfopen(toWide(utf8Path).c_str(), wmode.c_str());
+#else
+  return fopen(utf8Path.c_str(), mode);
+#endif
+}
+
+int runCommand(const std::string& utf8Cmd) {
+#ifdef _WIN32
+  // _wsystem：宽字符命令行 → cmd 正确处理中文路径（curl -o 落盘 / 解压等）
+  return _wsystem(toWide(utf8Cmd).c_str());
+#else
+  return std::system(utf8Cmd.c_str());
+#endif
+}
 
 // 带符号环去重的递归枚举实现（walkFiles 用）
 void walkFilesImpl(const std::string& dir, std::vector<std::string>* out, int maxDepth,
@@ -47,24 +111,48 @@ std::string join(const std::string& a, const std::string& b, const std::string& 
   return join(join(a, b), c);
 }
 
+// —— 路径切分：统一在 UTF-8 字符串上按 ASCII 分隔符操作（中文安全）——
+static void splitPath(const std::string& path, std::string* dirOut,
+                      std::string* baseOut) {
+  const size_t pos = path.find_last_of("/\\");
+  if (pos == std::string::npos) {
+    if (dirOut) *dirOut = "";
+    if (baseOut) *baseOut = path;
+    return;
+  }
+  if (dirOut) *dirOut = path.substr(0, pos);
+  if (baseOut) *baseOut = path.substr(pos + 1);
+}
+
 std::string dirOf(const std::string& path) {
-  std::error_code ec;
-  const stdfs::path p(path);
-  const stdfs::path parent = p.parent_path();
-  return parent.empty() ? std::string(".") : parent.string();
+  // Windows 盘根特殊处理："D:/" 的父目录是它自身（文件浏览器顶层语义）
+  std::string d;
+  splitPath(path, &d, nullptr);
+  if (d.empty()) return ".";
+#ifdef _WIN32
+  if (d.size() == 2 && d[1] == ':') d += "/";  // "D:" → "D:/"
+#endif
+  return d;
 }
 
 std::string baseOf(const std::string& path) {
-  return stdfs::path(path).filename().string();
+  std::string b;
+  splitPath(path, nullptr, &b);
+  return b;
 }
 
 std::string stemOf(const std::string& path) {
-  return stdfs::path(path).stem().string();
+  const std::string b = baseOf(path);
+  const size_t dot = b.find_last_of('.');
+  if (dot == std::string::npos || dot == 0) return b;
+  return b.substr(0, dot);
 }
 
 std::string extOf(const std::string& path) {
-  std::string e = stdfs::path(path).extension().string();
-  if (!e.empty() && e[0] == '.') e.erase(0, 1);
+  const std::string b = baseOf(path);
+  const size_t dot = b.find_last_of('.');
+  if (dot == std::string::npos || dot + 1 >= b.size()) return "";
+  std::string e = b.substr(dot + 1);
   std::transform(e.begin(), e.end(), e.begin(),
                  [](unsigned char c) { return (char)std::tolower(c); });
   return e;
@@ -72,21 +160,33 @@ std::string extOf(const std::string& path) {
 
 bool exists(const std::string& path) {
   std::error_code ec;
+#ifdef _WIN32
+  return stdfs::exists(widenPath(path), ec);
+#else
   return stdfs::exists(path, ec);
+#endif
 }
 bool isDir(const std::string& path) {
   std::error_code ec;
+#ifdef _WIN32
+  return stdfs::is_directory(widenPath(path), ec);
+#else
   return stdfs::is_directory(path, ec);
+#endif
 }
 bool isFile(const std::string& path) {
   std::error_code ec;
+#ifdef _WIN32
+  return stdfs::is_regular_file(widenPath(path), ec);
+#else
   return stdfs::is_regular_file(path, ec);
+#endif
 }
 
 bool canReadDir(const std::string& path) {
 #ifdef _WIN32
   std::error_code ec;
-  return stdfs::is_directory(path, ec);  // Windows 枚举不受 POSIX R_OK 语义限制
+  return stdfs::is_directory(widenPath(path), ec);  // Windows 枚举不受 POSIX R_OK 语义限制
 #else
   struct ::stat st;
   return ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode) &&
@@ -97,11 +197,20 @@ bool canReadDir(const std::string& path) {
 bool makeDirs(const std::string& path) {
   if (path.empty()) return false;
   std::error_code ec;
+#ifdef _WIN32
+  return stdfs::create_directories(widenPath(path), ec) ||
+         stdfs::is_directory(widenPath(path), ec);
+#else
   return stdfs::create_directories(path, ec) || stdfs::is_directory(path, ec);
+#endif
 }
 
 bool readFile(const std::string& path, std::string* out) {
+#ifdef _WIN32
+  std::ifstream f(widenPath(path), std::ios::binary);
+#else
   std::ifstream f(path, std::ios::binary);
+#endif
   if (!f) return false;
   std::ostringstream ss;
   ss << f.rdbuf();
@@ -110,7 +219,11 @@ bool readFile(const std::string& path, std::string* out) {
 }
 
 bool writeFile(const std::string& path, const std::string& data) {
+#ifdef _WIN32
+  std::ofstream f(widenPath(path), std::ios::binary | std::ios::trunc);
+#else
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
+#endif
   if (!f) return false;
   f.write(data.data(), (std::streamsize)data.size());
   return f.good();
@@ -118,12 +231,20 @@ bool writeFile(const std::string& path, const std::string& data) {
 
 bool removeFile(const std::string& path) {
   std::error_code ec;
+#ifdef _WIN32
+  return stdfs::remove(widenPath(path), ec);
+#else
   return stdfs::remove(path, ec);
+#endif
 }
 
 uint64_t fileSize(const std::string& path) {
   std::error_code ec;
+#ifdef _WIN32
+  const auto sz = stdfs::file_size(widenPath(path), ec);
+#else
   const auto sz = stdfs::file_size(path, ec);
+#endif
   return ec ? 0 : (uint64_t)sz;
 }
 
@@ -158,24 +279,26 @@ bool isValidUtf8(const std::string& s) {
 std::vector<DirEntry> listDir(const std::string& dir) {
   std::vector<DirEntry> out;
 #ifdef _WIN32
-  // Windows：MSVC 的 std::filesystem 实现成熟稳定，保留（带 ec 全防护）
-  try {
-    std::error_code ec;
-    stdfs::path p(dir);
-    if (!stdfs::is_directory(p, ec)) return out;
-    for (stdfs::directory_iterator it(p, ec), end; it != end && !ec; it.increment(ec)) {
-      DirEntry e;
-      e.name = it->path().filename().string();
-      if (e.name.empty() || e.name == "." || e.name == "..") continue;
-      e.fullPath = it->path().string();
-      std::error_code ec2;
-      e.isDir = it->is_directory(ec2);
-      e.size = e.isDir ? 0 : fileSize(e.fullPath);
-      out.push_back(std::move(e));
+  // ★v1.3.0：FindFirstFileW + UTF-16→UTF-8（旧版 stdfs::path(string) 在中文
+  //   系统按 GBK 解码：目录含中文打不开；文件名返回 GBK 字节 → 界面口口乱码）
+  const std::wstring pattern = toWide(join(dir, "*"));
+  if (pattern.empty()) return out;
+  WIN32_FIND_DATAW fd{};
+  HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+  if (h == INVALID_HANDLE_VALUE) return out;
+  do {
+    const std::string name = toUtf8(std::wstring(fd.cFileName));
+    if (name.empty() || name == "." || name == "..") continue;
+    DirEntry e;
+    e.name = name;
+    e.fullPath = join(dir, name);
+    e.isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    if (!e.isDir) {
+      e.size = ((uint64_t)fd.nFileSizeHigh << 32) | (uint64_t)fd.nFileSizeLow;
     }
-  } catch (...) {
-    // 枚举异常（网络盘断开等）：返回已收集项，绝不向上抛
-  }
+    out.push_back(std::move(e));
+  } while (FindNextFileW(h, &fd));
+  FindClose(h);
 #else
   // Linux / macOS：纯 POSIX opendir/readdir（含 d_type 未知回退 stat，
   // 各 arm64 发行版 / 老工具链下最稳，避开 libstdc++ filesystem 兼容性问题）
@@ -266,9 +389,10 @@ std::vector<std::string> listFilesRecursive(const std::string& dir) {
 
 std::string exeDir() {
 #ifdef _WIN32
-  char buf[MAX_PATH * 4] = {0};
-  GetModuleFileNameA(nullptr, buf, sizeof(buf) - 1);
-  return dirOf(std::string(buf));
+  // ★v1.3.0：GetModuleFileNameW + UTF-8 转换（exe 装在中文目录也能正确解析）
+  wchar_t buf[MAX_PATH * 4] = {0};
+  GetModuleFileNameW(nullptr, buf, (DWORD)(sizeof(buf) / sizeof(buf[0]) - 1));
+  return dirOf(toUtf8(std::wstring(buf)));
 #else
   std::error_code ec;
   const auto p = stdfs::read_symlink("/proc/self/exe", ec);
@@ -279,6 +403,12 @@ std::string exeDir() {
 
 std::string homeDir() {
 #ifdef _WIN32
+  // ★v1.3.0：中文用户名目录（C:\Users\张三）正确返回 UTF-8
+  wchar_t buf[MAX_PATH * 4] = {0};
+  if (SHGetFolderPathW(nullptr, CSIDL_PROFILE, nullptr, 0, buf) == S_OK) {
+    const std::string p = toUtf8(std::wstring(buf));
+    if (!p.empty()) return p;
+  }
   const char* p = std::getenv("USERPROFILE");
   if (p && *p) return p;
   const char* hd = std::getenv("HOMEDRIVE");
@@ -293,7 +423,17 @@ std::string homeDir() {
 
 std::vector<std::string> storageMounts() {
   std::vector<std::string> out;
-#ifndef _WIN32
+#ifdef _WIN32
+  // ★v1.3.0：Windows 返回全部盘符（A-Z 存在的）—— 旧版整个函数体在
+  //   #ifndef _WIN32 里，Windows 恒返回空 → 文件浏览器只剩 C 盘入口
+  const DWORD mask = GetLogicalDrives();
+  for (int i = 0; i < 26; i++) {
+    if (!(mask & (1u << i))) continue;
+    const std::string root = std::string(1, (char)('A' + i)) + ":/";
+    if (isDir(root)) out.push_back(root);
+  }
+  return out;
+#else
   auto push = [&](const std::string& p) {
     if (p.empty() || !isDir(p)) return;
     for (const auto& e : out)
@@ -322,8 +462,8 @@ std::vector<std::string> storageMounts() {
     }
   }
   push("/data");  // Termux 环境共享数据
-#endif
   return out;
+#endif
 }
 
 std::string dataDir() {
@@ -333,6 +473,15 @@ std::string dataDir() {
   if (isFile(portable)) return join(exeDir(), "UserData");
 
 #ifdef _WIN32
+  // ★v1.3.0：SHGetFolderPathW（中文用户名正确；旧版 getenv("APPDATA")
+  //   在非 Unicode 环境变量下可能返回 GBK）
+  {
+    wchar_t buf[MAX_PATH * 4] = {0};
+    if (SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, buf) == S_OK) {
+      const std::string p = toUtf8(std::wstring(buf));
+      if (!p.empty()) return join(p, "NesStation");
+    }
+  }
   const char* appdata = std::getenv("APPDATA");
   if (appdata && *appdata) return join(appdata, "NesStation");
   return join(exeDir(), "UserData");

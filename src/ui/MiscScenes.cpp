@@ -6,7 +6,9 @@
 #include "ui/OptionZh.h"
 #include "ui/Scenes.h"
 #include "ui/Widgets.h"
+#include "core/Platform.h"
 #include "util/Fs.h"
+#include "util/NativeDialogs.h"
 
 namespace ns {
 namespace {
@@ -882,6 +884,49 @@ std::unique_ptr<Scene> createCorePickerScene(const GameEntry& game,
 
 std::unique_ptr<Scene> createFileBrowser(const BrowserRequest& req) {
   return std::unique_ptr<Scene>(new FileBrowserScene(req));
+}
+
+// ★v1.3.0 统一浏览入口：系统原生对话框优先（Windows IFileDialog /
+//   Linux zenity、kdialog），不可用时回退内置浏览器。
+//   用户反馈两点根治：① Windows 只有 C 盘入口（原生对话框自带全盘符 +
+//   快速访问）；② 中文文件名口口乱码（原生对话框系统渲染，返回 UTF-8）。
+void browsePath(App& app, const BrowserRequest& req) {
+  std::string filter;
+  switch (req.mode) {
+    case 1: {  // ROM 文件（主白名单拼成通配符）
+      std::string pats;
+      for (const auto& e : romExtensionsMaster()) {
+        if (!pats.empty()) pats += ";";
+        pats += "*." + e;
+      }
+      filter = "ROM 文件|" + pats + "|所有文件|*.*";
+      break;
+    }
+    case 2:
+      filter = "核心库 (dll/so/dylib)|*.dll;*.so;*.dylib";
+      break;
+    case 3:
+      filter = "图片 (png/jpg/jpeg/bmp/webp)|*.png;*.jpg;*.jpeg;*.bmp;*.webp";
+      break;
+    default:
+      break;
+  }
+  std::string path;
+  const nativedlg::PickResult r =
+      req.mode == 0
+          ? nativedlg::pickFolder(app.window(), req.title.c_str(), &path)
+          : nativedlg::pickFile(app.window(), req.title.c_str(),
+                                filter.empty() ? nullptr : filter.c_str(), &path);
+  if (r == nativedlg::PickResult::Ok) {
+    if (req.onPick) req.onPick(path);
+    return;
+  }
+  if (r == nativedlg::PickResult::Cancel) {
+    if (req.onCancel) req.onCancel();
+    return;
+  }
+  // Unavailable（无桌面环境/无 zenity、kdialog）→ 内置浏览器兑底
+  app.pushScene(createFileBrowser(req));
 }
 
 std::unique_ptr<Scene> createAboutScene() {

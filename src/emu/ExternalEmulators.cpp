@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -56,27 +57,48 @@ std::string expandHome(const std::string& dir) {
   return out;
 }
 
-// 目录内找 exe 候选；再下探一层子目录（对齐 Android：有些发行包带一层子目录）
-std::string findInDir(const std::string& dir, const std::vector<std::string>& names) {
-  if (!fsutil::isDir(dir)) return "";
-  for (const auto& n : names) {
-    std::string p = checkExe(dir, n);
-    if (!p.empty()) return p;
-  }
-  for (const auto& e : fsutil::listDir(dir)) {
+// 目录内找 exe 候选；★v1.3.0 改递归（深度 ≤ 4）：CI 超级构建的模拟器安装
+// 布局带多层子目录（如 emulators/dolphin/x64/Release/Dolphin.exe），
+// 旧版只下探一层 → 内置模拟器探测不到 → 点运行提示装独立模拟器。
+static std::string findInDirRecursive(const std::string& dir,
+                                      const std::vector<std::string>& names,
+                                      int depth) {
+  if (depth > 4 || !fsutil::isDir(dir)) return "";
+  const auto entries = fsutil::listDir(dir);
+  for (const auto& e : entries) {
     if (!e.isDir) continue;
-    for (const auto& n : names) {
-      std::string p = checkExe(fsutil::join(dir, e.name), n);
+    const std::string& sub = e.name;
+    const std::string subDir = fsutil::join(dir, sub);
+    // macOS .app 包：Foo.app/Contents/MacOS/Foo
+    if (sub.size() > 4 && sub.compare(sub.size() - 4, 4, ".app") == 0) {
+      const std::string stem = sub.substr(0, sub.size() - 4);
+      const std::string p =
+          checkExe(fsutil::join(subDir, "/Contents/MacOS"), stem);
       if (!p.empty()) return p;
-      // macOS .app 包：Foo.app/Contents/MacOS/Foo
-      if (n.size() > 4 && n.compare(n.size() - 4, 4, ".app") == 0) {
-        const std::string stem = n.substr(0, n.size() - 4);
-        p = checkExe(fsutil::join(fsutil::join(dir, e.name), n + "/Contents/MacOS"), stem);
-        if (!p.empty()) return p;
-      }
+      continue;
     }
+    // 跳过明显无关目录，减小搜索面
+    if (sub == "plugins" || sub == "langs" || sub == "licenses" ||
+        sub == "themes" || sub == "documents" || sub.size() > 48)
+      continue;
+    for (const auto& n : names) {
+      const std::string p = checkExe(subDir, n);
+      if (!p.empty()) return p;
+    }
+    const std::string r = findInDirRecursive(subDir, names, depth + 1);
+    if (!r.empty()) return r;
   }
   return "";
+}
+
+std::string findInDir(const std::string& dir, const std::vector<std::string>& names) {
+  if (!fsutil::isDir(dir)) return "";
+  // 根层直命中优先（最快路径：emulators/dolphin/Dolphin.exe）
+  for (const auto& n : names) {
+    const std::string p = checkExe(dir, n);
+    if (!p.empty()) return p;
+  }
+  return findInDirRecursive(dir, names, 1);
 }
 
 // macOS .app 直接出现在目录里
@@ -91,20 +113,56 @@ std::string findAppBundles(const std::string& dir, const std::vector<std::string
   return "";
 }
 
-// 分离启动：Windows CreateProcess / POSIX posix_spawn（不弹控制台、不等待）
-bool spawnDetached(const std::string& exe, const std::string& args) {
+// 分离启动：Windows CreateProcessW（★v1.3.0 宽字符：中文路径可用；
+//   旧版 CreateProcessA 在中文系统把 UTF-8 路径按 GBK 解 → 找不到文件/
+//   参数错乱）/ POSIX posix_spawn（不弹控制台）。
+// verifyErr 非空时：Windows 端等 2.5s —— 进程若秒退（缺 DLL/运行库）
+//   返回失败并写错误信息（旧版 CreateProcess 成功即返回 true，
+//   模拟器秒退时界面无任何反应 —— “点了没动静”的根因）。
+bool spawnDetached(const std::string& exe, const std::string& args,
+                   std::string* verifyErr = nullptr) {
 #ifdef _WIN32
   std::string cmd = "\"" + exe + "\"" + (args.empty() ? "" : " " + args);
-  STARTUPINFOA si{};
+  std::wstring wcmd;
+  {
+    const std::wstring w = fsutil::toWide(cmd);
+    wcmd.resize(w.size() + 1);  // CreateProcessW 需要可写缓冲
+    std::memcpy(&wcmd[0], w.c_str(), w.size() * sizeof(wchar_t));
+    wcmd[w.size()] = L'\0';
+  }
+  STARTUPINFOW si{};
   si.cb = sizeof(si);
   PROCESS_INFORMATION pi{};
-  const BOOL ok = CreateProcessA(nullptr, &cmd[0], nullptr, nullptr, FALSE, 0, nullptr,
-                                 nullptr, &si, &pi);
-  if (!ok) return false;
-  CloseHandle(pi.hProcess);
+  const BOOL ok = CreateProcessW(nullptr, &wcmd[0], nullptr, nullptr, FALSE,
+                                 CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, &si, &pi);
+  if (!ok) {
+    if (verifyErr) {
+      *verifyErr = std::string("CreateProcess 失败（错误码 ") +
+                   std::to_string((int)GetLastError()) + "）";
+    }
+    return false;
+  }
   CloseHandle(pi.hThread);
+  if (verifyErr) {
+    // 等待 2.5s：仍在运行 = 启动成功；秒退 = 启动失败（缺运行库/路径问题）
+    const DWORD wr = WaitForSingleObject(pi.hProcess, 2500);
+    if (wr == WAIT_OBJECT_0) {
+      DWORD code = 0;
+      GetExitCodeProcess(pi.hProcess, &code);
+      CloseHandle(pi.hProcess);
+      if (code != 0) {
+        *verifyErr = "模拟器启动后立即退出（错误码 " + std::to_string((int)code) +
+                     "）—— 可能缺少 Visual C++ 运行库或文件不完整";
+        return false;
+      }
+      // 秒退且退出码 0：部分模拟器用启动器转接（重拉自身再退出）——放行
+      return true;
+    }
+  }
+  CloseHandle(pi.hProcess);
   return true;
 #else
+  (void)verifyErr;
   // 拆参数（引号外空格切分，路径带空格时由调用方加引号）
   std::vector<std::string> parts;
   std::string cur;
@@ -358,7 +416,8 @@ void ExternalEmulators::init(const std::string& dataDir) {
   eden.exesWin = {"eden.exe", "Eden.exe"};
   eden.exesLinux = {"eden", "Eden"};
   eden.exesMac = {"Eden.app"};
-  eden.argTemplate = "{rom}";
+  // ★v1.3.0：yuzu 系 CLI 用 -g/--game 指定游戏文件（新版已不接受裸位置参数）
+  eden.argTemplate = "-g {rom}";
   eden.commonDirs = {
       "%HOME%/AppData/Local/eden", "C:/Program Files/Eden",
       "/usr/bin", "/usr/local/bin", "/opt/eden", "/Applications", "%HOME%/Applications"};
@@ -492,7 +551,7 @@ void ExternalEmulators::clearUserPath(const std::string& id) {
 #else
       cmd = "rm -rf " + shellQuote(dir);
 #endif
-      (void)std::system(cmd.c_str());
+      (void)fsutil::runCommand(cmd);
       detect(&e);
     }
 }
@@ -526,8 +585,12 @@ bool ExternalEmulators::launch(const ExternalCore& c, const std::string& romPath
 
   LOGI("启动 %s：%s %s", live->name.c_str(), exe.c_str(), args.c_str());
 #ifdef _WIN32
-  if (!spawnDetached(exe, args)) {
-    if (err) *err = "CreateProcess 失败（" + live->name + "）";
+  // ★v1.3.0：启动验证 —— 模拟器秒退（缺 DLL/路径问题）时明确报错，
+  //   不再「提示已启动但啥也没发生」
+  std::string vErr;
+  if (!spawnDetached(exe, args, &vErr)) {
+    if (err) *err = vErr + "（" + live->name + "）";
+    LOGE("外置核心启动失败：%s", vErr.c_str());
     return false;
   }
   return true;
@@ -602,14 +665,14 @@ bool ExternalEmulators::downloadOne(ExternalCore* c) {
                         "curl -fSL --retry 2 --connect-timeout 15 --max-time 60 "
                         "-A NesStationPC/1.1 -H \"Accept: application/vnd.github+json\" -o ") +
                     shellQuote(apiJson) + " " + shellQuote(c->githubApi);
-  if (std::system(cmd.c_str()) != 0 || !fsutil::isFile(apiJson)) {
+  if (fsutil::runCommand(cmd) != 0 || !fsutil::isFile(apiJson)) {
     std::lock_guard<std::mutex> lk(mu_);
     prog_.label = "查询 GitHub 失败（" + c->name + "：网络受限或速率限制）";
     return false;
   }
   std::string body;
   {
-    FILE* f = fopen(apiJson.c_str(), "rb");
+    FILE* f = fsutil::openFile(apiJson, "rb");
     if (!f) {
       std::lock_guard<std::mutex> lk(mu_);
       prog_.label = "读取版本信息失败（" + c->name + "）";
@@ -648,7 +711,7 @@ bool ExternalEmulators::downloadOne(ExternalCore* c) {
   cmd = std::string("curl -fSL --retry 3 --retry-delay 3 --connect-timeout 15 "
                     "--max-time 1800 -A NesStationPC/1.1 -o ") +
         shellQuote(archive) + " " + shellQuote(assetUrl);
-  if (std::system(cmd.c_str()) != 0 || !fsutil::isFile(archive)) {
+  if (fsutil::runCommand(cmd) != 0 || !fsutil::isFile(archive)) {
     fsutil::removeFile(archive);
     std::lock_guard<std::mutex> lk(mu_);
     prog_.label = "下载失败（" + c->name + "）";
@@ -676,20 +739,18 @@ bool ExternalEmulators::downloadOne(ExternalCore* c) {
           "tar -xf " + shellQuote(archive) + " -C " + shellQuote(dir),
       };
       for (const auto& e : ex)
-        if (std::system(e.c_str()) == 0) {
+        if (fsutil::runCommand(e) == 0) {
           extracted = true;
           break;
         }
     } else if (assetName.find(".tar.") != std::string::npos ||
                assetName.compare(assetName.size() - 4, 4, ".tgz") == 0) {
-      extracted = std::system(("tar -xf " + shellQuote(archive) + " -C " + shellQuote(dir))
-                                  .c_str()) == 0;
+      extracted = fsutil::runCommand("tar -xf " + shellQuote(archive) + " -C " + shellQuote(dir)) == 0;
     } else {  // .7z
       const std::string sz[] = {"7z", "7za", "/usr/bin/7z", "/usr/bin/7za"};
       for (const auto& z : sz) {
-        if (std::system((std::string("which ") + z + " >/dev/null 2>&1").c_str()) == 0) {
-          extracted = std::system((z + " x -y -o" + shellQuote(dir) + " " + shellQuote(archive))
-                                      .c_str()) == 0;
+        if (fsutil::runCommand(std::string("command -v ") + z + " >/dev/null 2>&1") == 0) {
+          extracted = fsutil::runCommand(z + " x -y -o" + shellQuote(dir) + " " + shellQuote(archive)) == 0;
           break;
         }
       }
@@ -703,8 +764,8 @@ bool ExternalEmulators::downloadOne(ExternalCore* c) {
   } else {
     // 单文件资产（AppImage / exe 等）：直接落位
     const std::string dest = fsutil::join(dir, assetName);
-    FILE* in = fopen(archive.c_str(), "rb");
-    FILE* out = fopen(dest.c_str(), "wb");
+    FILE* in = fsutil::openFile(archive, "rb");
+    FILE* out = fsutil::openFile(dest, "wb");
     if (in && out) {
       char buf[65536];
       size_t n;

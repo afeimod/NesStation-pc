@@ -20,7 +20,24 @@ VideoBridge::~VideoBridge() {
 
 void VideoBridge::setRenderer(SDL_Renderer*) {}
 
-void VideoBridge::setPixelFormat(enum retro_pixel_format fmt) { fmt_ = fmt; }
+void VideoBridge::beginSession() {
+  // 像素格式回默认（核心声明时经 SET_PIXEL_FORMAT 覆盖）
+  fmt_ = RETRO_PIXEL_FORMAT_0RGB1555;
+  pending_.clear();
+  pendingW_ = pendingH_ = 0;
+  pendingPitch_ = 0;
+  dirty_ = false;
+  hasFrame_ = false;
+  frameW_ = frameH_ = 0;
+}
+
+void VideoBridge::setPixelFormat(enum retro_pixel_format fmt) {
+  fmt_ = fmt;
+  const char* name = fmt == RETRO_PIXEL_FORMAT_XRGB8888 ? "XRGB8888"
+                    : fmt == RETRO_PIXEL_FORMAT_RGB565    ? "RGB565"
+                                                           : "0RGB1555";
+  LOGI("核心像素格式：%s", name);
+}
 
 void VideoBridge::setAvInfo(unsigned baseW, unsigned baseH, double aspect, unsigned maxW,
                             unsigned maxH) {
@@ -42,11 +59,21 @@ void VideoBridge::setGeometry(unsigned w, unsigned h, double aspect) {
 void VideoBridge::frame(const void* data, unsigned width, unsigned height, size_t pitch) {
   if (!data || !width || !height) return;
   if (width > 8192 || height > 8192) return;
+  // ★v1.3.0 帧到达即拷贝到自有缓冲（与核心内部缓冲完全解耦，
+  //   渲染期间无论核心怎么写都不会读到半帧 —— 割裂闪烁根治）
+  const size_t need = (size_t)pitch * height;
+  if (pending_.size() < need) {
+    pending_.resize(need);
+    pendingPitch_ = pitch;
+  } else {
+    pendingPitch_ = pitch;
+  }
+  std::memcpy(pending_.data(), data, need);
+  pendingW_ = width;
+  pendingH_ = height;
   frameW_ = width;
   frameH_ = height;
   hasFrame_ = true;
-  pendingSrc_ = data;
-  pendingPitch_ = pitch;
   dirty_ = true;
 }
 
@@ -69,22 +96,28 @@ void VideoBridge::ensureTexture(SDL_Renderer* r, unsigned needW, unsigned needH)
 //   预算 = 核心 AV maxW×maxH（再钳 1024×1024 防大分辨率帧卡死模拟线程）；
 //   超预算 / 内存不足 → 静默直通（原帧）。
 void VideoBridge::uploadFrame(SDL_Renderer* r) {
-  if (!dirty_ || !pendingSrc_) return;
+  if (!dirty_ || pending_.empty()) return;
 
-  const unsigned srcW = frameW_;
-  const unsigned srcH = frameH_;
+  const unsigned srcW = pendingW_;
+  const unsigned srcH = pendingH_;
   // 先转 ARGB 到 lastFrame_（格式归一，放大算法输入 0xAARRGGBB）
   lastFrame_.resize((size_t)srcW * srcH);
   {
-    const uint8_t* src = (const uint8_t*)pendingSrc_;
+    const uint8_t* src = pending_.data();
     const size_t srcPitch = pendingPitch_;
     uint32_t* out = lastFrame_.data();
     switch (fmt_) {
       case RETRO_PIXEL_FORMAT_XRGB8888: {
         const uint32_t* s = (const uint32_t*)src;
-        for (unsigned y = 0; y < srcH; y++)
-          std::memcpy(out + (size_t)y * srcW, s + (size_t)y * (srcPitch / 4),
-                      (size_t)srcW * 4);
+        for (unsigned y = 0; y < srcH; y++) {
+          const uint32_t* row = s + (size_t)y * (srcPitch / 4);
+          uint32_t* dst = out + (size_t)y * srcW;
+          for (unsigned x = 0; x < srcW; x++) {
+            // ★v1.3.0：高位 X 强制为不透明（部分核心写 0x00；
+            //   若渲染路径启用混合会变透明/异色）
+            dst[x] = row[x] | 0xFF000000u;
+          }
+        }
         break;
       }
       case RETRO_PIXEL_FORMAT_RGB565: {

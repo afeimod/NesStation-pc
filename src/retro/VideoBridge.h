@@ -52,6 +52,11 @@ class VideoBridge {
   void setRenderer(SDL_Renderer* r);
   void setDualScreen(bool dual) { dual_ = dual; }
 
+  // ★v1.3.0 新会话重置：每次加载核心前调用 —— 像素格式/帧状态回到默认。
+  //   旧版跨会话残留上一核心的 fmt_（如上一核心 XRGB8888、本核心未声明时
+  //   按默认 0RGB1555 输出），格式错位 → 画面颜色错乱（GBA 反色类问题）。
+  void beginSession();
+
   // 核心回调（帧提交）
   void frame(const void* data, unsigned width, unsigned height, size_t pitch);
   void setPixelFormat(enum retro_pixel_format fmt);
@@ -88,8 +93,14 @@ class VideoBridge {
   SDL_Texture* tex_ = nullptr;
   unsigned texW_ = 0, texH_ = 0;
 
-  // 本帧待上传数据（video_refresh 时核心保证到下一次刷新前有效）
-  const void* pendingSrc_ = nullptr;
+  // ★v1.3.0 帧快照：video_refresh 时立即拷贝到自有缓冲。
+  //   旧版只存核心内部指针（pendingSrc_），依赖「到下一次刷新前有效」的
+  //   隐式约定；一旦核心内部分配/复用行为变化（或补帧循环多跑几帧），
+  //   渲染读到中途被改写的缓冲 → 画面出现闪烁割裂块。
+  //   现在每帧到达即拷贝（256×240 仅 ~123KB，60fps 代价可忽略），
+  //   uploadFrame 只读自有数据，与核心完全解耦。
+  std::vector<uint8_t> pending_;
+  unsigned pendingW_ = 0, pendingH_ = 0;
   size_t pendingPitch_ = 0;
   bool dirty_ = false;
 
