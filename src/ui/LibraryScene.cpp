@@ -229,41 +229,100 @@ class LibraryScene : public Scene {
     refreshGames(app);
   }
 
-  void startAddRomDir(App& app) {
+  // ★v1.2.11 按平台导入文件夹（APK 导入文件夹按钮：当前平台页 hint）
+  //   不再进全局扫描目录 —— 文件夹注册到 importedFolders（按平台隔离记忆），
+  //   后台枚举 + APK 过滤链（ROM_EXTENSIONS / CD 附属去重 / Switch 限定 / DOS 启动器），
+  //   完成时主循环 toast「从文件夹导入 N 个ROM文件」。
+  void startImportFolder(App& app, GamePlatform tabHint) {
     BrowserRequest req;
-    req.title = "导入游戏文件夹";
+    req.title = std::string("导入文件夹 → ") + platformShortName(tabHint);
     req.mode = 0;
-    req.startDir = app.library.romDirs().empty() ? fsutil::homeDir()
-                                                 : app.library.romDirs().back();
-    req.onPick = [&app](const std::string& dir) {
-      // ★v1.2.3 防闪退三重修复：
-      //  ① 同步扫描整块存储会卡死界面数分钟（手机上像闪退）→ 改后台线程扫描
-      //  ② 非法 UTF-8 目录名不再入库（json dump 会抛异常）
-      //  ③ 扫描中不重复启动（避免 joinScanThread 卡 UI）
-      if (!app.library.addRomDir(dir)) {
-        app.toast("该目录已在扫描列表中（或目录名含不支持的字符）");
+    // 起始目录：该平台最近导入的文件夹 → 任一最近导入 → 扫描目录 → 主目录
+    std::string startDir;
+    for (auto it = app.library.importedFolders().rbegin();
+         it != app.library.importedFolders().rend(); ++it) {
+      if (it->platform == tabHint) { startDir = it->dir; break; }
+    }
+    if (startDir.empty() && !app.library.importedFolders().empty())
+      startDir = app.library.importedFolders().back().dir;
+    if (startDir.empty() && !app.library.romDirs().empty())
+      startDir = app.library.romDirs().back();
+    if (startDir.empty()) startDir = fsutil::homeDir();
+    req.startDir = startDir;
+    req.onPick = [&app, tabHint](const std::string& dir) {
+      if (!fsutil::isDir(dir)) return;
+      if (app.library.scanRunning()) {
+        // APK importing 守卫文案：「上一次导入还在进行中，请稍候再试」
+        app.toast("上一次导入还在进行中，请稍候再试");
         return;
       }
-      app.library.save();
-      if (app.library.scanRunning()) {
-        app.toast("已添加目录，当前扫描完成后自动纳入下次扫描");
-      } else {
-        app.library.startBackgroundRescan(app.config.scanRecursive);
-        app.toast("已添加目录，正在后台扫描…");
-      }
+      app.library.startBackgroundImport(dir, tabHint);
+      app.library.save();  // 文件夹注册表落盘
+      app.toast(std::string("正在扫描并导入到「") + platformShortName(tabHint) +
+                "」页…（大目录可能需要一些时间）");
     };
+    req.onCancel = [] {};
     app.pushScene(createFileBrowser(req));
   }
 
-  void rescanAll(App& app) {
-    int n = 0;
-    for (const auto& dir : app.library.romDirs())
-      n += app.library.scanDirectory(dir, GamePlatform::NES, false,
-                                     app.config.scanRecursive);
-    app.library.save();
+  // ★v1.2.11 导入单个 ROM 文件（APK 导入ROM 按钮：当前平台页 hint）
+  void startImportRomFile(App& app, GamePlatform tabHint) {
+    BrowserRequest req;
+    req.title = std::string("导入 ROM → ") + platformShortName(tabHint);
+    req.mode = 1;
+    req.startDir = app.library.romDirs().empty() ? fsutil::homeDir()
+                                                 : app.library.romDirs().back();
+    req.onPick = [&app, tabHint](const std::string& file) {
+      importRomFile(app, file, tabHint);
+    };
+    req.onCancel = [] {};
+    app.pushScene(createFileBrowser(req));
+  }
+
+  // ★v1.2.11 刷新（APK refreshList 核心隔离）：平台页只重扫该平台导入的
+  //   文件夹（严格识别，移除已不存在的条目）；全部/收藏/最近 → 全部注册
+  //   文件夹 + 全局扫描目录后台重扫（保留设置页目录的老行为）
+  void refreshCurrentTab(App& app) {
+    const int id = cats_[(size_t)catSel_].id;
+    if (id >= 0) {
+      const auto p = (GamePlatform)id;
+      if (app.library.importedFoldersFor(p).empty()) {
+        app.toast(std::string(platformShortName(p)) +
+                  " 平台还没有导入过文件夹（导入文件夹后会记住目录，刷新时自动同步）");
+        return;
+      }
+      const auto r = app.library.refreshImportedFolders(p, false);
+      rebuild(app);
+      if (r.first > 0 || r.second > 0) {
+        app.toast("刷新完成：新增 " + std::to_string(r.first) + " 个，移除 " +
+                  std::to_string(r.second) + " 个");
+      } else {
+        app.toast("已是最新（无新增/移除）");
+      }
+      return;
+    }
+    // 全部 / 收藏 / 最近
+    int added = 0, removed = 0;
+    if (!app.library.importedFolders().empty()) {
+      const auto r = app.library.refreshImportedFolders(GamePlatform::NES, true);
+      added += r.first;
+      removed += r.second;
+    }
+    if (!app.library.romDirs().empty()) {
+      if (!app.library.scanRunning()) {
+        app.library.startBackgroundRescan(app.config.scanRecursive);
+      }
+    }
     rebuild(app);
-    app.toast("重新扫描完成：新增 " + std::to_string(n) + " · 库内共 " +
-              std::to_string(app.library.games().size()) + " 个游戏");
+    if (added > 0 || removed > 0) {
+      app.toast("刷新完成：新增 " + std::to_string(added) + " 个，移除 " +
+                std::to_string(removed) + " 个");
+    } else if (app.library.romDirs().empty() && app.library.importedFolders().empty()) {
+      app.toast("还没有导入过文件夹，也没有添加扫描目录");
+    } else if (app.library.romDirs().empty()) {
+      app.toast("已是最新（无新增/移除）");
+    }
+    // （有全局目录时，后台重扫完成由主循环另行 toast）
   }
 
   // ============ 绘制 ============
@@ -330,7 +389,7 @@ class LibraryScene : public Scene {
     // 平台 SideEntry 列表（可滚动：滚轮 + 拖拽）
     {
       const float listTop = y;
-      const float listBottom = (float)d.H - 214;  // 给底部搜索/按钮区留位
+      const float listBottom = (float)d.H - 232;  // 给底部搜索/按钮区留位（4 按钮两行）
       const Rect listRc(0, listTop, navW, listBottom - listTop);
       sideScroll_ += w::dragScroll(app, listRc);
       if (in.wheel != 0 && listRc.contains(in.mouse)) sideScroll_ -= (float)in.wheel * 40;
@@ -377,9 +436,10 @@ class LibraryScene : public Scene {
       }
       d.popClip();
     }
-    // 底部：搜索框 + 导入 / 刷新（图标按钮；避开底部信息条 H-92）
+    // 底部：搜索框 + 导入ROM / 导入文件夹 / 刷新 / 获取封面
+    //（★v1.2.11 对齐 APK Neon 工具栏按钮组；避开底部信息条 H-92）
     {
-      const float by = (float)d.H - 202;
+      const float by = (float)d.H - 218;
       const Rect src(14, by, navW - 28, 38);
       const bool hov = src.contains(in.mouse) || searching_;
       d.chamferRect(src, 10, hov ? sk.bgPanelHi : sk.bgPanel);
@@ -395,27 +455,32 @@ class LibraryScene : public Scene {
         app.input.textClear();
         app.input.textInputStart();
       }
+      // 带图标文字的工具按钮（当前平台页 hint —— APK 按平台页导入）
+      auto toolBtn = [&app, &d, &in, &sk](const Rect& rc, int iconId, const char* label,
+                                        Color8 col) -> bool {
+        const bool bHov = rc.contains(in.mouse);
+        d.chamferRect(rc, 10, sk.bgPanelHi);
+        if (bHov) d.chamferRectOutline(rc, 10, sk.accent, 1.2f);
+        w::icon(app, iconId, Rect(rc.x + 10, rc.cy() - 8, 16, 16), col);
+        app.font.drawVCentered(app.sdlRenderer(), label, rc.x + 32, rc.cy(), 11,
+                               bHov ? sk.textHi : sk.text);
+        return w::activated(app, rc, false);
+      };
       const float bw = (navW - 28 - 8) / 2;
-      const Rect imp(14, by + 46, bw, 38);
-      const bool impHov = imp.contains(in.mouse);
-      if (impHov) {
-        d.chamferRect(imp, 10, sk.bgPanelHi);
-        d.chamferRectOutline(imp, 10, sk.accent, 1.2f);
-      } else {
-        d.chamferRect(imp, 10, sk.bgPanelHi);
+      const float bh = 34;
+      // 行 1：导入ROM / 导入文件夹
+      const GamePlatform tabHint = currentTabPlatform();
+      if (toolBtn(Rect(14, by + 46, bw, bh), 39, "导入ROM", sk.green))
+        startImportRomFile(app, tabHint);
+      if (toolBtn(Rect(14 + bw + 8, by + 46, bw, bh), 4, "导入文件夹", sk.blue))
+        startImportFolder(app, tabHint);
+      // 行 2：刷新 / 获取封面
+      if (toolBtn(Rect(14, by + 86, bw, bh), 20, "刷新", sk.accent))
+        refreshCurrentTab(app);
+      if (toolBtn(Rect(14 + bw + 8, by + 86, bw, bh), 38, "获取封面", sk.gold)) {
+        app.covers.requestFetchAllMissing(games_);
+        app.toast("已排队获取 " + std::to_string(games_.size()) + " 个游戏的封面");
       }
-      w::iconFolder(app, Rect(imp.cx() - 8, imp.cy() - 8, 16, 16), sk.green);
-      if (w::activated(app, imp, false)) startAddRomDir(app);
-      const Rect rfs(14 + bw + 8, by + 46, bw, 38);
-      const bool rfsHov = rfs.contains(in.mouse);
-      if (rfsHov) {
-        d.chamferRect(rfs, 10, sk.bgPanelHi);
-        d.chamferRectOutline(rfs, 10, sk.accent, 1.2f);
-      } else {
-        d.chamferRect(rfs, 10, sk.bgPanelHi);
-      }
-      w::iconRefresh(app, Rect(rfs.cx() - 8, rfs.cy() - 8, 16, 16), sk.blue);
-      if (w::activated(app, rfs, false)) rescanAll(app);
     }
 
     // —— 右侧内容 ——
@@ -454,7 +519,8 @@ class LibraryScene : public Scene {
       app.font.draw(app.sdlRenderer(), "这里还没有游戏",
                     rx + rw / 2 - app.font.textWidth("这里还没有游戏", 14) / 2, flowCy - 12,
                     14, sk.textDim);
-      const std::string tip = "左下角导入 ROM 文件夹，或在 设置 → 存储 添加扫描目录";
+      const std::string tip =
+          "左下角「导入ROM / 导入文件夹」按当前平台页导入游戏";
       app.font.draw(app.sdlRenderer(), app.font.ellipsize(tip, 12, rw),
                     rx + rw / 2 - app.font.textWidth(app.font.ellipsize(tip, 12, rw), 12) / 2,
                     flowCy + 14, 12, Color8(sk.textDim.r, sk.textDim.g, sk.textDim.b, 180));
@@ -728,6 +794,8 @@ class LibraryScene : public Scene {
       };
       const Tool tools[] = {{11, "搜索"}, {39, "导入ROM"}, {4, "导入文件夹"},
                             {20, "刷新"}, {38, "获取封面"}};
+      // ★v1.2.11 导入ROM/导入文件夹/刷新 都按「当前平台页」hint（APK 按钮组）
+      const GamePlatform tabHint = currentTabPlatform();
       for (int i = 4; i >= 0; i--) {
         const float tx = W - 24 * D - tw - (float)(4 - i) * (tw + 6 * D);
         const Rect rc(tx, y + 2 * D, tw, th);
@@ -742,24 +810,14 @@ class LibraryScene : public Scene {
                 app.input.textInputStart();
               }
               break;
-            case 1: {  // 导入ROM：选文件
-              BrowserRequest req;
-              req.title = "导入 ROM 文件";
-              req.mode = 1;
-              req.startDir = app.library.romDirs().empty() ? fsutil::homeDir()
-                                                           : app.library.romDirs().back();
-              req.onPick = [&app, this](const std::string& file) {
-                importRomFile(app, file, currentTabPlatform());
-              };
-              req.onCancel = [] {};
-              app.pushScene(createFileBrowser(req));
+            case 1:  // 导入ROM：选文件（当前平台页 hint）
+              startImportRomFile(app, tabHint);
               break;
-            }
-            case 2:
-              startAddRomDir(app);
+            case 2:  // 导入文件夹：注册到当前平台页（不再全局扫描）
+              startImportFolder(app, tabHint);
               break;
-            case 3:
-              rescanAll(app);
+            case 3:  // 刷新：核心隔离 —— 只重扫当前平台页导入的文件夹
+              refreshCurrentTab(app);
               break;
             case 4:
               app.covers.requestFetchAllMissing(games_);
@@ -998,7 +1056,21 @@ class LibraryScene : public Scene {
   // ★v1.2.10：改走手动导入宽松判定（APK detectFromUri）——当前平台页作
   //   hint：CD 镜像按 hint 消歧（内容嗅探优先）、zip 探头、7z/gz→街机、
   //   未知兑底 hint（不再全给 NES）
+  // ★v1.2.11：先过 APK ROM_EXTENSIONS 白名单（importPickedFiles 语义：
+  //   不支持的扩展名直接提示，不入库）
   static void importRomFile(App& app, const std::string& file, GamePlatform tabHint) {
+    const std::string ext = fsutil::extOf(file);
+    bool extOk = false;
+    for (const auto& m : romExtensionsMaster()) {
+      if (m == ext) {
+        extOk = true;
+        break;
+      }
+    }
+    if (!extOk) {
+      app.toast("不支持的文件类型 ." + ext + "（支持 nes/sfc/gba/md/… 与 zip/7z）");
+      return;
+    }
     if (app.library.addRom(file, tabHint, true)) {
       app.library.save();
       app.toast("已导入：" + fsutil::baseOf(file));

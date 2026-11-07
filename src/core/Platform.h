@@ -78,6 +78,16 @@ GamePlatform detectRomPlatformManual(const std::string& romPath, GamePlatform hi
 //   识别不了返回 false（调用方跳过入库，绝不 NES 兜底 —— 对齐 APK null 跳过语义）。
 bool detectRomPlatformStrict(const std::string& romPath, GamePlatform* out);
 
+// ★v1.2.11 刷新重扫判定（对齐 APK PlatformDetector.detectForRefresh）：
+//   严格档 + CD/MDF 镜像按文件夹平台 hint 消歧（REFRESH_HINT_ALLOWED）+
+//   7z/gz 仅街机页 + .app 仅 3DS 页。识别不了返回 false（跳过，绝不兜底）。
+bool detectRomPlatformRefresh(const std::string& romPath, GamePlatform hint,
+                              GamePlatform* out);
+
+// ★v1.2.11 手动导入主白名单（对齐 APK LibraryScreen.ROM_EXTENSIONS）——
+//   导入ROM/导入文件夹只收这些扩展名（zip/7z/gz 亦在内）。
+const std::vector<std::string>& romExtensionsMaster();
+
 // ★ ROM 内容嗅探（扫描入库用）：对 .zip/.cue/.bin/.iso/.img/.chd 等歧义扩展名
 // 读取文件内容识别真实平台（zip 解析内部文件名、光盘镜像读 ISO9660 PVD /
 // SEGA 引导标识 / GC·Wii 魔数），识别失败返回 fallback。

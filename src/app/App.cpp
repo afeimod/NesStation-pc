@@ -749,13 +749,27 @@ void App::frame(float dt) {
   const InputState& in = input.input();
   covers.pump(*this);
 
-  // 启动后台扫描：枚举完成后合入游戏库（主线程写入，无锁竞争）
+  // 启动/导入后台扫描：枚举完成后合入游戏库（主线程写入，无锁竞争）
+  // ★v1.2.11：分帧合入 + 完成时按会话类型播一次结果（不再每批 toast）
   if (!library.scanRunning() && library.pendingScanCount() > 0) {
     const int n = library.drainPendingScan();
-    if (n > 0) {
-      library.save();
-      toast("启动扫描：新增 " + std::to_string(n) + " 个游戏");
+    if (n > 0) library.save();
+  }
+  if (!library.scanRunning() && library.scanFinished() &&
+      library.pendingScanCount() == 0) {
+    const int total = library.scanTotalAdded();
+    if (library.scanKind() == ScanKind::ImportFolder) {
+      // APK 文案：「从文件夹导入 N 个ROM文件」/ 未找到可导入文件
+      if (total > 0) {
+        toast("从文件夹导入 " + std::to_string(total) + " 个ROM文件");
+      } else {
+        toast("该文件夹没有找到可导入的ROM文件（支持 nes/sfc/gba/md/… 或 zip）");
+      }
+    } else if (total > 0) {
+      toast("扫描完成：新增 " + std::to_string(total) + " 个游戏");
     }
+    library.clearScanFinished();
+    library.resetScanTotal();
   }
 
   if (!scenes_.empty()) {

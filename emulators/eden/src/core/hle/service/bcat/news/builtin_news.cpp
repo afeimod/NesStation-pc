@@ -207,9 +207,10 @@ void WriteCachedJson(std::string_view json) {
 
 // idk but News App does not render Markdown or HTML, so remove some formatting.
 // ★NesStation-pc：原实现依赖 boost::regex；Debian 12 的 boost 1.74 无
-//   boost/regex/v5 子目录（v5 布局自 boost 1.77 才引入）导致 Linux CI 构建失败。
-//   改用 std::regex 等价替换（boost 默认 ^ 为按行锚定，故这里显式启用
-//   std::regex_constants::multiline 保持行为一致，Windows/Linux 无差异）。
+//   boost/regex/v5 子目录（v5 布局自 boost 1.77 才引入）导致 Linux CI 构建失败，
+//   而 std::regex_constants::multiline 又是 libstdc++/libc++ 扩展（MSVC STL 无）。
+//   故行首锚定（^）的 4 处替换改为逐行手工处理：无 multiline 标志、
+//   MSVC/GCC/Clang 行为完全一致（boost/perl 的 ^ 即每行行首锚定）。
 namespace {
 
 void ReplaceAll(std::string& text, const std::string& from, const std::string& to) {
@@ -219,6 +220,25 @@ void ReplaceAll(std::string& text, const std::string& from, const std::string& t
     for (size_t pos = text.find(from); pos != std::string::npos;
          pos = text.find(from, pos + to.size())) {
         text.replace(pos, from.size(), to);
+    }
+}
+
+// 对 text 的每一行应用 fn（fn 收到行首可写指针与行长）。
+// 等价于带 multiline 的 std::regex_replace（^ 仅在每行行首匹配一次）。
+void ForEachLine(std::string& text, void (*fn)(std::string&)) {
+    size_t pos = 0;
+    while (pos <= text.size()) {
+        size_t end = text.find('\n', pos);
+        if (end == std::string::npos) {
+            end = text.size();
+        }
+        std::string line = text.substr(pos, end - pos);
+        fn(line);
+        text.replace(pos, end - pos, line);
+        pos = pos + line.size() + 1;
+        if (end == text.size()) {
+            break;
+        }
     }
 }
 
@@ -245,19 +265,37 @@ std::string SanitizeMarkdown(std::string_view markdown) {
     text = std::regex_replace(text, newlines, "\n\n");
 
     // Remove markdown headers
-    static const std::regex headers(R"(^#+ )", std::regex_constants::multiline);
-    text = std::regex_replace(text, headers, "");
+    ForEachLine(text, [](std::string& line) {
+        if (!line.empty() && line.front() == '#') {
+            size_t i = 0;
+            while (i < line.size() && line[i] == '#') {
+                ++i;
+            }
+            if (i < line.size() && line[i] == ' ') {
+                line.erase(0, i + 1);
+            }
+        }
+    });
 
     // Convert bullet points to something nicer
-    static const std::regex list1(R"(^- )", std::regex_constants::multiline);
-    text = std::regex_replace(text, list1, "• ");
+    ForEachLine(text, [](std::string& line) {
+        if (line.starts_with("- ")) {
+            line.replace(0, 2, "\u2022 ");
+        }
+    });
 
-    static const std::regex list2(R"(^  \* )", std::regex_constants::multiline);
-    text = std::regex_replace(text, list2, "  • ");
+    ForEachLine(text, [](std::string& line) {
+        if (line.starts_with("  * ")) {
+            line.replace(0, 4, "  \u2022 ");
+        }
+    });
 
     // what
-    static const std::regex list2_dash(R"(^ - )", std::regex_constants::multiline);
-    text = std::regex_replace(text, list2_dash, "  • ");
+    ForEachLine(text, [](std::string& line) {
+        if (line.starts_with(" - ")) {
+            line.replace(0, 3, "  \u2022 ");
+        }
+    });
 
     // Convert bold/italic text into normal text
     static const std::regex bold(R"(\*\*(.*?)\*\*)");

@@ -1,6 +1,7 @@
 #include "emu/EmuRunner.h"
 
 #include <chrono>
+#include <cmath>
 
 #include "ui/Scenes.h"
 #include "util/Fs.h"
@@ -164,6 +165,34 @@ void EmuRunner::setFastForward(bool ff) {
 
 void EmuRunner::runFrameOnce() {
   if (core_) core_->runFrame();
+}
+
+// ★v1.2.11 目标帧率（对齐 APK FramePacer 逐核心硬编码表）：
+//   pull-model 九核心（NesEngine/SnesEngine/GbaEngine/GenesisEngine/PceEngine/
+//   NdsEngine/FbNeoEngine…）一律 pace(t0, 60)；PSX/DC/PSP 从 av_info.timing.fps
+//   取整（10<fps<500 合法，否则 60）再钳位 [30,600]。
+//   PC 进程内的 PS2/3DS/JAVA 在 APK 里是 push-model/独立线程（自带节流），
+//   PC 无此架构 → 按同一公式从 av_info 取。
+double EmuRunner::targetFps() const {
+  switch (game_.platform) {
+    case GamePlatform::NES:
+    case GamePlatform::SFC:
+    case GamePlatform::GB:
+    case GamePlatform::GBA:
+    case GamePlatform::MD:
+    case GamePlatform::PCE:
+    case GamePlatform::NDS:
+    case GamePlatform::ARCADE:
+    case GamePlatform::DOS:
+      return 60.0;  // APK 硬编码 60（FC 不跑 60.0988，也不随显示器刷新跑 120）
+    default: {
+      const double av = core_ ? core_->timingFps() : coreFps_;
+      double f = (av > 10.0 && av < 500.0) ? std::floor(av + 0.5) : 60.0;
+      if (f < 30.0) f = 30.0;
+      if (f > 600.0) f = 600.0;
+      return f;
+    }
+  }
 }
 
 void EmuRunner::runFrame() {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <unordered_map>
 
 #include "util/Fs.h"
 #include "util/Log.h"
@@ -90,12 +91,136 @@ std::string prettifyTitle(const std::string& filename) {
   return out;
 }
 
+// —— ★v1.2.11 APK 导入过滤链（LibraryScreen.kt scanLocalFolderForRoms）——
+namespace {
+
+// 任一路径分量以 '.' 开头 → 隐藏文件/目录（APK 跳过规则）
+bool hiddenSegment(const std::string& path) {
+  size_t i = 0;
+  while (i < path.size()) {
+    size_t j = path.find('/', i);
+    if (j == std::string::npos) j = path.find('\\', i);
+    if (j == std::string::npos) j = path.size();
+    if (j > i && path[i] == '.') return true;
+    i = j + 1;
+  }
+  return false;
+}
+
+bool extInVec(const std::string& e, const std::vector<std::string>& v) {
+  for (const auto& x : v)
+    if (x == e) return true;
+  return false;
+}
+
+// APK ROM_EXTENSIONS 白名单 + CD 附属去重（skipIfCue/skipIfCcd/skipIfGdi）+
+// Switch 限定（SWITCH_DIRECT_EXTENSIONS）。maxDepth=5 由调用方保证。
+std::vector<std::string> filterImportFiles(const std::vector<std::string>& files,
+                                           GamePlatform hint) {
+  const std::vector<std::string>& master = romExtensionsMaster();
+  // 每目录 cue/ccd/gdi 存在性（CD 附属文件两遍去重，APK 同）
+  std::unordered_map<std::string, bool> hasCue, hasCcd, hasGdi;
+  for (const auto& f : files) {
+    const std::string ext = fsutil::extOf(f);
+    const std::string dir = fsutil::dirOf(f);
+    if (ext == "cue") hasCue[dir] = true;
+    if (ext == "ccd") hasCcd[dir] = true;
+    if (ext == "gdi") hasGdi[dir] = true;
+  }
+  auto dirHas = [](const std::unordered_map<std::string, bool>& m,
+                   const std::string& dir) {
+    const auto it = m.find(dir);
+    return it != m.end() && it->second;
+  };
+  std::vector<std::string> out;
+  for (const auto& f : files) {
+    if (hiddenSegment(f)) continue;
+    const std::string ext = fsutil::extOf(f);
+    if (ext.empty() || !extInVec(ext, master)) continue;
+    // Switch 页：只收 xci/nsp/nca/nro（Eden 不能跑压缩包）
+    if (hint == GamePlatform::NSWITCH &&
+        !(ext == "xci" || ext == "nsp" || ext == "nca" || ext == "nro"))
+      continue;
+    if (ext == "sub") continue;  // .sub 永远是 CD 附属文件
+    const std::string dir = fsutil::dirOf(f);
+    // 目录内有 .cue → 只导入 .cue（跳过 img/bin/ccd/iso）
+    if (dirHas(hasCue, dir) &&
+        (ext == "img" || ext == "bin" || ext == "ccd" || ext == "iso"))
+      continue;
+    // 目录内有 .ccd → 跳过 img（sub 已跳过）
+    if (dirHas(hasCcd, dir) && ext == "img") continue;
+    // 目录内有 .gdi（DC）→ 跳过轨道文件
+    if (dirHas(hasGdi, dir) &&
+        (ext == "bin" || ext == "raw" || ext == "img" || ext == "iso"))
+      continue;
+    out.push_back(f);
+  }
+  return out;
+}
+
+// APK findDosLauncherInLocalFolder：DOS 页导入 = 找启动器（优先级表 →
+// 任意 .bat → 任意 .exe → 任意 .com），单条入库，标题 "folder(exec)"
+std::string findDosLauncher(const std::string& dir) {
+  static const char* kPriority[] = {
+      "play.bat",    "run.bat",     "start.bat", "autoexec.bat", "go.bat",
+      "launch.bat",  "main.bat",    "play.exe",  "run.exe",      "start.exe",
+      "setup.exe",   "game.exe",    "main.exe",  "launch.exe"};
+  std::vector<std::string> files;
+  try {
+    fsutil::walkFiles(dir, &files, 5);
+  } catch (...) {
+    return "";
+  }
+  std::string best;
+  int bestRank = 999;
+  std::string firstBat, firstExe, firstCom;
+  for (const auto& f : files) {
+    if (hiddenSegment(f)) continue;
+    const std::string ext = fsutil::extOf(f);
+    if (ext != "bat" && ext != "exe" && ext != "com") continue;
+    std::string name = fsutil::baseOf(f);
+    for (auto& c : name)
+      if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    for (size_t r = 0; r < sizeof(kPriority) / sizeof(kPriority[0]); r++) {
+      if (name == kPriority[r] && (int)r < bestRank) {
+        bestRank = (int)r;
+        best = f;
+      }
+    }
+    if (ext == "bat" && firstBat.empty()) firstBat = f;
+    if (ext == "exe" && firstExe.empty()) firstExe = f;
+    if (ext == "com" && firstCom.empty()) firstCom = f;
+  }
+  if (bestRank < 999) return best;
+  if (!firstBat.empty()) return firstBat;
+  if (!firstExe.empty()) return firstExe;
+  return firstCom;
+}
+
+// path 是否位于 dir 下（分隔符/大小写归一后前缀比较；Windows 盘符大小写兼容）
+bool pathUnder(const std::string& path, const std::string& dir) {
+  auto norm = [](std::string s) {
+    for (auto& c : s) {
+      if (c == '\\') c = '/';
+      c = (char)tolower((unsigned char)c);
+    }
+    return s;
+  };
+  std::string p = norm(path), d = norm(dir);
+  while (d.size() > 1 && d.back() == '/') d.pop_back();
+  if (d.empty()) return false;
+  return p.rfind(d + "/", 0) == 0;
+}
+
+}  // namespace
+
 void GameLibrary::load(const std::string& dataDir) {
   dataDir_ = dataDir;
   libraryFile_ = fsutil::join(dataDir, "library.json");
   coverDir_ = fsutil::join(dataDir, "covers");
   games_.clear();
   romDirs_.clear();
+  importedFolders_.clear();
 
   std::string text;
   if (fsutil::readFile(libraryFile_, &text)) {
@@ -127,6 +252,15 @@ void GameLibrary::load(const std::string& dataDir) {
           for (const auto& d : j["romDirs"])
             if (d.is_string()) romDirs_.push_back(d.get<std::string>());
         }
+        // ★v1.2.11 导入文件夹注册表（APK imported_folders 同构）
+        if (j.contains("importedFolders") && j["importedFolders"].is_array()) {
+          for (const auto& f : j["importedFolders"]) {
+            ImportedFolder im;
+            im.dir = f.value("dir", "");
+            im.platform = platformFromString(f.value("platform", "NES"));
+            if (!im.dir.empty()) importedFolders_.push_back(std::move(im));
+          }
+        }
       } else {
         LOGW("library.json 解析失败，重建库");
       }
@@ -134,7 +268,8 @@ void GameLibrary::load(const std::string& dataDir) {
       LOGW("library.json 读取异常: %s", e.what());
     }
   }
-  LOGI("游戏库载入：%zu 个游戏，%zu 个 ROM 目录", games_.size(), romDirs_.size());
+  LOGI("游戏库载入：%zu 个游戏，%zu 个 ROM 目录，%zu 个导入文件夹",
+       games_.size(), romDirs_.size(), importedFolders_.size());
 
   // ★v1.2.10 存量数据修复：旧版把识别不了的 ROM 全部入库为 NES（FC 核心）。
   //   载入时对「平台=NES 但扩展名非 NES 系」的条目重新识别，能确定真实
@@ -209,6 +344,14 @@ void GameLibrary::save() {
     j["games"].push_back(std::move(g));
   }
   j["romDirs"] = romDirs_;
+  // ★v1.2.11 导入文件夹注册表（APK imported_folders：[{uri,platform}] 同构）
+  j["importedFolders"] = json::array();
+  for (const auto& f : importedFolders_) {
+    json im;
+    im["dir"] = f.dir;
+    im["platform"] = platformShortName(f.platform);
+    j["importedFolders"].push_back(std::move(im));
+  }
   // ★error_handler=replace：非法 UTF-8 字节替换为 U+FFFD 而非抛异常
   //   （防御第二层：即使上层漏拦，保存也绝不闪退）
   const std::string text = j.dump(2, ' ', false, json::error_handler_t::replace);
@@ -257,7 +400,13 @@ bool GameLibrary::addRom(const std::string& romPath, GamePlatform platformHint,
       return false;
     }
   }
+  return addEntry(romPath, p);
+}
 
+// 入库（平台已判定）：去重/UTF-8/封面关联与标题美化
+bool GameLibrary::addEntry(const std::string& romPath, GamePlatform p) {
+  const std::string id = gameIdForPath(romPath);
+  if (find(id)) return false;
   GameEntry e;
   e.id = id;
   e.romPath = romPath;
@@ -314,8 +463,16 @@ int GameLibrary::scanDirectory(const std::string& dir, GamePlatform platformHint
 void GameLibrary::startBackgroundRescan(bool recursive) {
   joinScanThread();
   if (romDirs_.empty()) return;
+  scanKind_ = ScanKind::Startup;
   scanRunning_.store(true);
+  scanDone_.store(false);
   lastScanAdded_.store(0);
+  scanTotalAdded_.store(0);
+  {
+    std::lock_guard<std::mutex> lk(scanMu_);
+    pendingUseHint_ = false;  // 严格识别（自动扫描）
+    pendingHint_ = GamePlatform::NES;
+  }
   scanThread_ = std::thread([this, recursive] {
     std::vector<std::string> found;
     const std::vector<std::string> dirs = romDirs_;  // 启动早期快照（主循环前）
@@ -337,7 +494,97 @@ void GameLibrary::startBackgroundRescan(bool recursive) {
       pendingScan_ = std::move(found);
     }
     scanRunning_.store(false);
+    scanDone_.store(true);
   });
+}
+
+// ★v1.2.11 按平台导入文件夹（APK runLocalFolderImport + scanLocalFolderForRoms）
+//   后台线程：枚举（maxDepth=5）+ APK 过滤链；主线程：按平台页 hint 宽松
+//   识别入库（drainPendingScan）。文件夹注册到 importedFolders_（不碰全局
+//   ROM 目录 —— 刷新时按平台隔离重扫）。
+void GameLibrary::startBackgroundImport(const std::string& dir,
+                                        GamePlatform platformHint) {
+  joinScanThread();
+  if (!fsutil::isDir(dir) || !fsutil::isValidUtf8(dir)) return;
+  scanKind_ = ScanKind::ImportFolder;
+  scanRunning_.store(true);
+  scanDone_.store(false);
+  lastScanAdded_.store(0);
+  scanTotalAdded_.store(0);
+  {
+    std::lock_guard<std::mutex> lk(scanMu_);
+    pendingUseHint_ = true;  // 宽松识别（手动导入 = 用户意图优先）
+    pendingHint_ = platformHint;
+  }
+  // 先注册文件夹（APK setLastImportFolder：去重后追加，平台页隔离记忆）
+  addImportedFolder(dir, platformHint);
+  scanThread_ = std::thread([this, dir, platformHint] {
+    std::vector<std::string> found;
+    try {
+      if (platformHint == GamePlatform::DOS) {
+        // DOS 页：不扫 ROM，找启动器（APK findDosLauncherInLocalFolder）
+        const std::string launcher = findDosLauncher(dir);
+        if (!launcher.empty()) found.push_back(launcher);
+      } else {
+        std::vector<std::string> files;
+        fsutil::walkFiles(dir, &files, 5);  // APK maxDepth = 5
+        found = filterImportFiles(files, platformHint);
+      }
+    } catch (...) {
+      // 枚举异常 → 空结果（主循环会提示未找到可导入文件）
+    }
+    {
+      std::lock_guard<std::mutex> lk(scanMu_);
+      pendingScan_ = std::move(found);
+    }
+    scanRunning_.store(false);
+    scanDone_.store(true);
+  });
+}
+
+// ★v1.2.11 刷新（APK refreshList 核心隔离）：只重扫当前平台页导入的文件夹
+//（allFolders=true 时全部），严格识别（detectForRefresh 档：识别不了跳过），
+//   同步移除「该文件夹下、平台匹配、文件已不存在」的条目（APK 本地分支语义）
+std::pair<int, int> GameLibrary::refreshImportedFolders(GamePlatform platform,
+                                                        bool allFolders) {
+  const std::vector<ImportedFolder> folders =
+      allFolders ? importedFolders_ : importedFoldersFor(platform);
+  int added = 0, removed = 0;
+  for (const auto& f : folders) {
+    if (!fsutil::isDir(f.dir)) continue;
+    std::vector<std::string> files;
+    try {
+      if (f.platform == GamePlatform::DOS) {
+        const std::string launcher = findDosLauncher(f.dir);
+        if (!launcher.empty()) files.push_back(launcher);
+      } else {
+        std::vector<std::string> raw;
+        fsutil::walkFiles(f.dir, &raw, 5);
+        files = filterImportFiles(raw, f.platform);
+      }
+    } catch (...) {
+      continue;
+    }
+    for (const auto& file : files) {
+      if (find(gameIdForPath(file))) continue;  // 已在库
+      GamePlatform p;
+      if (!detectRomPlatformRefresh(file, f.platform, &p)) continue;  // 严格
+      if (addEntry(file, p)) added++;
+    }
+    // 移除：该文件夹下、平台匹配、文件已不存在（APK File.exists() 守卫）
+    std::vector<std::string> gone;
+    for (const auto& e : games_) {
+      if (e.platform != f.platform) continue;
+      if (!pathUnder(e.romPath, f.dir)) continue;
+      if (!fsutil::exists(e.romPath)) gone.push_back(e.id);
+    }
+    for (const auto& id : gone) {
+      remove(id);
+      removed++;
+    }
+  }
+  if (added > 0 || removed > 0) save();
+  return {added, removed};
 }
 
 bool GameLibrary::scanRunning() const { return scanRunning_.load(); }
@@ -353,17 +600,32 @@ size_t GameLibrary::pendingScanCount() const {
 //   界面全程流畅，剩余部分下一帧继续合入
 int GameLibrary::drainPendingScan() {
   std::vector<std::string> batch;
+  GamePlatform hint = GamePlatform::NES;
+  bool useHint = false;
   {
     std::lock_guard<std::mutex> lk(scanMu_);
     batch.swap(pendingScan_);
+    hint = pendingHint_;
+    useHint = pendingUseHint_;
   }
   if (batch.empty()) return 0;
+  const ScanKind kind = scanKind_;
   constexpr size_t kDrainBatch = 400;
   const size_t n = std::min(batch.size(), kDrainBatch);
   int added = 0;
   for (size_t i = 0; i < n; i++) {
     try {
-      if (addRom(batch[i], GamePlatform::NES, false)) added++;
+      if (addRom(batch[i], hint, useHint)) {
+        added++;
+        // DOS 导入：标题 = "folder(exec)"（APK findDosLauncherInLocalFolder）
+        if (kind == ScanKind::ImportFolder && hint == GamePlatform::DOS) {
+          if (GameEntry* e = find(gameIdForPath(batch[i]))) {
+            const std::string folder = fsutil::baseOf(fsutil::dirOf(batch[i]));
+            const std::string exec = fsutil::stemOf(batch[i]);
+            e->title = folder + "(" + exec + ")";
+          }
+        }
+      }
     } catch (...) {
     }
   }
@@ -372,6 +634,7 @@ int GameLibrary::drainPendingScan() {
     pendingScan_.insert(pendingScan_.begin(), batch.begin() + (long)n, batch.end());
   }
   lastScanAdded_.store(added);
+  scanTotalAdded_.store(scanTotalAdded_.load() + added);  // 会话累计
   return added;
 }
 
@@ -444,6 +707,30 @@ bool GameLibrary::addRomDir(const std::string& dir) {
 
 void GameLibrary::removeRomDir(const std::string& dir) {
   romDirs_.erase(std::remove(romDirs_.begin(), romDirs_.end(), dir), romDirs_.end());
+}
+
+// —— ★v1.2.11 导入文件夹注册表（APK RomStore.imported_folders 语义）——
+std::vector<ImportedFolder> GameLibrary::importedFoldersFor(GamePlatform p) const {
+  std::vector<ImportedFolder> out;
+  for (const auto& f : importedFolders_)
+    if (f.platform == p) out.push_back(f);
+  return out;
+}
+
+void GameLibrary::addImportedFolder(const std::string& dir, GamePlatform platform) {
+  if (!fsutil::isValidUtf8(dir)) return;
+  // APK setLastImportFolder：uri 已存在则不重复追加（目录复用，平台不变）
+  for (const auto& f : importedFolders_) {
+    if (f.dir == dir) return;
+  }
+  importedFolders_.push_back({dir, platform});
+}
+
+void GameLibrary::removeImportedFolder(const std::string& dir) {
+  importedFolders_.erase(
+      std::remove_if(importedFolders_.begin(), importedFolders_.end(),
+                     [&](const ImportedFolder& f) { return f.dir == dir; }),
+      importedFolders_.end());
 }
 
 }  // namespace ns

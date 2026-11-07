@@ -30,7 +30,15 @@ class EmuRunner {
   void resetCore();
   void setFastForward(bool ff);
   bool fastForward() const { return fastForward_; }
-  double coreFps() const { return coreFps_; }
+  // 核心标称帧率（av_info.timing.fps，实时 —— SET_SYSTEM_AV_INFO 后会更新）
+  double coreFps() const { return core_ ? core_->timingFps() : coreFps_; }
+
+  // ★v1.2.11 目标帧率（对齐 APK FramePacer 逐核心目标）：
+  //   NES/SFC/GB/GBA/MD/PCE/NDS/ARCADE/DOS → 硬编码 60（APK pace(t0, 60)，
+  //     不用 av_info 的 60.0988 —— FC 锁 60fps 的根源）；
+  //   PSX/DC/PSP（及 PC 进程内的 PS2/3DS/JAVA）→ round(av_info.fps)
+  //     值位 [30,600]（APK：NTSC 59.83→60，PAL 50→50）。
+  double targetFps() const;
 
   void runFrame();           // 一帧（含快进倍率）
   void runFrameOnce();       // 严格一帧

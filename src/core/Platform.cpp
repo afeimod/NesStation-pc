@@ -411,6 +411,92 @@ bool detectRomPlatformStrict(const std::string& romPath, GamePlatform* out) {
   return false;
 }
 
+// ★v1.2.11 刷新重扫判定（对齐 APK PlatformDetector.detectForRefresh）：
+//   严格档 + CD/MDF 镜像按 hint 消歧 + 7z/gz 仅街机页 + .app 仅 3DS 页。
+//   hint = 文件夹注册时的平台（核心隔离：只重扫当前平台页导入的文件夹）
+bool detectRomPlatformRefresh(const std::string& romPath, GamePlatform hint,
+                              GamePlatform* out) {
+  const std::string ext = toLower(fsutil::extOf(romPath));
+  if (ext == "apk") return false;
+  // zip：严格探头（同 detectFromFileStrict 的 detectZipStrict）
+  if (ext == "zip") return zipProbeLoose(romPath, GamePlatform::NES, out);
+  // .app：仅 3DS 页收（否则跳过 —— APK detectForRefresh 同）
+  if (ext == "app") {
+    if (hint == GamePlatform::N3DS) {
+      if (out) *out = GamePlatform::N3DS;
+      return true;
+    }
+    return false;
+  }
+  // 7z/gz：仅街机页收
+  if (ext == "7z" || ext == "gz") {
+    if (hint == GamePlatform::ARCADE) {
+      if (out) *out = GamePlatform::ARCADE;
+      return true;
+    }
+    return false;
+  }
+  // CD 镜像：内容嗅探优先；嗅探不出按 hint 消歧（APK REFRESH_HINT_ALLOWED）
+  if (extInList(ext, cdImageExts()) || ext == "mdf" || ext == "mds" ||
+      ext == "nrg") {
+    if (sniffCdImage(romPath, out)) return true;
+    switch (hint) {
+      case GamePlatform::MD: case GamePlatform::PCE: case GamePlatform::DOS:
+      case GamePlatform::PSX: case GamePlatform::PS2: case GamePlatform::DC:
+      case GamePlatform::N3DS: case GamePlatform::NGCWII:
+      case GamePlatform::PSP: case GamePlatform::WIIU:
+        if (out) *out = hint;
+        return true;
+      default:
+        return false;
+    }
+  }
+  return platformFromAutoWhitelist(ext, out);
+}
+
+// ★v1.2.11 手动导入主白名单（APK LibraryScreen.ROM_EXTENSIONS，序同源码）
+const std::vector<std::string>& romExtensionsMaster() {
+  static const std::vector<std::string> v = {
+      // NES
+      "nes", "fds", "unf", "unif", "nez", "unh",
+      // SNES
+      "smc", "sfc", "swc", "fig", "bs",
+      // GB/GBC/GBA
+      "gb", "sgb", "gbc", "gba",
+      // DOS bundle
+      "dosz",
+      // CD 镜像（hint 消歧）
+      "iso", "cue", "img", "ccd", "sub",
+      // MD/SMS/GG/SG
+      "md", "smd", "gen", "sms", "gg", "sg", "68k",
+      // 裸 bin（歧义）
+      "bin",
+      // Mega-CD CHD
+      "chd",
+      // PCE
+      "pce", "sgx", "hes",
+      // NDS
+      "nds", "app", "ids", "srl", "dsi",
+      // 3DS（.cia 走安装流程，不入库）
+      "3ds", "cci", "cxi",
+      // NGC/Wii
+      "gcm", "rvz", "gcz", "wbfs", "wad", "dol", "nkit", "ciso",
+      // Wii U
+      "wud", "wux", "wua", "wuhb", "rpx",
+      // PSX
+      "pbp", "m3u", "ecm", "mdf", "mds",
+      // DC/NAOMI
+      "gdi", "cdi", "lst",
+      // PSP
+      "cso", "elf",
+      // Switch
+      "xci", "nsp", "nca", "nro",
+      // 压缩包（街机）
+      "zip", "7z", "gz",
+  };
+  return v;
+}
+
 // 手动导入宽松判定（APK detectFromUri；hint = 导入时所在平台页）
 GamePlatform detectRomPlatformManual(const std::string& romPath, GamePlatform hint) {
   const std::string ext = toLower(fsutil::extOf(romPath));
@@ -793,6 +879,12 @@ GamePlatform platformFromExtension(const std::string& extRaw) {
 }
 
 GamePlatform platformFromString(const std::string& value) {
+  // ★v1.2.11 修复：先按平台短名原样匹配（库文件存的就是 platformShortName：
+  //   "GB/GBC"/"MD/SEGA"/"PCE/TG16"/"NGC/Wii"/"Wii U"…。旧版只走去符号归一化，
+  //   "GB/GBC"→"gbgbc"、"MD/SEGA"→"mdsega" 匹配不上任何别名 → 兑底 NES，
+  //   重启后 GB/MD/PCE 游戏全部变 FC 核心（「核心识别不了游戏」根因之一）。
+  for (GamePlatform p : allPlatforms())
+    if (value == platformShortName(p)) return p;
   const std::string v = normalizeAlias(value);
   if (v == "gbc" || v == "gameboycolor") return GamePlatform::GB;
   if (v == "nes" || v == "fc" || v == "famicom" || v == "fceumm" || v == "fceux" ||

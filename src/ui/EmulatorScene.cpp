@@ -3,6 +3,7 @@
 //   画面缩放 6 档 / 视频滤镜 11 档，游戏内改动写平台键）；自定义比例的
 //   四角拖动编辑器 1:1 复刻 ui/swf/ScreenPositionEditor.kt。
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -110,7 +111,11 @@ class EmulatorScene : public Scene {
       return;
     }
 
-    // —— 帧驱动（按核心标称频率步进；快进 ×N = 时间累加倍速）——
+    // —— 帧驱动（★v1.2.11 对齐 APK FramePacer：墙钟截止时间步进）——
+    //   APK 模拟线程：t0=now → runFrame → pace(t0, 1e9/fps)（到点才放行下一帧）。
+    //   PC 在渲染循环内等价实现：nextFrameAt_ 为下一帧的绝对时刻，每帧校验
+    //   到点才步进；步进预算 = 1/targetFps，快进 ÷speed（APK pace(t0, fps*ff)）。
+    //   → 无论 VSync 有无/刷新率多少，FC 恒 60.000fps（不再 80-120 乱跑）。
     // activeMult：Tab 按住用设置倍速，否则用菜单档位 ffLevel_（0 = 关）
     const int cfgMult = app.config.fastForwardSpeed > 1 ? app.config.fastForwardSpeed : 2;
     const Uint8* kbd = SDL_GetKeyboardState(nullptr);
@@ -120,17 +125,28 @@ class EmulatorScene : public Scene {
     {
       const int speed = (paused_ || menuOpen_) ? 0 : (activeMult > 1 ? activeMult : 1);
       if (speed > 0) {
-        const double step = 1.0 / (emu->coreFps() > 1.0 ? emu->coreFps() : 60.0);
-        accum_ += (double)dt * speed;
+        const double now =
+            (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count() /
+            1e9;
+        const double budget = 1.0 / emu->targetFps() / (double)speed;
+        if (!paceInit_) {
+          nextFrameAt_ = now;
+          paceInit_ = true;
+        }
         int guard = 0;
-        while (accum_ >= step && guard < 8) {
+        const int guardMax = speed > 1 ? 32 : 8;  // 卡顿补帧上限（APK 逐帧重锚，等价）
+        while (now >= nextFrameAt_ && guard < guardMax) {
           emu->runFrameOnce();
-          accum_ -= step;
+          emuFrames_++;  // FPS HUD 计模拟帧（APK onFrame 计数器），非渲染帧率
+          nextFrameAt_ += budget;
           guard++;
         }
-        if (accum_ > step * 8) accum_ = 0;  // 防积累发散
+        // 防积压发散：落后过多（卡顿/休眠唤醒）直接重锚，不追帧风暴
+        if (nextFrameAt_ < now - 0.25) nextFrameAt_ = now;
       } else {
-        accum_ = 0;
+        paceInit_ = false;  // 暂停/菜单：恢复时重新锚定（不追帧）
       }
       emu->setFastForward(activeMult > 1 && !paused_);
     }
@@ -381,12 +397,15 @@ class EmulatorScene : public Scene {
     app.video.draw(app.sdlRenderer(), gameArea, vp);
 
     // FPS HUD（对齐 Android：右上角胶囊，快进金色 / 常态青色，追加暂停态）
+    // ★v1.2.11：计「模拟帧」而非渲染帧 —— APK 的 fpsFrameCounter 在
+    //   onFrame（每次 runFrame 后）自增；旧版计 draw() 次数，高刷屏/
+    //   无 VSync 时显示 80-120（用户误以为没有帧数限制的根源）。
     if (app.config.showFps) {
-      fpsAccum_++;
       const Uint32 now = SDL_GetTicks();
+      if (fpsLast_ == 0) fpsLast_ = now;
       if (now - fpsLast_ > 500) {
-        fps_ = fpsAccum_ * 1000.0f / (now - fpsLast_);
-        fpsAccum_ = 0;
+        fps_ = (float)(emuFrames_ - fpsFramesBase_) * 1000.0f / (now - fpsLast_);
+        fpsFramesBase_ = emuFrames_;
         fpsLast_ = now;
       }
       std::string hud = "FPS " + std::to_string((int)(fps_ + 0.5f));
@@ -878,11 +897,14 @@ class EmulatorScene : public Scene {
   bool f5Prev_ = false, f6Prev_ = false, f7Prev_ = false, f8Prev_ = false;
   bool f11Prev_ = false;
   bool f12Prev_ = false;
-  double accum_ = 0;
+  // ★v1.2.11 FramePacer 状态（墙钟截止时间；替代旧 dt 累加器 accum_）
+  double nextFrameAt_ = 0;   // 下一模拟帧的绝对时刻（steady_clock 秒）
+  bool paceInit_ = false;
+  uint64_t emuFrames_ = 0;   // 模拟帧计数（FPS HUD 用，对齐 APK onFrame）
   float menuScroll_ = 0;   // ★v1.2.10 菜单行滚动（小窗口下长列表）
   bool followMenu_ = false;  // 键盘移动后焦点行跟随滚动一次
   float fps_ = 0;
-  int fpsAccum_ = 0;
+  uint64_t fpsFramesBase_ = 0;  // 上次 FPS 采样时的模拟帧计数
   Uint32 fpsLast_ = 0;
   App* app_ = nullptr;
 
