@@ -74,6 +74,10 @@ class GameLibrary {
   void rename(const std::string& id, const std::string& customTitle);
   void recordPlay(const std::string& id, int64_t seconds);
 
+  // ★v1.2.10 存量数据修复：对「平台=NES 但扩展名非 NES 系」的条目重新识别
+  //（旧版识别失败全兑底 NES 写入库；载入时自动修正）
+  void revalidatePlatforms();
+
   // 查询
   std::vector<GameEntry> byPlatform(GamePlatform p) const;
   std::vector<GameEntry> favorites() const;

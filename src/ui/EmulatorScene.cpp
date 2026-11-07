@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "emu/EmuRunner.h"
+#include "ui/OptionZh.h"
 #include "util/Fs.h"
 #include "retro/VideoBridge.h"
 #include "ui/Scenes.h"
@@ -142,6 +143,9 @@ class EmulatorScene : public Scene {
         menuOpen_ = true;
         menuIndex_ = 0;
         subMode_ = Sub::Main;
+        justOpened_ = true;  // ★v1.2.10 修复：呼出帧的同一次 Back/Menu 按下
+                             //   不得被 updateMenu 立即消费成「关闭」（
+                             //   Esc/F1 开菜单同帧开又关 = 菜单永远打不开）
         SDL_ShowCursor(SDL_ENABLE);
       }
       // F6 循环菜单档位 0→2→4→6→8→16→0（Tab 按住快进用设置倍速）
@@ -178,7 +182,10 @@ class EmulatorScene : public Scene {
       f12Prev_ = f12;
     }
 
-    if (menuOpen_) updateMenu(app, in);
+    if (menuOpen_) {
+      updateMenu(app, in);
+      justOpened_ = false;
+    }
   }
 
   // 快进档位循环（对齐 Android 菜单：0→2→4→6→8→16→0）
@@ -217,9 +224,18 @@ class EmulatorScene : public Scene {
     switch (subMode_) {
       case Sub::Main: {
         const int N = menuItemCount(app);
-        if (in.pressed[(int)Btn::Up]) menuIndex_ = (menuIndex_ + N - 1) % N;
-        if (in.pressed[(int)Btn::Down]) menuIndex_ = (menuIndex_ + 1) % N;
-        if (in.pressed[(int)Btn::Back] || in.pressed[(int)Btn::Menu]) closeMenu();
+        if (in.pressed[(int)Btn::Up]) {
+          menuIndex_ = (menuIndex_ + N - 1) % N;
+          followMenu_ = true;
+        }
+        if (in.pressed[(int)Btn::Down]) {
+          menuIndex_ = (menuIndex_ + 1) % N;
+          followMenu_ = true;
+        }
+        // ★v1.2.10：呼出帧的同一次按键不作为关闭指令（Esc/F1 开菜单修复）
+        if (!justOpened_ &&
+            (in.pressed[(int)Btn::Back] || in.pressed[(int)Btn::Menu]))
+          closeMenu();
         break;
       }
       case Sub::States:
@@ -227,11 +243,18 @@ class EmulatorScene : public Scene {
       case Sub::Disk: {
         const int N = subItemCount(app);
         if (N > 0) {
-          if (in.pressed[(int)Btn::Up]) subIndex_ = (subIndex_ + N - 1) % N;
-          if (in.pressed[(int)Btn::Down]) subIndex_ = (subIndex_ + 1) % N;
+          if (in.pressed[(int)Btn::Up]) {
+            subIndex_ = (subIndex_ + N - 1) % N;
+            followMenu_ = true;
+          }
+          if (in.pressed[(int)Btn::Down]) {
+            subIndex_ = (subIndex_ + 1) % N;
+            followMenu_ = true;
+          }
         }
         if (in.pressed[(int)Btn::Back] || in.pressed[(int)Btn::Menu]) {
           subMode_ = Sub::Main;
+          menuScroll_ = 0;
         }
         break;
       }
@@ -246,7 +269,8 @@ class EmulatorScene : public Scene {
   }
 
   int menuItemCount(App& app) const {
-    // 继续/暂停/重置/存档/读档/快进/截图/画面设置/退出（对齐 Android 游戏内菜单）
+    // 继续/暂停/重置/存档/读档/快进/截图/画面设置/退出（对齐 APK 游戏内菜单顺序；
+    // 核心设置与磁盘切换按条件插入，与 drawMenu 的 idx 顺序一致）
     int n = 9;
     EmuRunner* emu = app.activeEmu();
     if (emu && emu->core() && emu->core()->diskControl().available() &&
@@ -256,23 +280,81 @@ class EmulatorScene : public Scene {
     return n;
   }
 
+  // ★v1.2.10 行号体系：子页第 0 行统一为「‹ 返回主菜单」，其余顺延
   int subItemCount(App& app) const {
-    if (subMode_ == Sub::States) return 12;  // 槽位 0-10
-    if (subMode_ == Sub::Video) return videoRowCount(app);
+    if (subMode_ == Sub::States) return 12;  // 返回 + 槽位 0-10
+    if (subMode_ == Sub::Video) return videoRowCount(app) + 1;  // + 返回行
     if (subMode_ == Sub::Disk) {
       EmuRunner* emu = app.activeEmu();
-      if (emu && emu->core()) return (int)emu->core()->diskControl().numImages();
+      if (emu && emu->core())
+        return (int)emu->core()->diskControl().numImages() + 1;  // + 返回行
+      return 1;
     }
     return 0;
   }
 
-  // 画面设置子页行数（APK SettingsPanel：画面缩放/视频滤镜 + PC 增强行）
+  // 画面设置子页行数（不含返回行；★v1.2.10 新增「高清缩放」行）
   int videoRowCount(App& app) const {
     EmuRunner* emu = app.activeEmu();
-    int n = 5;  // 画面缩放 / 视频滤镜 / 整数缩放 / 平滑缩放 / 显示 FPS
+    int n = 6;  // 画面缩放 / 视频滤镜 / 高清缩放 / 整数缩放 / 平滑缩放 / 显示 FPS
     if (emu && platformIsDualScreen(emu->game().platform)) n++;  // 双屏布局
     n++;  // 全屏切换
     return n;
+  }
+
+  // —— ★v1.2.10 高清缩放（内部分辨率倍数）——
+  // 在当前核心选项中定位「内部分辨率/分辨率倍数」类选项（已知键名优先，
+  // 描述特征兜底）。返回 nullptr = 该核心不支持（2D 核心等）。
+  const CoreOption* hdOption(App& app) const {
+    EmuRunner* emu = app.activeEmu();
+    if (!emu || !emu->core() || !emu->isLibretro()) return nullptr;
+    // 已知键名表（libretro 常见 3D 核心的内部分辨率选项）
+    static const char* kHdKeys[] = {
+        "pcsx_rearmed_internal_resolution",  // PSX 分辨率倍数 1x-4x
+        "pcsx2_upscale_multiplier",          // PS2 分辨率倍数 1x-6x
+        "melonds_gles_resolution",           // NDS 渲染分辨率 1x-8x
+        "reicast_internal_resolution",       // Flycast(DC) 内部分辨率
+        "flycast_internal_resolution",
+        "citra_resolution",                  // 3DS (Citra) 分辨率
+        "azahar_resolution",                 // 3DS (Azahar) 分辨率
+    };
+    for (const auto& o : emu->core()->options())
+      for (const char* k : kHdKeys)
+        if (o.key == k) return &o;
+    // 描述特征兜底（新核心/改名键）
+    for (const auto& o : emu->core()->options()) {
+      if (!o.visible || o.values.empty()) continue;
+      if (o.desc.find("内部分辨率") != std::string::npos ||
+          o.desc.find("Internal Resolution") != std::string::npos ||
+          o.desc.find("Resolution Multiplier") != std::string::npos ||
+          o.desc.find("Render Resolution") != std::string::npos ||
+          o.desc.find("分辨率倍数") != std::string::npos)
+        return &o;
+    }
+    return nullptr;
+  }
+
+  // 高清缩放当前档位索引（持久层值 → 选项索引；未存储用核心默认）
+  int hdValueIndex(App& app, const CoreOption* o) const {
+    EmuRunner* emu = app.activeEmu();
+    if (!emu || !emu->core() || !o || o->values.empty()) return 0;
+    const std::string cur = app.cores.resolveOption(
+        app.cores.resolveCore(emu->game().platform).coreFile, o->key);
+    if (!cur.empty())
+      for (size_t v = 0; v < o->values.size(); v++)
+        if (cur == o->values[v]) return (int)v;
+    return o->defaultValue;
+  }
+
+  // 应用高清缩放档位（写运行中核心 + 持久层）
+  void applyHdOption(App& app, const CoreOption* o, int idx) {
+    EmuRunner* emu = app.activeEmu();
+    if (!emu || !emu->core() || !o || idx < 0 || idx >= (int)o->values.size()) return;
+    const std::string val = o->values[(size_t)idx];
+    emu->core()->setOptionValue(o->key, val);
+    app.cores.storeOption(app.cores.resolveCore(emu->game().platform).coreFile,
+                          o->key, val);
+    app.toast("高清缩放已应用（部分核心需重开游戏生效）");
   }
 
   void draw(App& app) override {
@@ -478,121 +560,159 @@ class EmulatorScene : public Scene {
     }
   }
 
+  // ======================= 游戏内菜单（★v1.2.10：上方一列竖排） =======================
+  // 用户要求 + APK MenuOverlay 视觉语言：菜单贴屏幕顶部、窄列竖排；
+  // 面板 #DD1E2A3A 圆角 16dp、分隔线 20% 白、游戏名副行；
+  // 菜单项/快捷键标注按 PC 键位（F7 暂停 / F5 存 / F8 读 / Tab 快进 / F12 截图）。
+  // 菜单项顺序对齐 APK：继续 → 暂停(F7) → 重置 → 存档(F5) → 读档(F8) →
+  // 快进(Tab) → 截图(F12) → 画面设置 → 核心设置 → [切换磁盘] → 退出游戏
   void drawMenu(App& app) {
     const Skin& sk = Theme::skin();
-    // 暗化背景
-    app.draw.rect(Rect(0, 0, app.draw.W, app.draw.H), Color8(0, 0, 0, 140));
-
+    Draw& d = app.draw;
     EmuRunner* emu = app.activeEmu();
-    const float panelW = 460;
-    const float panelH = 560;
-    Rect panel(app.draw.W / 2 - panelW / 2, app.draw.H / 2 - panelH / 2, panelW, panelH);
-    // 点击面板外 = 关闭菜单
-    {
-      const InputState& in = app.input.input();
-      if (in.mousePressed && !panel.contains(in.mouse)) {
-        closeMenu();
-        return;
-      }
-    }
-    skinPanel(app.draw, panel, true, 14);
-
-    const float pad = 24;
-    app.font.draw(app.sdlRenderer(), "游戏菜单", panel.x + pad, panel.y + 20, 22, sk.textHi,
-                  true);
-    app.font.draw(app.sdlRenderer(), emu ? emu->game().displayTitle() : "", panel.x + pad,
-                  panel.y + 52, 13, sk.textDim);
-    app.draw.line(panel.x + pad, panel.y + 74, panel.right() - pad, panel.y + 74, sk.line, 1);
-
     const InputState& in = app.input.input();
-    float y = panel.y + 90;
-    const float rowH = 46;
 
-    auto row = [&](const std::string& icon, const std::string& title, int idx,
-                   const std::string& value = "") {
-      if (subMode_ != Sub::Main) return false;
-      const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, rowH);
-      const bool focused = menuIndex_ == idx;
-      const bool act = w::listRow(app, rc, title, value, focused);
-      if (focused && (in.pressed[(int)Btn::Up] || in.pressed[(int)Btn::Down])) {
-        // 焦点行不响应鼠标 hover 抢占
+    // 全屏压暗（APK MenuOverlay 遮罩 0x88000000）
+    d.rect(Rect(0, 0, (float)d.W, (float)d.H), Color8(0, 0, 0, 136));
+
+    // —— 面板几何：顶部居中一列 ——
+    const float pad = 14, rowH = 42, rowGap = 4, headH = 58;
+    const float pw = std::min(348.0f, (float)d.W - 20.0f);
+    // ★行数：Main 用 menuItemCount（subItemCount 对 Main 返回 0 —— 曾致
+    //   面板只剩标题区、行区零高度裁剪，菜单项全部不显示）
+    const float rows = (float)(subMode_ == Sub::Main ? menuItemCount(app)
+                                                     : subItemCount(app));
+    const float ph = std::min(headH + 8 + rows * (rowH + rowGap), (float)d.H - 18.0f);
+    const Rect panel((float)d.W / 2 - pw / 2, 10, pw, ph);
+    // 点击面板外 = 关闭菜单
+    if (in.mousePressed && !panel.contains(in.mouse)) {
+      closeMenu();
+      return;
+    }
+    // 面板底色（APK #DD1E2A3A · 圆角 16dp）+ 微弱描边
+    d.roundRect(panel, 16, Color8::hex(0x1E2A3A, 0xDD));
+    d.roundRectOutline(panel, 16, Color8(255, 255, 255, 34), 1.2f);
+
+    // —— 标题行（标题 + 游戏名副行）+ 分隔线（APK 20% 白）——
+    const char* title = subMode_ == Sub::States
+                            ? (saveMode_ ? "保存即时存档" : "读取即时存档")
+                            : subMode_ == Sub::Video ? "画面设置"
+                            : subMode_ == Sub::Disk ? "切换磁盘"
+                                                    : "游戏菜单";
+    app.font.draw(app.sdlRenderer(), title, panel.x + pad, panel.y + 11, 16, sk.textHi,
+                  true);
+    if (emu) {
+      app.font.draw(app.sdlRenderer(),
+                    app.font.ellipsize(emu->game().displayTitle(), 11, pw - pad * 2),
+                    panel.x + pad, panel.y + 36, 11, Color8(0xAA, 0xB8, 0xC8));
+    }
+    d.line(panel.x + pad, panel.y + headH - 9, panel.right() - pad, panel.y + headH - 9,
+           Color8(255, 255, 255, 51), 1);
+
+    // —— 行区域（滚轮/拖拽滚动 + 裁剪；小窗口下列表也能滚到底） ——
+    const Rect rowsRc(panel.x + 8, panel.y + headH, pw - 16, ph - headH - 8);
+    menuScroll_ += w::dragScroll(app, rowsRc);
+    if (rowsRc.contains(in.mouse)) menuScroll_ -= (float)in.wheel * (rowH + rowGap);
+    const float contentH = rows * (rowH + rowGap);
+    const float maxScroll = contentH > rowsRc.h ? contentH - rowsRc.h : 0.0f;
+    // 键盘上下移动时焦点行跟随滚动一次（不与拖拽滚动打架）
+    if (followMenu_) {
+      followMenu_ = false;
+      const int cur = subMode_ == Sub::Main ? menuIndex_ : subIndex_;
+      const float rowY = (float)cur * (rowH + rowGap) - menuScroll_;
+      if (rowY < 0) menuScroll_ += rowY;
+      if (rowY > rowsRc.h - rowH) menuScroll_ += rowY - (rowsRc.h - rowH);
+    }
+    menuScroll_ = std::max(0.0f, std::min(menuScroll_, maxScroll));
+    d.pushClip(rowsRc);
+    float y = rowsRc.y - menuScroll_;
+
+    // 行绘制：标题左 + 快捷键/值右（listRow 内含 hover/点击/焦点高亮）
+    auto row = [&](const std::string& t, int idx, const std::string& value = "",
+                   bool enabled = true) {
+      const Rect rc(panel.x + 8, y, pw - 16, rowH);
+      const bool focused =
+          subMode_ == Sub::Main ? menuIndex_ == idx : subIndex_ == idx;
+      y += rowH + rowGap;
+      if (!enabled) {  // 不可用行（如核心不支持高清缩放）：灰显不可点
+        app.font.drawVCentered(app.sdlRenderer(), t, rc.x + 14, rc.cy(), 15, sk.textDim);
+        if (!value.empty())
+          app.font.drawVCentered(app.sdlRenderer(), value,
+                                 rc.right() - 14 - app.font.textWidth(value, 13), rc.cy(),
+                                 13, sk.textDim);
+        return false;
       }
-      y += rowH + 6;
-      return act;
+      return w::listRow(app, rc, t, value, focused);
     };
 
     switch (subMode_) {
       case Sub::Main: {
         int idx = 0;
-        if (row("", "继续游戏", idx++)) closeMenu();
-        if (row("", paused_ ? "继续（取消暂停）" : "暂停游戏", idx++, "F7")) {
+        if (row("继续游戏", idx++)) closeMenu();
+        if (row(paused_ ? "继续游戏（取消暂停）" : "暂停游戏", idx++, "F7")) {
           paused_ = !paused_;
           closeMenu();
         }
-        if (row("", "重置", idx++)) {
+        if (row("重置", idx++)) {
           if (emu) emu->resetCore();
           app.toast("已重置");
           closeMenu();
         }
-        if (row("", "即时存档", idx++, "F5")) {
+        if (row("即时存档", idx++, "F5")) {
           subMode_ = Sub::States;
           subIndex_ = 0;
+          menuScroll_ = 0;
           saveMode_ = true;
         }
-        if (row("", "即时读档", idx++, "F8")) {
+        if (row("即时读档", idx++, "F8")) {
           subMode_ = Sub::States;
           subIndex_ = 0;
+          menuScroll_ = 0;
           saveMode_ = false;
         }
-        if (row("", ffLevel_ > 1 ? "快进（点击换挡）" : "快进（关）", idx++,
+        if (row(ffLevel_ > 1 ? "快进（点击换挡）" : "快进（关）", idx++,
                 ffLevel_ > 1 ? "×" + std::to_string(ffLevel_) : "Tab")) {
           cycleFfLevel(app);
         }
-        if (row("", "截图", idx++, "F12")) {
+        if (row("截图", idx++, "F12")) {
           closeMenu();
           takeScreenshot(app);
         }
-        if (emu && emu->core() && emu->core()->diskControl().available() &&
-            emu->core()->diskControl().numImages() > 1) {
-          if (row("", "切换磁盘", idx++, "")) {
-            subMode_ = Sub::Disk;
-            subIndex_ = 0;
-          }
-        }
-        if (row("", "画面设置", idx++)) {
+        if (row("画面设置", idx++)) {
           subMode_ = Sub::Video;
           subIndex_ = 0;
+          menuScroll_ = 0;
         }
         if (emu && emu->core() && !emu->core()->options().empty()) {
-          if (row("", "核心设置", idx++)) {
+          if (row("核心设置", idx++)) {
             app.pushScene(createCoreOptionsScene(emu->game().platform));
             menuOpen_ = false;
           }
         }
-        if (row("", "退出游戏", idx++, "自动存档")) {
+        if (emu && emu->core() && emu->core()->diskControl().available() &&
+            emu->core()->diskControl().numImages() > 1) {
+          if (row("切换磁盘", idx++)) {
+            subMode_ = Sub::Disk;
+            subIndex_ = 0;
+            menuScroll_ = 0;
+          }
+        }
+        if (row("退出游戏", idx++, "自动存档")) {
+          d.popClip();
           exitGame(app);
           return;
         }
         break;
       }
       case Sub::States: {
-        // 子页顶部返回行（鼠标玩家可见的返回入口）
-        {
-          const Rect rc(panel.x + pad * 0.5f, panel.y + 88, panelW - pad, 36);
-          if (w::listRow(app, rc, "‹ 返回主菜单", "", false)) subMode_ = Sub::Main;
-        }
-        app.font.draw(app.sdlRenderer(), saveMode_ ? "存档到槽位" : "读取槽位",
-                      panel.x + pad, panel.y + 132, 18, sk.accent, true);
-        y = panel.y + 168;
+        if (row("‹ 返回主菜单", 0)) subMode_ = Sub::Main;
         const auto existing = emu ? emu->slots(app) : std::vector<int>{};
         for (int slot = 0; slot <= 10; slot++) {
-          if (y > panel.bottom() - 60) break;
-          const std::string name = slot == 0 ? "槽位 A（自动）" : ("槽位 " + std::to_string(slot));
-          const bool has = std::find(existing.begin(), existing.end(), slot) != existing.end();
-          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 40);
-          const bool focused = subIndex_ == slot;
-          const std::string val = has ? "● 有档" : "—";
-          if (w::listRow(app, rc, name, val, focused)) {
+          const std::string name =
+              slot == 0 ? "槽位 A（自动）" : ("槽位 " + std::to_string(slot));
+          const bool has =
+              std::find(existing.begin(), existing.end(), slot) != existing.end();
+          if (row(name, slot + 1, has ? "● 有档" : "— 空")) {
             if (emu) {
               if (saveMode_) {
                 if (emu->saveStateSlot(app, slot))
@@ -608,103 +728,129 @@ class EmulatorScene : public Scene {
             }
             subMode_ = Sub::Main;
           }
-          y += 46;
         }
         break;
       }
       case Sub::Video: {
-        {
-          const Rect rc(panel.x + pad * 0.5f, panel.y + 88, panelW - pad, 36);
-          if (w::listRow(app, rc, "‹ 返回主菜单", "", false)) subMode_ = Sub::Main;
-        }
-        app.font.draw(app.sdlRenderer(), "画面设置", panel.x + pad, panel.y + 132, 18,
-                      sk.accent, true);
-        y = panel.y + 168;
+        if (row("‹ 返回主菜单", 0)) subMode_ = Sub::Main;
         const GamePlatform plat = emu ? emu->game().platform : GamePlatform::NES;
-        // —— 画面缩放（APK SettingsPanel DropdownSetting「画面缩放」）——
+        int idx = 1;
+        // —— 画面缩放（整体窗口比例；APK SettingsPanel「画面缩放」） ——
         {
-          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          int idx = indexFor(videoScaleKeys(), platformVideoScale(app, plat));
-          if (w::cycleRow(app, rc, "画面缩放", videoScaleOptions(), idx,
-                          subIndex_ == 0)) {
-            const std::string v = videoScaleKeys()[idx];
+          const Rect rc(panel.x + 8, y, pw - 16, rowH);
+          int vi = indexFor(videoScaleKeys(), platformVideoScale(app, plat));
+          if (w::cycleRow(app, rc, "画面缩放", videoScaleOptions(), vi,
+                          subIndex_ == idx)) {
+            const std::string v = videoScaleKeys()[vi];
             setPlatformVideoScale(app, plat, v);
-            if (v == "custom") enterLayoutEditor(app);  // APK：选 custom 直进编辑器
+            if (v == "custom") {  // APK：选 custom 直进四角编辑器
+              d.popClip();
+              enterLayoutEditor(app);
+              return;
+            }
           }
-          y += 50;
+          y += rowH + rowGap;
+          idx++;
         }
-        // —— 视频滤镜（APK SettingsPanel DropdownSetting「视频滤镜」11 档）——
+        // —— 视频滤镜（叠加滤镜 11 档） ——
         {
-          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          int idx = indexFor(videoFilterKeys(), platformVideoFilter(app, plat));
-          if (w::cycleRow(app, rc, "视频滤镜", videoFilterOptions(), idx,
-                          subIndex_ == 1)) {
-            setPlatformVideoFilter(app, plat, videoFilterKeys()[idx]);
+          const Rect rc(panel.x + 8, y, pw - 16, rowH);
+          int fi = indexFor(videoFilterKeys(), platformVideoFilter(app, plat));
+          if (w::cycleRow(app, rc, "视频滤镜", videoFilterOptions(), fi,
+                          subIndex_ == idx)) {
+            setPlatformVideoFilter(app, plat, videoFilterKeys()[fi]);
           }
-          y += 50;
+          y += rowH + rowGap;
+          idx++;
         }
-        // —— 整数缩放（PC 增强：像素完美）——
+        // —— ★v1.2.10 高清缩放（内部分辨率倍数 —— 3D 核心内部渲染分辨率，
+        //    非整体画面缩放；对齐 APK PSX「分辨率倍数 (立即生效)」/
+        //    PS2「分辨率倍数」/ NDS「渲染分辨率」/ DC「内部分辨率」） ——
         {
-          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
+          const CoreOption* hd = hdOption(app);
+          if (hd && !hd->values.empty()) {
+            const Rect rc(panel.x + 8, y, pw - 16, rowH);
+            int cur = hdValueIndex(app, hd);
+            std::vector<std::string> labels;
+            labels.reserve(hd->labels.size());
+            for (const auto& lb : hd->labels) labels.push_back(zhOptionValue(lb));
+            if (w::cycleRow(app, rc, "高清缩放（内部分辨率）", labels, cur,
+                            subIndex_ == idx)) {
+              applyHdOption(app, hd, cur);
+            }
+          } else {
+            // 2D 核心等无内部分辨率概念：明确提示而非缺行（用户点名要该项）
+            row("高清缩放（内部分辨率）", idx, "不支持", false);
+          }
+          y += rowH + rowGap;
+          idx++;
+        }
+        // —— 整数缩放（像素完美） ——
+        {
+          const Rect rc(panel.x + 8, y, pw - 16, rowH);
           if (w::toggleRow(app, rc, "整数缩放（像素完美）", app.config.integerScale,
-                           subIndex_ == 2))
+                           subIndex_ == idx))
             app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          y += 50;
+          y += rowH + rowGap;
+          idx++;
         }
+        // —— 平滑缩放 ——
         {
-          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          if (w::toggleRow(app, rc, "平滑缩放", app.config.videoSmooth, subIndex_ == 3))
+          const Rect rc(panel.x + 8, y, pw - 16, rowH);
+          if (w::toggleRow(app, rc, "平滑缩放", app.config.videoSmooth,
+                           subIndex_ == idx))
             app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          y += 50;
+          y += rowH + rowGap;
+          idx++;
         }
+        // —— 显示 FPS ——
         {
-          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          if (w::toggleRow(app, rc, "显示 FPS", app.config.showFps, subIndex_ == 4))
+          const Rect rc(panel.x + 8, y, pw - 16, rowH);
+          if (w::toggleRow(app, rc, "显示 FPS", app.config.showFps,
+                           subIndex_ == idx))
             app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          y += 50;
+          y += rowH + rowGap;
+          idx++;
         }
         if (emu && platformIsDualScreen(emu->game().platform)) {
-          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
+          const Rect rc(panel.x + 8, y, pw - 16, rowH);
           std::vector<std::string> opts = {"双屏", "仅上屏", "仅下屏"};
           if (w::cycleRow(app, rc, "双屏布局", opts, app.config.dualLayout,
-                          subIndex_ == 5))
+                          subIndex_ == idx))
             app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          y += 50;
+          y += rowH + rowGap;
+          idx++;
         }
         {
-          const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 44);
-          if (w::listRow(app, rc, "全屏切换", "F11", subIndex_ == 6)) app.toggleFullscreen();
-          y += 50;
+          const Rect rc(panel.x + 8, y, pw - 16, rowH);
+          if (w::listRow(app, rc, "全屏切换", "F11", subIndex_ == idx))
+            app.toggleFullscreen();
+          y += rowH + rowGap;
+          idx++;
         }
         break;
       }
       case Sub::Disk: {
-        {
-          const Rect rc(panel.x + pad * 0.5f, panel.y + 88, panelW - pad, 36);
-          if (w::listRow(app, rc, "‹ 返回主菜单", "", false)) subMode_ = Sub::Main;
-        }
-        app.font.draw(app.sdlRenderer(), "切换磁盘", panel.x + pad, panel.y + 132, 18,
-                      sk.accent, true);
-        y = panel.y + 168;
+        if (row("‹ 返回主菜单", 0)) subMode_ = Sub::Main;
         if (emu && emu->core()) {
           DiskControl& dc = emu->core()->diskControl();
           const unsigned n = dc.numImages();
-          for (unsigned i = 0; i < n && y < panel.bottom() - 60; i++) {
-            const Rect rc(panel.x + pad * 0.5f, y, panelW - pad, 40);
-            if (w::listRow(app, rc, dc.imageLabel(i), "", subIndex_ == (int)i)) {
+          for (unsigned i = 0; i < n; i++) {
+            if (row(dc.imageLabel(i), (int)i + 1)) {
               if (dc.select(i)) app.toast("已切换：" + dc.imageLabel(i));
               subMode_ = Sub::Main;
             }
-            y += 46;
           }
         }
         break;
       }
     }
+    d.popClip();
 
     w::keyHintBar(app, {
+                          {"↑↓", "选择"},
                           {"A / 点击", "确认"},
-                          {"B / Esc / 右键", "返回"},
+                          {"B / Esc", "返回"},
                           {"点击面板外", "关闭"},
                       });
   }
@@ -720,6 +866,7 @@ class EmulatorScene : public Scene {
  private:
   enum class Sub { Main, States, Video, Disk };
   bool menuOpen_ = false;
+  bool justOpened_ = false;  // ★v1.2.10 呼出帧的同一次按键不触发关闭
   bool wasFullscreen_ = true;   // ★v1.2.6 进入游戏前的全屏状态（自动全屏恢复用）
   Sub subMode_ = Sub::Main;
   int menuIndex_ = 0;
@@ -732,6 +879,8 @@ class EmulatorScene : public Scene {
   bool f11Prev_ = false;
   bool f12Prev_ = false;
   double accum_ = 0;
+  float menuScroll_ = 0;   // ★v1.2.10 菜单行滚动（小窗口下长列表）
+  bool followMenu_ = false;  // 键盘移动后焦点行跟随滚动一次
   float fps_ = 0;
   int fpsAccum_ = 0;
   Uint32 fpsLast_ = 0;

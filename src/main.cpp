@@ -82,6 +82,18 @@ SDL_Event synthButton(bool down, int x, int y) {
   e.button.y = y;
   return e;
 }
+// 合成键盘事件（gamemenu/gamevideo 步骤用）
+SDL_Event synthKey(SDL_Scancode sc, bool down) {
+  SDL_Event e;
+  SDL_zero(e);
+  e.type = down ? SDL_KEYDOWN : SDL_KEYUP;
+  e.key.windowID = 1;
+  e.key.keysym.scancode = sc;
+  e.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+  e.key.state = down ? SDL_PRESSED : SDL_RELEASED;
+  e.key.repeat = 0;
+  return e;
+}
 
 void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
   st.synthFrame = -1;
@@ -290,6 +302,48 @@ void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
     }
     if (pick)
       app.pushScene(ns::createCorePickerScene(*pick, [](const std::string&) {}));
+  } else if (name == "gamemenu") {
+    // ★v1.2.10 游戏内菜单回归：造 ROM → 启动 → 第 12 帧按 Esc 呼出菜单 →
+    //   截图应为「上方一列竖排菜单」（继续游戏/暂停游戏F7/重置/即时存档F5/…）
+    {
+      const std::string dir = "/tmp/nesstation-selftest-roms";
+      fsutil::makeDirs(dir);
+      {
+        std::ofstream f(fsutil::join(dir, "菜单测试.nes"), std::ios::binary);
+        f << "NES\x1a" << std::string(64, '\0');
+      }
+      app.library.addRomDir(dir);
+      app.library.scanDirectory(dir, ns::GamePlatform::NES, false, false);
+      app.library.save();
+      const auto& games = app.library.games();
+      if (!games.empty()) app.launchGame(games.back());
+      st.synthFrame = 0;
+      st.synth[12].push_back(synthKey(SDL_SCANCODE_ESCAPE, true));
+      st.synth[14].push_back(synthKey(SDL_SCANCODE_ESCAPE, false));
+    }
+  } else if (name == "gamevideo") {
+    // ★v1.2.10 画面设置子页回归：游戏内菜单 → 点「画面设置」行（含高清缩放行）
+    {
+      const std::string dir = "/tmp/nesstation-selftest-roms";
+      fsutil::makeDirs(dir);
+      {
+        std::ofstream f(fsutil::join(dir, "菜单测试.nes"), std::ios::binary);
+        f << "NES\x1a" << std::string(64, '\0');
+      }
+      app.library.addRomDir(dir);
+      app.library.scanDirectory(dir, ns::GamePlatform::NES, false, false);
+      app.library.save();
+      const auto& games = app.library.games();
+      if (!games.empty()) app.launchGame(games.back());
+      st.synthFrame = 0;
+      st.synth[12].push_back(synthKey(SDL_SCANCODE_ESCAPE, true));  // 呼出菜单
+      st.synth[14].push_back(synthKey(SDL_SCANCODE_ESCAPE, false));
+      // 面板：W/2±174、顶 y=10；主菜单第 8 行（画面设置，idx 7）
+      // 行区起 y=10+58=68，行高 46 → 行中心逻辑 y ≈ 68+7*46+23 = 413（×1.375 物理）
+      st.synth[18].push_back(synthMotion(640, 568, 0, 0));
+      st.synth[19].push_back(synthButton(true, 640, 568));
+      st.synth[21].push_back(synthButton(false, 640, 568));
+    }
   } else if (name == "ctxmenu") {
     // 右键上下文菜单组件（Android「长按卡片」等价交互）
     std::vector<ns::ContextMenuItem> items;

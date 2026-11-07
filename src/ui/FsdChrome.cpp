@@ -236,10 +236,11 @@ const GamePlatform kHomePlatformOrder[16] = {
 
 namespace w {
 
-// dp（与主页 NeonHome::dpOf 同式：720p 基准，窄窗收缩）
+// dp（与主页 NeonHome::dpOf 同式：★v1.2.10 改 540/960 基准 —— 对齐逻辑画布
+// 与 APK 横屏密度；旧 720/1280 基准在 540 基准画布上恒乘 0.75，FSD 文字整体偏小）
 static float dpOf(const App& app) {
-  const float dH = (float)app.draw.H / 720.0f;
-  const float dW = (float)app.draw.W / 1280.0f;
+  const float dH = (float)app.draw.H / 540.0f;
+  const float dW = (float)app.draw.W / 960.0f;
   return std::max(0.7f, std::min(dH, dW));
 }
 
@@ -319,6 +320,14 @@ void fsdButtonHints(App& app, float cy, const std::vector<FsdHint>& hints) {
   for (const auto& h : hints)
     totalW += 20 * D + 5 * D + app.font.textWidth(h.label, 11 * D) + 14 * D;
   totalW -= 14 * D;
+  // ★v1.2.10：加 BarBg 半透明底条（APK 底/顶栏同款 80% 黑蓝）——
+  //   无底条时提示直接浮在磁贴上，视觉混杂
+  const float barH = 32 * D;
+  {
+    const Rect bar((float)d.W * 0.5f - totalW / 2 - 14 * D, cy - barH * 0.5f,
+                   totalW + 28 * D, barH);
+    d.roundRect(bar, 6 * D, Color8::hex(0x061225, 0xB3));
+  }
   float x = (float)d.W * 0.5f - totalW / 2;
   for (const auto& h : hints) {
     const float r = 10 * D;

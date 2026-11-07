@@ -34,17 +34,30 @@ class ContextMenuScene : public Scene {
     panel_.w = w;
     panel_.h = h;
     // 右下展开；越界翻转（对齐桌面右键菜单习惯）
+    // ★v1.2.10：旧版 1280×720 硬编码 —— 大逻辑画布（固定缩放/大窗）下
+    //   右下角右键不翻转导致菜单出屏。构造时无 App 引用，翻转延迟到首帧
+    //   layout(App&) 里按真实 draw.W/H 计算（首帧前 panel_ 仍用保守估位）。
     float x = at_.x + 6, y = at_.y + 6;
-    if (x + w > 1280 - 16) x = at_.x - w - 6;
-    if (y + h > 720 - 56) y = at_.y - h - 6;
     if (x < 8) x = 8;
     if (y < 8) y = 8;
     panel_.x = x;
     panel_.y = y;
+    laidOut_ = false;
   }
 
   void update(App& app, float dt, const InputState& in) override {
     (void)dt;
+    // ★首帧按真实画布尺寸重算翻转（右下角右键不再出屏）
+    if (!laidOut_) {
+      laidOut_ = true;
+      float x = at_.x + 6, y = at_.y + 6;
+      if (x + panel_.w > (float)app.draw.W - 16) x = at_.x - panel_.w - 6;
+      if (y + panel_.h > (float)app.draw.H - 56) y = at_.y - panel_.h - 6;
+      if (x < 8) x = 8;
+      if (y < 8) y = 8;
+      panel_.x = x;
+      panel_.y = y;
+    }
     // 关闭：Esc / B / Menu / 右键菜单外点击
     const bool outsideClick =
         (in.mousePressed || in.mouseRightPressed) && !panel_.contains(in.mouse);
@@ -145,6 +158,7 @@ class ContextMenuScene : public Scene {
   int sel_ = 0;
   int hoverIdx_ = -1;
   bool hoverAny_ = false;
+  bool laidOut_ = false;  // ★v1.2.10 首帧按真实画布尺寸重算翻转位置
 };
 
 }  // namespace

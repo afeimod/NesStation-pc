@@ -151,7 +151,7 @@ class App {
   bool initFontChain();   // 系统字体选链（v1.2.4：不随包附带字体）
   void shutdown();
   void pumpEvents();
-  void frame();
+  void frame(float dt);
   void drawToasts(float dt);
   void updateSurface();   // ★v1.2.7 窗口/像素尺寸变化 → 逻辑尺寸+UI缩放+鼠标映射全量重算
 

@@ -41,29 +41,19 @@ class LibraryScene : public Scene {
     cats_.push_back({-1, "全部游戏", "ALL"});
     cats_.push_back({-2, "收藏", "FAV"});
     cats_.push_back({-3, "最近游玩", "RECENT"});
-    for (GamePlatform p : allPlatforms()) {
-      if (app.library.countFor(p) > 0)
-        cats_.push_back({(int)p, platformShortName(p), ""});
-    }
-    // ★v1.2.9 FSD 模式（对齐 APK LibraryScreen）：平台 chips 固定 18 个全量展示
-    //（APK LazyRow 全量 18 平台，无「全部/收藏/最近」chips）；Neon 侧栏仍只显示
-    // 有游戏的平台 —— drawNeon 跳过 count==0 的条目即可。
-    if (!Theme::isNeon()) {
-      static const GamePlatform kApkChipOrder[] = {
-          GamePlatform::NES,  GamePlatform::SFC,   GamePlatform::GB,
-          GamePlatform::GBA,  GamePlatform::DOS,   GamePlatform::ARCADE,
-          GamePlatform::MD,   GamePlatform::PCE,   GamePlatform::NDS,
-          GamePlatform::N3DS, GamePlatform::NGCWII, GamePlatform::WIIU,
-          GamePlatform::PSX,  GamePlatform::PS2,   GamePlatform::JAVA,
-          GamePlatform::DC,   GamePlatform::PSP,   GamePlatform::NSWITCH,
-      };
-      for (GamePlatform p : kApkChipOrder) {
-        bool has = false;
-        for (const auto& c : cats_)
-          if (c.id == (int)p) { has = true; break; }
-        if (!has) cats_.push_back({(int)p, platformShortName(p), ""});
-      }
-    }
+    // ★v1.2.10 对齐 APK：侧栏/平台列表全量展示（APK NeonCoreSidebar 19 项
+    //   始终显示含 0 计数；FSD 平台 chips 18 个全量 —— 顺序统一用 APK coreOrder），
+    //   旧版 Neon 只显示有游戏的平台，与 APK 不一致
+    static const GamePlatform kApkChipOrder[] = {
+        GamePlatform::NES,  GamePlatform::SFC,   GamePlatform::GB,
+        GamePlatform::GBA,  GamePlatform::MD,    GamePlatform::PCE,
+        GamePlatform::PSX,  GamePlatform::PS2,   GamePlatform::NDS,
+        GamePlatform::N3DS, GamePlatform::NGCWII, GamePlatform::WIIU,
+        GamePlatform::DC,   GamePlatform::ARCADE, GamePlatform::DOS,
+        GamePlatform::JAVA, GamePlatform::PSP,  GamePlatform::NSWITCH,
+    };
+    for (GamePlatform p : kApkChipOrder)
+      cats_.push_back({(int)p, platformShortName(p), ""});
     if (catSel_ >= (int)cats_.size()) catSel_ = 0;
     if (filter_ != -9) {
       for (size_t i = 0; i < cats_.size(); i++) {
@@ -350,9 +340,7 @@ class LibraryScene : public Scene {
       d.pushClip(listRc);
       float sy = listTop - sideScroll_;
       for (size_t i = 0; i < cats_.size(); i++) {
-        // ★v1.2.9：FSD 模式 rebuild 会补全 18 平台 —— Neon 侧栏只显示有游戏的
-        if (cats_[i].id >= 0 && app.library.countFor((GamePlatform)cats_[i].id) == 0)
-          continue;
+        // ★v1.2.10：全平台始终显示（对齐 APK NeonCoreSidebar 含 0 计数）
         const Rect rc(8, sy, navW - 16, 34);
         if (rc.bottom() < listTop - 40 || rc.y > listBottom + 40) {
           sy += 36;
@@ -602,8 +590,9 @@ class LibraryScene : public Scene {
   //               N of M 计数（右）
   //   FsdBottomBar（状态：游戏库 / 空）
   static float fsdDp(const App& app) {
-    const float dH = (float)app.draw.H / 720.0f;
-    const float dW = (float)app.draw.W / 1280.0f;
+    // ★v1.2.10：540/960 基准（对齐逻辑画布与 APK 横屏密度；旧 720/1280 恒缩 0.75）
+    const float dH = (float)app.draw.H / 540.0f;
+    const float dW = (float)app.draw.W / 960.0f;
     return std::max(0.7f, std::min(dH, dW));
   }
 
@@ -759,8 +748,8 @@ class LibraryScene : public Scene {
               req.mode = 1;
               req.startDir = app.library.romDirs().empty() ? fsutil::homeDir()
                                                            : app.library.romDirs().back();
-              req.onPick = [&app](const std::string& file) {
-                importRomFile(app, file);
+              req.onPick = [&app, this](const std::string& file) {
+                importRomFile(app, file, currentTabPlatform());
               };
               req.onCancel = [] {};
               app.pushScene(createFileBrowser(req));
@@ -1006,15 +995,23 @@ class LibraryScene : public Scene {
   }
 
   // 导入单个 ROM 文件（导入ROM 工具按钮）
-  static void importRomFile(App& app, const std::string& file) {
-    const GamePlatform p =
-        sniffRomPlatform(file, platformFromExtension(fsutil::extOf(file)));
-    if (app.library.addRom(file, p)) {
+  // ★v1.2.10：改走手动导入宽松判定（APK detectFromUri）——当前平台页作
+  //   hint：CD 镜像按 hint 消歧（内容嗅探优先）、zip 探头、7z/gz→街机、
+  //   未知兑底 hint（不再全给 NES）
+  static void importRomFile(App& app, const std::string& file, GamePlatform tabHint) {
+    if (app.library.addRom(file, tabHint, true)) {
       app.library.save();
       app.toast("已导入：" + fsutil::baseOf(file));
     } else {
-      app.toast("导入失败（文件已入库或不支持的格式）");
+      app.toast("导入失败（文件已入库或无法识别平台）");
     }
+  }
+
+  // 当前分类页对应的平台（全部/收藏/最近 → NES，即 APK 无 hint 语义）
+  GamePlatform currentTabPlatform() const {
+    if (cats_.empty()) return GamePlatform::NES;
+    const int id = cats_[(size_t)catSel_].id;
+    return id >= 0 ? (GamePlatform)id : GamePlatform::NES;
   }
 
   void updateDetail(App& app, const InputState& in) {

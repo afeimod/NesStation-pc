@@ -11,10 +11,10 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 
-#include <boost/algorithm/string/replace.hpp>
-#include <boost/regex.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
+#include <regex>
+#include <string>
 
 #include "common/httplib.h"
 
@@ -206,6 +206,24 @@ void WriteCachedJson(std::string_view json) {
 }
 
 // idk but News App does not render Markdown or HTML, so remove some formatting.
+// ★NesStation-pc：原实现依赖 boost::regex；Debian 12 的 boost 1.74 无
+//   boost/regex/v5 子目录（v5 布局自 boost 1.77 才引入）导致 Linux CI 构建失败。
+//   改用 std::regex 等价替换（boost 默认 ^ 为按行锚定，故这里显式启用
+//   std::regex_constants::multiline 保持行为一致，Windows/Linux 无差异）。
+namespace {
+
+void ReplaceAll(std::string& text, const std::string& from, const std::string& to) {
+    if (from.empty()) {
+        return;
+    }
+    for (size_t pos = text.find(from); pos != std::string::npos;
+         pos = text.find(from, pos + to.size())) {
+        text.replace(pos, from.size(), to);
+    }
+}
+
+}  // namespace
+
 std::string SanitizeMarkdown(std::string_view markdown) {
     std::string result;
     result.reserve(markdown.size());
@@ -217,40 +235,40 @@ std::string SanitizeMarkdown(std::string_view markdown) {
     }
 
     // Fix line endings
-    boost::replace_all(text, "\r", "");
+    ReplaceAll(text, "\r", "");
 
     // Remove backticks
-    boost::replace_all(text, "`", "");
+    ReplaceAll(text, "`", "");
 
     // Remove excessive newlines
-    static const boost::regex newlines(R"(\n\n\n+)");
-    text = boost::regex_replace(text, newlines, "\n\n");
+    static const std::regex newlines(R"(\n\n\n+)");
+    text = std::regex_replace(text, newlines, "\n\n");
 
     // Remove markdown headers
-    static const boost::regex headers(R"(^#+ )");
-    text = boost::regex_replace(text, headers, "");
+    static const std::regex headers(R"(^#+ )", std::regex_constants::multiline);
+    text = std::regex_replace(text, headers, "");
 
     // Convert bullet points to something nicer
-    static const boost::regex list1(R"(^- )");
-    text = boost::regex_replace(text, list1, "• ");
+    static const std::regex list1(R"(^- )", std::regex_constants::multiline);
+    text = std::regex_replace(text, list1, "• ");
 
-    static const boost::regex list2(R"(^  \* )");
-    text = boost::regex_replace(text, list2, "  • ");
+    static const std::regex list2(R"(^  \* )", std::regex_constants::multiline);
+    text = std::regex_replace(text, list2, "  • ");
 
     // what
-    static const boost::regex list2_dash(R"(^ - )");
-    text = boost::regex_replace(text, list2_dash, "  • ");
+    static const std::regex list2_dash(R"(^ - )", std::regex_constants::multiline);
+    text = std::regex_replace(text, list2_dash, "  • ");
 
     // Convert bold/italic text into normal text
-    static const boost::regex bold(R"(\*\*(.*?)\*\*)");
-    text = boost::regex_replace(text, bold, "$1");
+    static const std::regex bold(R"(\*\*(.*?)\*\*)");
+    text = std::regex_replace(text, bold, "$1");
 
-    static const boost::regex italic(R"(\*(.*?)\*)");
-    text = boost::regex_replace(text, italic, "$1");
+    static const std::regex italic(R"(\*(.*?)\*)");
+    text = std::regex_replace(text, italic, "$1");
 
     // Remove links and convert to normal text
-    static const boost::regex link(R"(\[([^\]]+)\]\([^)]*\))");
-    text = boost::regex_replace(text, link, "$1");
+    static const std::regex link(R"(\[([^\]]+)\]\([^)]*\))");
+    text = std::regex_replace(text, link, "$1");
 
     // Trim trailing whitespace/newlines
     while (!text.empty() && (text.back() == '\n' || text.back() == ' ')) {

@@ -64,6 +64,20 @@ std::vector<PlatformCore> platformCoreChain(GamePlatform p);
 // 与原逻辑一致：由导入时的平台页提示消歧）
 GamePlatform platformFromExtension(const std::string& ext);
 
+// ★v1.2.10 无兜底扩展名查表（对齐 APK GamePlatform.fromExtension 语义：
+//   查不到返回 false 而非兜底 NES —— 「扫描的游戏全给 FC 核心」的根因修复）
+bool platformFromExtensionKnown(const std::string& ext, GamePlatform* out);
+
+// ★v1.2.10 手动导入判定（对齐 APK PlatformDetector.detectFromUri，宽松档）：
+//   CD 镜像扩展按平台页 hint 消歧（内容嗅探优先）；zip 探头；7z/gz → 街机；
+//   识别不出兜底 hint。hint = 导入时所在平台页。
+GamePlatform detectRomPlatformManual(const std::string& romPath, GamePlatform hint);
+
+// ★v1.2.10 自动扫描判定（对齐 APK PlatformDetector.detectFromFileStrict，严格档）：
+//   自动扫描白名单（AUTO_TRUSTED_EXTENSIONS）+ zip 内容探头 + 光盘镜像魔数嗅探；
+//   识别不了返回 false（调用方跳过入库，绝不 NES 兜底 —— 对齐 APK null 跳过语义）。
+bool detectRomPlatformStrict(const std::string& romPath, GamePlatform* out);
+
 // ★ ROM 内容嗅探（扫描入库用）：对 .zip/.cue/.bin/.iso/.img/.chd 等歧义扩展名
 // 读取文件内容识别真实平台（zip 解析内部文件名、光盘镜像读 ISO9660 PVD /
 // SEGA 引导标识 / GC·Wii 魔数），识别失败返回 fallback。

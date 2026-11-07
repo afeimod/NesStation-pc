@@ -135,6 +135,59 @@ void GameLibrary::load(const std::string& dataDir) {
     }
   }
   LOGI("游戏库载入：%zu 个游戏，%zu 个 ROM 目录", games_.size(), romDirs_.size());
+
+  // ★v1.2.10 存量数据修复：旧版把识别不了的 ROM 全部入库为 NES（FC 核心）。
+  //   载入时对「平台=NES 但扩展名非 NES 系」的条目重新识别，能确定真实
+  //   平台则就地修正（对齐 APK RomStore.add 重复导入时更新 platform 的语义）。
+  revalidatePlatforms();
+}
+
+void GameLibrary::revalidatePlatforms() {
+  static const char* kNesExts[] = {"nes", "unf", "unif", "fds", "nez", "unh"};
+  int fixed = 0;
+  for (auto& e : games_) {
+    if (e.platform != GamePlatform::NES) continue;
+    const std::string ext = fsutil::extOf(e.romPath);
+    std::string extL = ext;
+    for (auto& c : extL)
+      if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    bool isNesExt = false;
+    for (const char* x : kNesExts)
+      if (extL == x) isNesExt = true;
+    if (isNesExt) continue;  // 合法 NES 条目
+
+    GamePlatform p;
+    bool known = false;
+    if (extL == "zip") {
+      // zip 探头（宽松）：能识别内部平台则修正
+      known = detectRomPlatformStrict(e.romPath, &p);
+    } else if (extL == "7z" || extL == "gz") {
+      p = GamePlatform::ARCADE;
+      known = true;
+    } else {
+      // 严格判定（白名单/光盘嗅探）→ 未命中再用扩展名宽松表；
+      // .cue 嗅探不出时默认 PSX（原逻辑「.cue 默认 PS1」，.cue 进 DOS 表是
+      // fromExtension 的归置而非识别结论）
+      if (detectRomPlatformStrict(e.romPath, &p)) {
+        known = true;
+      } else if (extL == "cue") {
+        p = GamePlatform::PSX;
+        known = true;
+      } else if (platformFromExtensionKnown(extL, &p)) {
+        known = true;
+      }
+    }
+    if (known && p != GamePlatform::NES) {
+      LOGI("平台修正：%s → %s", fsutil::baseOf(e.romPath).c_str(),
+           platformShortName(p));
+      e.platform = p;
+      fixed++;
+    }
+  }
+  if (fixed > 0) {
+    LOGI("存量平台修复：%d 个条目", fixed);
+    save();
+  }
 }
 
 void GameLibrary::save() {
@@ -188,17 +241,21 @@ bool GameLibrary::addRom(const std::string& romPath, GamePlatform platformHint,
   const std::string ext = fsutil::extOf(romPath);
   if (ext.empty()) return false;
 
-  // 与原项目一致的歧义处理 + ★ PC 增强：内容噢探（zip 内部文件名 /
-  // 光盘镜像 ISO9660·SEGA·GC/Wii 魔数）自动识别真实平台，对齐
-  // Android 版「导入页平台消歧」的无交互等价实现
+  // ★v1.2.10 平台识别（对齐 APK PlatformDetector.kt 三档语义；
+  //   「扫描的游戏全给 FC 核心」的根因修复：旧版 platformFromExtension/
+  //   sniffRomPlatform 识别失败一律兑底 NES 并永久写入 library.json）：
+  //   · useHint=true  → 手动导入（宽松档 detectFromUri）：CD 镜像按平台页
+  //     hint 消歧（内容嗅探优先）；zip 探头；7z/gz→街机；兑底 hint；
+  //   · useHint=false → 自动扫描（严格档 detectFromFileStrict）：白名单 +
+  //     zip 探头 + 光盘魔数嗅探；识别不了 → 跳过入库（绝不 NES 兑底）
   GamePlatform p;
   if (useHint) {
-    p = platformHint;
-  } else if (ext == "zip" || ext == "bin" || ext == "iso" || ext == "elf" || ext == "cue" ||
-             ext == "chd" || ext == "img" || ext == "exe" || ext == "mdf") {
-    p = sniffRomPlatform(romPath, platformHint);
+    p = detectRomPlatformManual(romPath, platformHint);
   } else {
-    p = platformFromExtension(ext);
+    if (!detectRomPlatformStrict(romPath, &p)) {
+      LOGW("跳过无法识别平台的文件：%s", romPath.c_str());
+      return false;
+    }
   }
 
   GameEntry e;

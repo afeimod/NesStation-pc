@@ -149,7 +149,8 @@ static GamePlatform sniffDisc(const std::string& path) {
 
 }  // namespace
 
-GamePlatform sniffRomPlatform(const std::string& romPath, GamePlatform fallback) {
+// ★v1.2.10 光盘镜像内容嗅探（cue/bin/iso/img/mdf；识别不了返回 false）
+static bool sniffCdImage(const std::string& romPath, GamePlatform* out) {
   const std::string ext = fsutil::extOf(romPath);
   if (ext == "cue") {
     // 读 .cue 文本，找首个 FILE 行指向的镜像再嗅探
@@ -164,57 +165,307 @@ GamePlatform sniffRomPlatform(const std::string& romPath, GamePlatform fallback)
           const std::string target =
               fsutil::join(fsutil::dirOf(romPath), text.substr(q1 + 1, q2 - q1 - 1));
           const GamePlatform p = sniffDisc(target);
-          if (p != (GamePlatform)-1) return p;
+          if (p != (GamePlatform)-1) {
+            if (out) *out = p;
+            return true;
+          }
         }
       }
     }
-    // .cue 本身无法判断时：默认 PS1（最常见）
-    return GamePlatform::PSX;
+    return false;  // cue 本身嗅探不出 → 交给调用方 hint 消歧
   }
   if (ext == "bin" || ext == "iso" || ext == "img" || ext == "mdf") {
     const GamePlatform p = sniffDisc(romPath);
-    return p != (GamePlatform)-1 ? p : fallback;
-  }
-  if (ext == "zip") {
-    const std::vector<std::string> inner = zipInnerExts(romPath);
-    if (inner.empty()) return fallback;
-    // 1) 内部文件扩展名直接命中平台
-    for (const std::string& e : inner) {
-      if (e.empty()) continue;
-      const GamePlatform p = platformFromExtension(e);
-      // 排除歧义扩展名自身（zip 里的 zip / iso）与 DOS 业务后缀误报
-      if (e == "zip" || e == "bin" || e == "iso" || e == "cue" || e == "img" ||
-          e == "exe" || e == "com" || e == "bat" || e == "conf")
-        continue;
-      // platformFromExtension 兑底返回 NES：需要额外验证确实是 NES 系扩展
-      static const char* nesExt[] = {"nes", "unf", "unif", "fds", "nez", "unh"};
-      bool isNes = false;
-      for (const char* x : nesExt)
-        if (e == x) isNes = true;
-      if (p == GamePlatform::NES && !isNes) continue;
-      return p;
+    if (p != (GamePlatform)-1) {
+      if (out) *out = p;
+      return true;
     }
-    // 2) FBNeo / MAME 街机包特征：内部文件无扩展名或数字/部件扩展名（m1/v1/c1/sfix/p1…）
+  }
+  return false;
+}
+
+// —— ★v1.2.10 平台识别三档（对齐 APK PlatformDetector.kt）——
+
+namespace {
+
+// APK PlatformDetector.CD_IMAGE_EXTENSIONS：cue,img,iso,ccd,sub,bin,chd
+// 手动导入时按平台页 hint 消歧
+const std::vector<std::string>& cdImageExts() {
+  static const std::vector<std::string> v = {"cue", "img", "iso", "ccd", "sub", "bin", "chd"};
+  return v;
+}
+
+// APK PlatformDetector.ARCADE_ROM_EXTENSIONS：
+// NeoGeo（p1/p2/sp1…/sfix）+ CPS1/2/3（prg/gfx/snd/qsf/q1-5）+ PGM（b1/b2/t1/t2/u1/u2/v10-40）
+const std::vector<std::string>& arcadeRomExts() {
+  static const std::vector<std::string> v = {
+      "p1",  "p2",  "p3",  "p4",  "sp1", "sp2", "s1",  "s2",
+      "m1",  "m2",  "v1",  "v2",  "v3",  "v4",  "c1",  "c2",
+      "c3",  "c4",  "c5",  "c6",  "c7",  "c8",  "lo",  "sm1",
+      "sfix", "prg", "gfx", "snd", "qsf", "q1",  "q2",  "q3",
+      "q4",  "q5",  "b1",  "b2",  "t1",  "t2",  "u1",  "u2",
+      "v10", "v20", "v30", "v40"};
+  return v;
+}
+
+bool extInList(const std::string& e, const std::vector<std::string>& set) {
+  for (const auto& s : set)
+    if (e == s) return true;
+  return false;
+}
+
+// 自动扫描白名单（APK AUTO_TRUSTED_EXTENSIONS：刻意排除 md/sms/gg/sg/gz/7z/
+// bin/img/iso/cue/chd/exe/bat/com/jar/app/m3u/elf/pbp/ecm/mds/mdf 等高撞名扩展）
+bool platformFromAutoWhitelist(const std::string& extRaw, GamePlatform* out) {
+  const std::string ext = toLower(extRaw);
+  struct E {
+    const char* e;
+    GamePlatform p;
+  };
+  static const E kWl[] = {
+      {"nes", GamePlatform::NES},   {"fds", GamePlatform::NES},
+      {"unf", GamePlatform::NES},   {"unif", GamePlatform::NES},
+      {"nez", GamePlatform::NES},   {"unh", GamePlatform::NES},
+      {"smc", GamePlatform::SFC},   {"sfc", GamePlatform::SFC},
+      {"swc", GamePlatform::SFC},   {"fig", GamePlatform::SFC},
+      {"gb", GamePlatform::GB},     {"sgb", GamePlatform::GB},
+      {"gbc", GamePlatform::GB},
+      {"gba", GamePlatform::GBA},
+      {"dosz", GamePlatform::DOS},
+      {"smd", GamePlatform::MD},    {"gen", GamePlatform::MD},
+      {"68k", GamePlatform::MD},
+      {"pce", GamePlatform::PCE},   {"sgx", GamePlatform::PCE},
+      {"nds", GamePlatform::NDS},   {"srl", GamePlatform::NDS},
+      {"3ds", GamePlatform::N3DS},  {"cci", GamePlatform::N3DS},
+      {"cxi", GamePlatform::N3DS},
+      {"rvz", GamePlatform::NGCWII}, {"gcm", GamePlatform::NGCWII},
+      {"gcz", GamePlatform::NGCWII}, {"wad", GamePlatform::NGCWII},
+      {"dol", GamePlatform::NGCWII}, {"nkit", GamePlatform::NGCWII},
+      {"wbfs", GamePlatform::NGCWII}, {"ciso", GamePlatform::NGCWII},
+      {"wud", GamePlatform::WIIU},  {"wux", GamePlatform::WIIU},
+      {"wua", GamePlatform::WIIU},  {"wuhb", GamePlatform::WIIU},
+      {"rpx", GamePlatform::WIIU},
+      {"xci", GamePlatform::NSWITCH}, {"nsp", GamePlatform::NSWITCH},
+      {"nca", GamePlatform::NSWITCH}, {"nro", GamePlatform::NSWITCH},
+      {"gdi", GamePlatform::DC},    {"cdi", GamePlatform::DC},
+      {"cso", GamePlatform::PSP},
+  };
+  for (const auto& m : kWl)
+    if (ext == m.e) {
+      if (out) *out = m.p;
+      return true;
+    }
+  return false;
+}
+
+// zip 内容探头（APK detectFromExtensions：街机特征 → 平台扩展 → CD 镜像按 hint）
+bool zipProbeLoose(const std::string& path, GamePlatform hint, GamePlatform* out) {
+  const std::vector<std::string> inner = zipInnerExts(path);
+  if (inner.empty()) return false;
+  // Pass 1: 街机特征扩展名（最高优先级，APK ARCADE_ROM_EXTENSIONS）
+  for (const auto& e : inner)
+    if (!e.empty() && extInList(e, arcadeRomExts())) {
+      if (out) *out = GamePlatform::ARCADE;
+      return true;
+    }
+  // Pass 1b: .bin 弱信号 —— 无有效 hint（NES 即默认页）时视为街机（APK 旧行为）
+  for (const auto& e : inner)
+    if (e == "bin" && hint == GamePlatform::NES) {
+      if (out) *out = GamePlatform::ARCADE;
+      return true;
+    }
+  // Pass 1c: PC 增强 —— 无扩展名/数字/部件扩展启发（FBNeo/MAME 街机包特征）
+  {
     bool arcadeish = false, hasNamed = false;
-    for (const std::string& e : inner) {
+    for (const auto& e : inner) {
       if (e.empty()) {
         arcadeish = true;
         continue;
       }
-      static const char* arcadeExts[] = {"m1", "v1", "c1", "c2", "p1", "sp1", "sfix",
-                                         "rom", "bin", "ic", "m", "v", "c"};
+      static const char* arcadeExts[] = {"m1", "v1", "c1", "c2", "p1", "sp1",
+                                         "sfix", "rom", "bin", "ic", "m", "v", "c"};
       bool isArc = false;
       for (const char* x : arcadeExts)
         if (e == x) isArc = true;
-      bool numeric = !e.empty() && e.find_first_not_of("0123456789u") == std::string::npos;
+      const bool numeric = !e.empty() && e.find_first_not_of("0123456789u") == std::string::npos;
       if (isArc || numeric)
         arcadeish = true;
       else
         hasNamed = true;
     }
-    if (arcadeish && !hasNamed) return GamePlatform::ARCADE;
+    if (arcadeish && !hasNamed) {
+      if (out) *out = GamePlatform::ARCADE;
+      return true;
+    }
+  }
+  // Pass 2: 任意平台扩展名命中（跳过歧义/CD 镜像扩展与 DOS 业务后缀）
+  for (const auto& e : inner) {
+    if (e.empty()) continue;
+    if (e == "zip" || e == "iso" || e == "cue" || e == "img" || e == "exe" ||
+        e == "com" || e == "bat" || e == "conf")
+      continue;
+    GamePlatform p;
+    if (platformFromExtensionKnown(e, &p)) {
+      if (out) *out = p;
+      return true;
+    }
+  }
+  // Pass 3: 只剩 CD 镜像扩展 → 按 hint 解析（允许集，APK 同）
+  for (const auto& e : inner) {
+    if (extInList(e, cdImageExts())) {
+      switch (hint) {
+        case GamePlatform::DOS: case GamePlatform::PCE: case GamePlatform::PSX:
+        case GamePlatform::PS2: case GamePlatform::DC: case GamePlatform::N3DS:
+        case GamePlatform::NGCWII: case GamePlatform::PSP: case GamePlatform::WIIU:
+        case GamePlatform::MD:
+          if (out) *out = hint;
+          return true;
+        default:
+          if (out) *out = GamePlatform::MD;
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+// 无兜底扩展名查表（APK GamePlatform.fromExtension；.zip/.bin 不映射返回 false）
+bool platformFromExtensionKnown(const std::string& extRaw, GamePlatform* out) {
+  const std::string ext = toLower(extRaw);
+  struct E {
+    const char* e;
+    GamePlatform p;
+  };
+  static const E kMap[] = {
+      {"nes", GamePlatform::NES},    {"unf", GamePlatform::NES},
+      {"unif", GamePlatform::NES},   {"fds", GamePlatform::NES},
+      {"nez", GamePlatform::NES},    {"unh", GamePlatform::NES},
+      {"smc", GamePlatform::SFC},    {"sfc", GamePlatform::SFC},
+      {"swc", GamePlatform::SFC},    {"fig", GamePlatform::SFC},
+      {"bs", GamePlatform::SFC},
+      {"gb", GamePlatform::GB},      {"sgb", GamePlatform::GB},
+      {"gbc", GamePlatform::GB},
+      {"gba", GamePlatform::GBA},
+      {"bat", GamePlatform::DOS},    {"exe", GamePlatform::DOS},
+      {"com", GamePlatform::DOS},    {"dosz", GamePlatform::DOS},
+      {"conf", GamePlatform::DOS},   {"iso", GamePlatform::DOS},
+      {"cue", GamePlatform::DOS},    {"img", GamePlatform::DOS},
+      {"ima", GamePlatform::DOS},    {"vhd", GamePlatform::DOS},
+      {"hd", GamePlatform::DOS},
+      {"7z", GamePlatform::ARCADE},
+      {"md", GamePlatform::MD},      {"smd", GamePlatform::MD},
+      {"gen", GamePlatform::MD},     {"sms", GamePlatform::MD},
+      {"gg", GamePlatform::MD},      {"sg", GamePlatform::MD},
+      {"68k", GamePlatform::MD},     {"chd", GamePlatform::MD},
+      {"pce", GamePlatform::PCE},    {"sgx", GamePlatform::PCE},
+      {"hes", GamePlatform::PCE},
+      {"nds", GamePlatform::NDS},    {"app", GamePlatform::NDS},
+      {"ids", GamePlatform::NDS},    {"srl", GamePlatform::NDS},
+      {"dsi", GamePlatform::NDS},
+      {"pbp", GamePlatform::PSX},    {"m3u", GamePlatform::PSX},
+      {"ecm", GamePlatform::PSX},    {"mds", GamePlatform::PSX},
+      {"mdf", GamePlatform::PSX},
+      {"cso", GamePlatform::PS2},    {"isz", GamePlatform::PS2},
+      {"elf", GamePlatform::PS2},    {"zso", GamePlatform::PS2},
+      {"gdi", GamePlatform::DC},     {"cdi", GamePlatform::DC},
+      {"lst", GamePlatform::DC},
+      {"3ds", GamePlatform::N3DS},   {"cci", GamePlatform::N3DS},
+      {"cxi", GamePlatform::N3DS},   {"cia", GamePlatform::N3DS},
+      {"gcm", GamePlatform::NGCWII}, {"rvz", GamePlatform::NGCWII},
+      {"gcz", GamePlatform::NGCWII}, {"ciso", GamePlatform::NGCWII},
+      {"nkit", GamePlatform::NGCWII}, {"wbfs", GamePlatform::NGCWII},
+      {"wad", GamePlatform::NGCWII}, {"dol", GamePlatform::NGCWII},
+      {"wud", GamePlatform::WIIU},   {"wux", GamePlatform::WIIU},
+      {"wua", GamePlatform::WIIU},   {"wuhb", GamePlatform::WIIU},
+      {"rpx", GamePlatform::WIIU},
+      {"xci", GamePlatform::NSWITCH}, {"nsp", GamePlatform::NSWITCH},
+      {"nca", GamePlatform::NSWITCH}, {"nro", GamePlatform::NSWITCH},
+      {"jar", GamePlatform::JAVA},   {"jad", GamePlatform::JAVA},
+  };
+  for (const auto& m : kMap)
+    if (ext == m.e) {
+      if (out) *out = m.p;
+      return true;
+    }
+  return false;  // .zip/.bin 及未知扩展名 → 不映射（由上层消歧）
+}
+
+// 自动扫描严格判定（APK detectFromFileStrict）：识别不了返回 false 跳过入库
+bool detectRomPlatformStrict(const std::string& romPath, GamePlatform* out) {
+  const std::string ext = toLower(fsutil::extOf(romPath));
+  if (ext == "apk") return false;  // 安装包不是 ROM，显式排除（APK 同）
+  if (ext == "zip") {
+    // zip 严格探头：街机特征/启发式 → 内部扩展平台；识别不了跳过
+    //（内部条目扩展歧义性远低于裸文件，故用完整表而非白名单）
+    return zipProbeLoose(romPath, GamePlatform::NES, out);
+  }
+  if (platformFromAutoWhitelist(ext, out)) return true;
+  // PC 增强：CD 镜像内容嗅探（APK 无此能力直接跳过；PC 保留魔数嗅探，
+  // cue/bin/iso 能被准确识别为 PSX/PS2/MD/DC/NGCWII/PSP）
+  if (extInList(ext, cdImageExts())) {
+    if (sniffCdImage(romPath, out)) return true;
+    return false;  // 嗅探不出的 CD 镜像：自动扫描跳过（绝不 NES 兜底）
+  }
+  return false;
+}
+
+// 手动导入宽松判定（APK detectFromUri；hint = 导入时所在平台页）
+GamePlatform detectRomPlatformManual(const std::string& romPath, GamePlatform hint) {
+  const std::string ext = toLower(fsutil::extOf(romPath));
+  // 1) .app 且 3DS 页 → N3DS（否则 .app 归 NDS）
+  if (ext == "app" && hint == GamePlatform::N3DS) return GamePlatform::N3DS;
+  // 2) CD 镜像类：内容嗅探优先（PC 增强），嗅探不出按平台页 hint 消歧
+  if (extInList(ext, cdImageExts())) {
+    GamePlatform p;
+    if (sniffCdImage(romPath, &p)) return p;
+    switch (hint) {
+      case GamePlatform::DOS: case GamePlatform::PCE: case GamePlatform::PSX:
+      case GamePlatform::PS2: case GamePlatform::DC: case GamePlatform::N3DS:
+      case GamePlatform::NGCWII: case GamePlatform::PSP: case GamePlatform::WIIU:
+      case GamePlatform::MD:
+        return hint;
+      default:
+        return GamePlatform::MD;  // APK：无有效 hint 默认 MD
+    }
+  }
+  // 3) .elf：Wii U 页 → WIIU；PSP 页 → PSP（否则 PS2，fromExtension）
+  if (ext == "elf" && hint == GamePlatform::WIIU) return GamePlatform::WIIU;
+  if (ext == "elf" && hint == GamePlatform::PSP) return GamePlatform::PSP;
+  // 4) .pbp：PSP 页 → PSP（否则 PSX）
+  if (ext == "pbp" && hint == GamePlatform::PSP) return GamePlatform::PSP;
+  // 5) mdf/mds/nrg：PS2 页 → PS2；否则 PSX
+  if (ext == "mdf" || ext == "mds" || ext == "nrg")
+    return hint == GamePlatform::PS2 ? GamePlatform::PS2 : GamePlatform::PSX;
+  // 6) 已知扩展名直接命中（APK fromExtension）
+  GamePlatform p;
+  if (platformFromExtensionKnown(ext, &p)) return p;
+  // 7) zip 探头；识别不出的 zip 留在当前平台页
+  if (ext == "zip") {
+    if (zipProbeLoose(romPath, hint, &p)) return p;
+    return hint;
+  }
+  // 8) 7z/gz → 街机（APK：手动导入永远街机）
+  if (ext == "7z" || ext == "gz") return GamePlatform::ARCADE;
+  // 9) 兜底：当前平台页（APK 无 hint 时 NES）
+  return hint;
+}
+
+GamePlatform sniffRomPlatform(const std::string& romPath, GamePlatform fallback) {
+  const std::string ext = toLower(fsutil::extOf(romPath));
+  if (extInList(ext, cdImageExts())) {
+    GamePlatform p;
+    if (sniffCdImage(romPath, &p)) return p;
     return fallback;
   }
+  if (ext == "zip") {
+    GamePlatform p;
+    if (zipProbeLoose(romPath, fallback, &p)) return p;
+    return fallback;
+  }
+  GamePlatform p;
+  if (platformFromExtensionKnown(ext, &p)) return p;
   return fallback;
 }
 
@@ -533,42 +784,11 @@ std::vector<PlatformCore> platformCoreChain(GamePlatform p) {
 }
 
 GamePlatform platformFromExtension(const std::string& extRaw) {
-  const std::string ext = toLower(extRaw);
-  if (ext == "nes" || ext == "unf" || ext == "unif" || ext == "fds" || ext == "nez" ||
-      ext == "unh")
-    return GamePlatform::NES;
-  if (ext == "smc" || ext == "sfc" || ext == "swc" || ext == "fig" || ext == "bs")
-    return GamePlatform::SFC;
-  if (ext == "gb" || ext == "sgb" || ext == "gbc") return GamePlatform::GB;
-  if (ext == "gba") return GamePlatform::GBA;
-  // DOSBox-Pure 启动器与镜像
-  if (ext == "bat" || ext == "exe" || ext == "com" || ext == "dosz" || ext == "conf" ||
-      ext == "iso" || ext == "cue" || ext == "img" || ext == "ima" || ext == "vhd" ||
-      ext == "hd")
-    return GamePlatform::DOS;
-  if (ext == "7z") return GamePlatform::ARCADE;
-  if (ext == "md" || ext == "smd" || ext == "gen" || ext == "sms" || ext == "gg" ||
-      ext == "sg" || ext == "68k" || ext == "chd")
-    return GamePlatform::MD;
-  if (ext == "pce" || ext == "sgx" || ext == "hes") return GamePlatform::PCE;
-  if (ext == "nds" || ext == "app" || ext == "ids" || ext == "srl" || ext == "dsi")
-    return GamePlatform::NDS;
-  if (ext == "pbp" || ext == "m3u" || ext == "ecm" || ext == "mds" || ext == "mdf")
-    return GamePlatform::PSX;
-  if (ext == "cso" || ext == "isz" || ext == "elf" || ext == "zso") return GamePlatform::PS2;
-  if (ext == "gdi" || ext == "cdi" || ext == "lst") return GamePlatform::DC;
-  if (ext == "3ds" || ext == "cci" || ext == "cxi" || ext == "cia")
-    return GamePlatform::N3DS;
-  if (ext == "gcm" || ext == "rvz" || ext == "gcz" || ext == "ciso" || ext == "nkit" ||
-      ext == "wbfs" || ext == "wad" || ext == "dol")
-    return GamePlatform::NGCWII;
-  if (ext == "wud" || ext == "wux" || ext == "wua" || ext == "wuhb" || ext == "rpx")
-    return GamePlatform::WIIU;
-  if (ext == "xci" || ext == "nsp" || ext == "nca" || ext == "nro")
-    return GamePlatform::NSWITCH;
-  if (ext == "jar" || ext == "jad") return GamePlatform::JAVA;
-  // 与原项目一致：.zip / .bin 故意不在此映射
-  // 兜底：按原 GamePlatform.valueOf 语义无法表达，返回 NES 由调用方用平台页消歧
+  // ★v1.2.10：查表逻辑移入 platformFromExtensionKnown（无兜底）；本函数仅为
+  //   旧调用方保留（未收录扩展名兜底 NES —— APK GamePlatform.valueOf 语义；
+  //   入库路径一律不再走此兜底，「扫描全给 FC 核心」的根因已修复）
+  GamePlatform p;
+  if (platformFromExtensionKnown(extRaw, &p)) return p;
   return GamePlatform::NES;
 }
 

@@ -159,10 +159,13 @@ class NeonHome : public Scene {
     }
   }
 
-  // —— dp：Android 密度无关像素（720p 基准；窄窗按宽约束防溢出）——
+  // —— dp：Android 密度无关像素（★v1.2.10 基准修正：逻辑画布 960×540 = APK
+  //   横屏 960×540dp 的 1:1 密度 —— 旧版 720/1280 基准在 540 基准画布上
+  //   恒乘 0.75，主页/游戏库文字整体缩小 25%，这是「字体都非常小」的主因；
+  //   窄窗按宽约束防溢出）——
   static float dpOf(const App& app) {
-    const float dH = (float)app.draw.H / 720.0f;
-    const float dW = (float)app.draw.W / 1280.0f;
+    const float dH = (float)app.draw.H / 540.0f;
+    const float dW = (float)app.draw.W / 960.0f;
     return std::max(0.7f, std::min(dH, dW));
   }
 
@@ -1065,8 +1068,8 @@ class FsdTileOptionsScene : public Scene {
     const InputState& in = app.input.input();
     // 遮罩
     d.rect(Rect(0, 0, (float)d.W, (float)d.H), Color8(0, 0, 0, 132));
-    // 面板
-    const float D = std::max(0.75f, std::min((float)d.H / 720.0f, (float)d.W / 1280.0f));
+    // 面板（★v1.2.10 dp 基准 540/960，与 NeonHome::dpOf 一致）
+    const float D = std::max(0.75f, std::min((float)d.H / 540.0f, (float)d.W / 960.0f));
     const float pw = std::min(470.0f * D, (float)d.W - 40);
     const float ph = 330 * D;
     const Rect panel((float)d.W / 2 - pw / 2, (float)d.H / 2 - ph / 2, pw, ph);
@@ -1169,8 +1172,9 @@ class FsdHome : public Scene {
   }
 
   static float dpOf(const App& app) {
-    const float dH = (float)app.draw.H / 720.0f;
-    const float dW = (float)app.draw.W / 1280.0f;
+    // ★v1.2.10：540/960 基准（对齐逻辑画布与 APK 横屏密度；旧 720/1280 恒缩 0.75）
+    const float dH = (float)app.draw.H / 540.0f;
+    const float dW = (float)app.draw.W / 960.0f;
     return std::max(0.7f, std::min(dH, dW));
   }
 
@@ -1357,7 +1361,9 @@ class FsdHome : public Scene {
   Rect flowArea(App& app) const {
     const float D = dpOf(app);
     const float top = w::fsdTopBarH(app) + 10 * D;
-    const float bottom = (float)app.draw.H - w::fsdBottomBarH(app) - 44 * D;
+    // ★v1.2.10：底部预留 = 底栏 + 按键提示条（32dp + 上下边距 20dp）——
+    //   旧值 44dp 没算提示条，磁贴标题与 A/B 提示条贴边叠压
+    const float bottom = (float)app.draw.H - w::fsdBottomBarH(app) - 52 * D;
     return Rect(0, top, (float)app.draw.W, bottom - top);
   }
 
@@ -1497,7 +1503,14 @@ class FsdHome : public Scene {
     hitTiles_.clear();
     {
       const Rect area = flowArea(app);
-      const float flowStep = (190 + 28) * D;  // rowH + gapY（APK）
+      // ★v1.2.10：步距钳制 —— APK 固定 rowH+gapY=218dp 是给高屏（平板/TV）的；
+      //   960×540 基准画布上 218dp 步距会把相邻行（缩放 0.5）推到底部
+      //   状态栏/按键提示下面（磁贴标题被裁切、提示叠印磁贴）。按可用高度
+      //   收缩步距，保证相邻行完整可见。
+      const float rawStep = (190 + 28) * D;  // APK rowH + gapY
+      const float adjacentHalf = (30 + 10 + 136) * 0.5f * D * 0.5f;  // 相邻行半高
+      const float maxStep = area.h * 0.5f - adjacentHalf - 6 * D;
+      const float flowStep = std::min(rawStep, std::max(120.0f * D, maxStep));
       const float cy = area.cy();
       // 距离远的先画：dist 2,1 再 0（选中行最上层）
       for (int dist = 2; dist >= 0; dist--) {

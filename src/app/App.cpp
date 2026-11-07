@@ -741,9 +741,11 @@ void App::pumpEvents() {
   }
 }
 
-void App::frame() {
+void App::frame(float dt) {
   frameNo_++;
-  input.endFrame(1.0f / 60.0f);
+  // ★v1.2.10：真实帧间隔（旧版硬编码 1/60 —— 无 VSync / 高刷环境下
+  //   实际循环 120fps，模拟时间流速 ×2，FC 核心直接随 120 帧跑）
+  input.endFrame(dt);
   const InputState& in = input.input();
   covers.pump(*this);
 
@@ -758,11 +760,11 @@ void App::frame() {
 
   if (!scenes_.empty()) {
     Scene* s = scenes_.back().get();
-    s->update(*this, 1.0f / 60.0f, in);
+    s->update(*this, dt, in);
     if (!scenes_.empty() && scenes_.back().get() == s) s->draw(*this);
   }
 
-  drawToasts(1.0f / 60.0f);
+  drawToasts(dt);
   SDL_RenderPresent(renderer_);
 
   if (testHook_) {
@@ -824,13 +826,22 @@ int App::run(int, char**) {
   pushScene(createHomeScene());
 
   running_ = true;
+  // ★v1.2.10：高性能计数器测量真实帧间隔（对齐 APK FramePacer 的墙钟语义；
+  //   钳位 [1/240, 1/20]：拖窗口/休眠唤醒后的超大 dt 不再引发模拟追帧风暴）
+  Uint64 prevPerf = SDL_GetPerformanceCounter();
   while (running_) {
-    const Uint32 frameStart = SDL_GetTicks();
+    const Uint32 t0 = SDL_GetTicks();
     pumpEvents();
-    frame();
-    // 上限约 120fps（无 VSync 设备时限制空转）
-    const Uint32 frameEnd = SDL_GetTicks();
-    if (frameEnd - frameStart < 8) SDL_Delay(8 - (frameEnd - frameStart));
+    const Uint64 nowPerf = SDL_GetPerformanceCounter();
+    float dt = (float)((double)(nowPerf - prevPerf) / (double)SDL_GetPerformanceFrequency());
+    prevPerf = nowPerf;
+    if (dt < 1.0f / 240.0f) dt = 1.0f / 240.0f;
+    if (dt > 1.0f / 20.0f) dt = 1.0f / 20.0f;
+    frame(dt);
+    // 无 VSync 设备时限制空转（vsync 生效时 RenderPresent 已阻塞到刷新率；
+    // 此上限只是失控保护 —— 模拟器步进已改用真实 dt，不再依赖它作节拍器）
+    const Uint32 t1 = SDL_GetTicks();
+    if (t1 - t0 < 8) SDL_Delay(8 - (t1 - t0));
   }
   emu_.reset();
   return 0;
