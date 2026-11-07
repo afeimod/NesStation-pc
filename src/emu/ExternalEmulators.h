@@ -46,9 +46,13 @@ struct ExternalCore {
   std::string buildArgs(const std::string& romPath) const;
 };
 
+class App;
+
 class ExternalEmulators {
  public:
   void init(const std::string& dataDir);
+  // ★v1.3.1 后台启动验证线程经此回发通知（App::init 里调用）
+  void setApp(App* app) { appPtr_ = app; }
 
   const std::vector<ExternalCore>& all() const { return list_; }
   // 平台的全部外置核心（注册顺序）
@@ -91,6 +95,7 @@ class ExternalEmulators {
   bool downloadOne(ExternalCore* c);  // 线程内执行，更新 prog_
 
   std::string dataDir_;
+  App* appPtr_ = nullptr;   // ★v1.3.1 后台验证线程 postNotice 用
   std::vector<ExternalCore> list_;
   std::thread dlThread_;
   std::atomic<bool> dlRunning_{false};

@@ -280,7 +280,40 @@ void LibretroCore::setControllerPorts() {
 }
 
 void LibretroCore::runFrame() {
-  if (gameLoaded_ && retroRun_) retroRun_();
+  if (gameLoaded_ && retroRun_) {
+    retroRun_();
+    // ★v1.3.1 金手指逐帧应用（RetroArch 语义：每帧把写入集刷进内存域）
+    if (!cheats_.empty()) applyCheats();
+  }
+}
+
+void LibretroCore::applyCheats() {
+  if (!gameLoaded_ || cheats_.empty() || !retroGetMemoryData_) return;
+  // 常驻内存域快照（域指针核心运行中不变；每次取最新以防域重建）
+  uint8_t* sysRam = (uint8_t*)retroGetMemoryData_(RETRO_MEMORY_SYSTEM_RAM);
+  size_t sysSize = retroGetMemorySize_ ? retroGetMemorySize_(RETRO_MEMORY_SYSTEM_RAM) : 0;
+  uint8_t* saveRam = (uint8_t*)retroGetMemoryData_(RETRO_MEMORY_SAVE_RAM);
+  size_t saveSize = retroGetMemorySize_ ? retroGetMemorySize_(RETRO_MEMORY_SAVE_RAM) : 0;
+  if (!sysRam && !saveRam) return;
+  for (const CheatWrite& w : cheats_) {
+    if (w.width == 0) continue;
+    if (sysRam && w.addr + w.width <= sysSize) {
+      if (w.width == 1)
+        sysRam[w.addr] = (uint8_t)(w.value & 0xFF);
+      else {
+        sysRam[w.addr] = (uint8_t)(w.value & 0xFF);
+        sysRam[w.addr + 1] = (uint8_t)((w.value >> 8) & 0xFF);
+      }
+    } else if (saveRam && w.addr + w.width <= saveSize) {
+      if (w.width == 1)
+        saveRam[w.addr] = (uint8_t)(w.value & 0xFF);
+      else {
+        saveRam[w.addr] = (uint8_t)(w.value & 0xFF);
+        saveRam[w.addr + 1] = (uint8_t)((w.value >> 8) & 0xFF);
+      }
+    }
+    // 两个域都覆盖不到 → 忽略该码（可能属于 ROM 域 / 需要专用解码器的格式）
+  }
 }
 
 void LibretroCore::reset() {

@@ -78,4 +78,12 @@ FILE* openFile(const std::string& utf8Path, const char* mode);
 // 可移植 system：命令为 UTF-8（Windows 内部 _wsystem，中文路径可用）
 int runCommand(const std::string& utf8Cmd);
 
+// ★v1.3.1 用系统默认浏览器打开 URL（在线游戏 / SWF Ruffle 演示页用）。
+//   Windows: start ""；macOS: open；Linux: xdg-open（缺失时返回 false）。
+bool openUrl(const std::string& url);
+// ★v1.3.1 ELF 动态库预检：LD_TRACE_LOADED_OBJECTS=1 枚举 exe 的依赖，
+//   返回缺失的共享库名（全部可解析则返回空）。非 ELF / 检测失败返回 {"?"}
+//   —— 调用方据此给出「缺运行库」而非「点了没反应」。
+std::vector<std::string> missingSharedLibs(const std::string& exePath);
+
 }  // namespace fsutil

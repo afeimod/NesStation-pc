@@ -157,6 +157,18 @@ void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
     app.pushScene(ns::createSettingsScene(6));
   } else if (name == "about") {
     app.pushScene(ns::createAboutScene());
+  } else if (name == "online") {
+    // ★v1.3.1 在线游戏场景（内置 12 站点列表回归）
+    app.pushScene(ns::createOnlineGamesScene());
+  } else if (name == "swf") {
+    // ★v1.3.1 SWF 场景（空列表 + 工具按钮回归）
+    app.pushScene(ns::createSwfScene());
+  } else if (name == "battle") {
+    // ★v1.3.1 对战平台场景（房间/游戏库 Tab + 工具栏回归；无网时显示连接失败态）
+    app.pushScene(ns::createBattleScene());
+  } else if (name == "cheats") {
+    // ★v1.3.1 金手指场景（空列表 + 导入按钮回归）
+    app.pushScene(ns::createCheatsScene());
   } else if (name == "browser") {
     // 文件浏览器（★v1.2.2 默认纯净视图：当前目录直接置顶，无书签堆叠）
     ns::BrowserRequest req;

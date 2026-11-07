@@ -102,13 +102,16 @@ void homeAction(App& app, int action) {
           false, "退出", [appPtr = &app]() { appPtr->requestExit(); }));
       break;
     case 7:
-      app.toast("在线游戏需要 NesStation 在线服务（Android 版功能），PC 版暂未提供");
+      // ★v1.3.1 真实场景（APK OnlineGamesScreen 信息架构；不再 toast 占位）
+      app.pushScene(createOnlineGamesScene());
       break;
     case 8:
-      app.toast("对战平台需要 NesStation 在线服务（Android 版功能），PC 版暂未提供");
+      // ★v1.3.1 真实场景（APK BattleScreen：服务器/登录/房间/对战 ROM 下载）
+      app.pushScene(createBattleScene());
       break;
     case 9:
-      app.toast("SWF 小游戏为 Android 版专属功能，PC 版暂未提供");
+      // ★v1.3.1 真实场景（APK SwfListScreen：目录扫描 + ruffle/浏览器播放）
+      app.pushScene(createSwfScene());
       break;
   }
 }
@@ -1255,11 +1258,12 @@ class FsdHome : public Scene {
       const std::string pn = t.key.substr(9);
       app.pushScene(createLibraryScene((int)platformFromString(pn)));
     } else if (t.key == "online") {
-      app.toast("在线游戏需要 NesStation 在线服务（Android 版功能），PC 版暂未提供");
+      // ★v1.3.1 真实场景（不再 toast 占位）
+      app.pushScene(createOnlineGamesScene());
     } else if (t.key == "battle") {
-      app.toast("对战平台需要 NesStation 在线服务（Android 版功能），PC 版暂未提供");
+      app.pushScene(createBattleScene());
     } else if (t.key == "swf") {
-      app.toast("SWF 小游戏为 Android 版专属功能，PC 版暂未提供");
+      app.pushScene(createSwfScene());
     } else if (t.key == "settings") {
       app.pushScene(createSettingsScene());
     } else if (t.key == "about") {

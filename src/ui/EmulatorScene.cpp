@@ -286,13 +286,14 @@ class EmulatorScene : public Scene {
 
   int menuItemCount(App& app) const {
     // 继续/暂停/重置/存档/读档/快进/截图/画面设置/退出（对齐 APK 游戏内菜单顺序；
-    // 核心设置与磁盘切换按条件插入，与 drawMenu 的 idx 顺序一致）
+    // 核心设置/金手指/磁盘切换按条件插入，与 drawMenu 的 idx 顺序一致）
     int n = 9;
     EmuRunner* emu = app.activeEmu();
     if (emu && emu->core() && emu->core()->diskControl().available() &&
         emu->core()->diskControl().numImages() > 1)
       n++;
     if (emu && emu->core() && !emu->core()->options().empty()) n++;
+    if (emu && emu->running() && emu->isLibretro()) n++;  // ★v1.3.1 金手指
     return n;
   }
 
@@ -705,6 +706,13 @@ class EmulatorScene : public Scene {
         if (emu && emu->core() && !emu->core()->options().empty()) {
           if (row("核心设置", idx++)) {
             app.pushScene(createCoreOptionsScene(emu->game().platform));
+            menuOpen_ = false;
+          }
+        }
+        // ★v1.3.1 金手指（APK 底部工具栏同款入口；RetroArch .cht 逐帧应用）
+        if (emu && emu->running() && emu->isLibretro()) {
+          if (row("金手指", idx++)) {
+            app.pushScene(createCheatsScene());
             menuOpen_ = false;
           }
         }

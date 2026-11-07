@@ -95,6 +95,63 @@ int runCommand(const std::string& utf8Cmd) {
 #endif
 }
 
+bool openUrl(const std::string& url) {
+  if (url.empty()) return false;
+#ifdef _WIN32
+  // start ""：空标题参数防 URL 被当作窗口标题（cmd 陷阱）
+  return _wsystem((std::wstring(L"start \"\" ") + toWide(url)).c_str()) == 0;
+#elif defined(__APPLE__)
+  return std::system(("open '" + url + "'").c_str()) == 0;
+#else
+  if (std::system("command -v xdg-open >/dev/null 2>&1") != 0) {
+    LOGW("系统缺少 xdg-open，无法打开浏览器：%s", url.c_str());
+    return false;
+  }
+  return std::system(("xdg-open '" + url + "' >/dev/null 2>&1 &").c_str()) == 0;
+#endif
+}
+
+std::vector<std::string> missingSharedLibs(const std::string& exePath) {
+  std::vector<std::string> out;
+#if defined(_WIN32) || defined(__APPLE__)
+  (void)exePath;
+  out.push_back("?");  // 平台无关紧要（Windows 用启动验证，macOS 不打包）
+  return out;
+#else
+  // ELF：让动态链接器自己枚举（与 ldd 等价，但不受 ldd 是否安装影响）
+  const std::string cmd = "env LD_TRACE_LOADED_OBJECTS=1 '" + exePath + "' 2>&1";
+  FILE* f = popen(cmd.c_str(), "r");
+  if (!f) {
+    out.push_back("?");
+    return out;
+  }
+  char line[1024];
+  while (fgets(line, sizeof(line), f)) {
+    // 缺失行形如 "/lib/x86_64/ld-linux-x86-64.so.2: error while loading
+    //            shared libraries: libQt6Widgets.so.6: cannot open shared..."
+    std::string s(line);
+    const size_t pos = s.find("cannot open shared object file");
+    if (pos == std::string::npos) continue;
+    // 提取「cannot open」前面的库名（最后一个 ':' 之后）
+    size_t b = s.rfind(':', pos);
+    if (b == std::string::npos) continue;
+    std::string lib = s.substr(0, b);
+    // 形如 "…libQt6Widgets.so.6"（可能带加载器路径前缀）
+    const size_t sp = lib.find_last_of(" \t");
+    if (sp != std::string::npos) lib = lib.substr(sp + 1);
+    while (!lib.empty() && (lib.back() == '\n' || lib.back() == ' ')) lib.pop_back();
+    if (!lib.empty() && std::find(out.begin(), out.end(), lib) == out.end())
+      out.push_back(lib);
+  }
+  pclose(f);
+  if (out.empty()) {
+    // 输出既没有缺失也不像依赖清单（如脚本文本 / ENOENT）→ 无法判定
+    // 注：正常 ELF 的输出每行都含 "=> " 或 "linux-vdso" 字样
+  }
+  return out;
+#endif
+}
+
 // 带符号环去重的递归枚举实现（walkFiles 用）
 void walkFilesImpl(const std::string& dir, std::vector<std::string>* out, int maxDepth,
                    int depth, std::set<std::pair<uint64_t, uint64_t>>* visited);

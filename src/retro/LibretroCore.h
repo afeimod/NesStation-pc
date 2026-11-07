@@ -44,6 +44,13 @@ class DiskControl {
   const struct retro_disk_control_callback* legacy_ = nullptr;
 };
 
+// —— 金手指（RetroArch .cht 的 address:value 码；逐帧应用）——
+struct CheatWrite {
+  uint64_t addr = 0;   // 目标偏移（相对内存域基址）
+  uint16_t value = 0;  // 写入值
+  uint8_t width = 1;   // 字节数（1/2，由码值位数决定）
+};
+
 class LibretroCore {
  public:
   LibretroCore(AudioBridge& audio, VideoBridge& video, InputManager& input);
@@ -90,6 +97,14 @@ class LibretroCore {
 
   // —— 磁盘控制 ——
   DiskControl& diskControl() { return disk_; }
+
+  // —— 金手指（★v1.3.1）——
+  // 写入集替换（CheatsScene 开关后调用；空集 = 清除）
+  void setCheats(const std::vector<CheatWrite>& writes) { cheats_ = writes; }
+  const std::vector<CheatWrite>& cheats() const { return cheats_; }
+  // 逐帧应用（runFrame 尾部自动调用；也可外部补调）：SYSTEM_RAM 域内直接写，
+  // 落不到则尝试 SAVE_RAM 域（RetroArch 同款回退）
+  void applyCheats();
 
   // 快进状态（GET_FASTFORWARDING / GET_AUDIO_VIDEO_ENABLE 响应）
   void setFastForward(bool ff) { fastForward_ = ff; }
@@ -176,6 +191,8 @@ class LibretroCore {
 
   DiskControl disk_;
   retro_keyboard_event_t coreKeyCb_ = nullptr;
+
+  std::vector<CheatWrite> cheats_;  // ★v1.3.1 启用中的金手指写入集
 };
 
 }  // namespace ns

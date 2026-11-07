@@ -286,11 +286,14 @@ jobs:
           Priority: optional
           Architecture: arm64
           Depends: libc6, libsdl2-2.0-0
+          Recommends: libqt6widgets6, libqt6gui6, libqt6core6, libqt6dbus6, libqt6svg6, libqt6charts6, libpulse0, libasound2, libboost-locale1.74, libfmt9, liblz4-1, libopus0, libzstd1, zlib1g, libvulkan1, curl
           Maintainer: NesStation PC <nesstation@users.noreply.github.com>
           Description: Multi-platform retro game station (libretro frontend)
            NesStation PC is a retro gaming frontend for Windows/Linux, powered by
            libretro cores: NES, SFC, GB/GBC, GBA, MD, PCE, NDS, PSX, PS2, DC,
            3DS, PSP, Arcade, DOS, Java ME and more.
+           Recommends 拉起内置模拟器（Dolphin/Eden）运行库；缺失时应用内
+           会按缺失库给出精确安装提示（v1.3.1）。
           EOF
 
           # md5sums（路径相对包根）

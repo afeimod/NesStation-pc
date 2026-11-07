@@ -22,6 +22,16 @@ std::unique_ptr<Scene> createSettingsScene(int initialTab = -1);
 // 核心选项浏览（platform：目标平台；运行中则热改）
 std::unique_ptr<Scene> createCoreOptionsScene(GamePlatform platform);
 
+// ★v1.3.1 三大在线入口（1:1 对齐 APK 信息架构，不再 toast 占位）：
+//   在线游戏（内置 12 站 + 自定义，浏览器打开） / 对战平台（服务器/登录/房间
+//   /对战 ROM 下载入库） / SWF（目录扫描 + ruffle/浏览器播放）
+std::unique_ptr<Scene> createOnlineGamesScene();
+std::unique_ptr<Scene> createBattleScene();
+std::unique_ptr<Scene> createSwfScene();
+
+// ★v1.3.1 金手指管理（RetroArch .cht 解析 + 逐帧应用，游戏内菜单入口）
+std::unique_ptr<Scene> createCheatsScene();
+
 // 关于
 std::unique_ptr<Scene> createAboutScene();
 

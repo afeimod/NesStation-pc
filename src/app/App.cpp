@@ -101,6 +101,18 @@ void Config::load(const std::string& file) {
       for (auto it = j["emulatorPaths"].begin(); it != j["emulatorPaths"].end(); ++it)
         emulatorPaths[it.key()] = it.value().get<std::string>();
     }
+    // ★v1.3.1 SWF 目录 / 对战平台服务器
+    swfDirs.clear();
+    if (j.contains("swfDirs") && j["swfDirs"].is_array()) {
+      for (const auto& d : j["swfDirs"])
+        if (d.is_string() && !d.get<std::string>().empty())
+          swfDirs.push_back(d.get<std::string>());
+    }
+    battleHost = j.value("battleHost", battleHost);
+    battleHttpPort = j.value("battleHttpPort", battleHttpPort);
+    battleTcpPort = j.value("battleTcpPort", battleTcpPort);
+    battleUser = j.value("battleUser", "");
+    battleToken = j.value("battleToken", "");
     // ★v1.2.9 FSD 磁贴个性化（APK PadLayout.homeTileIcons / homeTileIconAlphas）
     if (j.contains("homeTileIcons") && j["homeTileIcons"].is_object()) {
       for (auto it = j["homeTileIcons"].begin(); it != j["homeTileIcons"].end(); ++it)
@@ -164,6 +176,14 @@ void Config::save(const std::string& file) const {
   for (const auto& [k, v] : defaultCores) j["defaultCores"][k] = v;
   j["emulatorPaths"] = json::object();
   for (const auto& [k, v] : emulatorPaths) j["emulatorPaths"][k] = v;
+  // ★v1.3.1 SWF 目录 / 对战平台服务器
+  j["swfDirs"] = json::array();
+  for (const auto& d : swfDirs) j["swfDirs"].push_back(d);
+  j["battleHost"] = battleHost;
+  j["battleHttpPort"] = battleHttpPort;
+  j["battleTcpPort"] = battleTcpPort;
+  j["battleUser"] = battleUser;
+  j["battleToken"] = battleToken;
   // ★v1.2.9 FSD 磁贴个性化
   j["homeTileIcons"] = json::object();
   for (const auto& [k, v] : homeTileIcons) j["homeTileIcons"][k] = v;
@@ -454,6 +474,7 @@ bool App::init() {
   // 后台线程枚举，主线程逐帧合并（games_ 只在主线程写，线程安全）
   library.startBackgroundRescan(config.scanRecursive);
   externals.init(dataDir_);
+  externals.setApp(this);  // ★v1.3.1 后台启动验证线程回发 postNotice
   for (const auto& [k, v] : config.emulatorPaths) {
     // 旧版本键名兼容：dolphin → ishiiruka（对齐 Android CoreRegistry id）
     std::string key = k;
@@ -757,6 +778,15 @@ void App::pumpEvents() {
 
 void App::frame(float dt) {
   frameNo_++;
+  // ★v1.3.1 后台线程投递的通知 → 转 toast（postNotice 线程安全）
+  {
+    std::vector<std::string> pending;
+    {
+      std::lock_guard<std::mutex> lk(noticeMu_);
+      pending.swap(notices_);
+    }
+    for (auto& m : pending) toast(m);
+  }
   // ★v1.2.10：真实帧间隔（旧版硬编码 1/60 —— 无 VSync / 高刷环境下
   //   实际循环 120fps，模拟时间流速 ×2，FC 核心直接随 120 帧跑）
   input.endFrame(dt);
@@ -798,6 +828,11 @@ void App::frame(float dt) {
   if (testHook_) {
     testHook_(*this, testFrame_++);
   }
+}
+
+void App::postNotice(const std::string& msg) {
+  std::lock_guard<std::mutex> lk(noticeMu_);
+  notices_.push_back(msg);
 }
 
 void App::drawToasts(float dt) {

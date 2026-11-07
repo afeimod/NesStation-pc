@@ -13,18 +13,31 @@
 #endif
 #include <windows.h>  // CreateProcessA / STARTUPINFOA / CloseHandle
 #else
+#include <fcntl.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <thread>
+#include <unistd.h>
 extern char** environ;
 #endif
 
+#include <SDL.h>
+
+#include "app/App.h"
 #include "util/Fs.h"
 #include "util/Log.h"
 
 namespace ns {
 
 namespace {
+
+// ★v1.3.1 POSIX 启动验证回执通道（launch() 每次填充）
+#ifndef _WIN32
+App* g_appPtr = nullptr;         // postNotice 用（主循环里安全）
+std::string g_stderrLog;        // 本次启动的 stderr 捕获文件
+bool g_verify = false;          // 是否做后台秒退验证
+#endif
 
 #ifdef _WIN32
 const char* kExeSuffix = ".exe";
@@ -119,6 +132,8 @@ std::string findAppBundles(const std::string& dir, const std::vector<std::string
 // verifyErr 非空时：Windows 端等 2.5s —— 进程若秒退（缺 DLL/运行库）
 //   返回失败并写错误信息（旧版 CreateProcess 成功即返回 true，
 //   模拟器秒退时界面无任何反应 —— “点了没动静”的根因）。
+// ★v1.3.1 POSIX 端：stderr 重定向到日志文件 + 分离线程后台验证 3s
+//   （不再阻塞 UI；秒退经 App::postNotice 播报原因，捕获动态库报错）
 bool spawnDetached(const std::string& exe, const std::string& args,
                    std::string* verifyErr = nullptr) {
 #ifdef _WIN32
@@ -162,7 +177,6 @@ bool spawnDetached(const std::string& exe, const std::string& args,
   CloseHandle(pi.hProcess);
   return true;
 #else
-  (void)verifyErr;
   // 拆参数（引号外空格切分，路径带空格时由调用方加引号）
   std::vector<std::string> parts;
   std::string cur;
@@ -182,9 +196,62 @@ bool spawnDetached(const std::string& exe, const std::string& args,
   for (auto& s : parts) argv.push_back(const_cast<char*>(s.c_str()));
   argv.push_back(nullptr);
 
+  // ★v1.3.1 stderr 捕获：子进程 stderr 追加写入日志（动态库缺失报错在这里）
+  const std::string stderrLog = g_stderrLog;  // 由 launch() 设置（按模拟器分文件）
+  posix_spawn_file_actions_t fa;
+  posix_spawn_file_actions_init(&fa);
+  int fdErr = -1;
+  if (!stderrLog.empty()) {
+    fdErr = open(stderrLog.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fdErr >= 0) posix_spawn_file_actions_adddup2(&fa, fdErr, 2);
+  }
+
   pid_t pid = 0;
-  const int rc = posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), environ);
+  const int rc = posix_spawn(&pid, exe.c_str(), &fa, nullptr, argv.data(), environ);
+  if (fdErr >= 0) close(fdErr);
+  posix_spawn_file_actions_destroy(&fa);
   if (rc != 0) return false;
+
+  if (g_verify) {
+    // ★后台验证线程（不阻塞 UI）：3s 内退出 = 秒退 → postNotice 播报 + 日志尾部
+    std::thread([pid, exe, stderrLog]() {
+      const Uint64 deadline = SDL_GetTicks() + 3000;
+      int status = 0;
+      while (SDL_GetTicks() < deadline) {
+        const pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid) {
+          if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+            std::string tail;
+            FILE* f = fsutil::openFile(stderrLog, "rb");
+            if (f) {
+              char buf[2048];
+              size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+              fclose(f);
+              buf[n] = 0;
+              tail.assign(buf);
+            }
+            std::string msg = "【启动失败】" + fsutil::baseOf(exe) +
+                " 启动后立即退出（退出码 " +
+                std::to_string(WEXITSTATUS(status)) + "）";
+            if (!tail.empty()) {
+              // 取日志第一行有效信息（动态库缺失行最关键）
+              size_t ls = tail.find_first_not_of(" \r\n");
+              size_t le = tail.find('\n', ls == std::string::npos ? 0 : ls);
+              if (ls != std::string::npos)
+                msg += "\n" + tail.substr(ls, le == std::string::npos ? std::string::npos : le - ls);
+            }
+            if (!stderrLog.empty()) msg += "\n详细日志：" + stderrLog;
+            if (g_appPtr) g_appPtr->postNotice(msg);
+          }
+          return;  // 正常退出码 0（启动器转接）或被信号终止 → 不报错
+        }
+        if (r < 0) return;  // waitpid 异常（已被回收等）
+        SDL_Delay(120);
+      }
+      // 3s 仍在运行 → 启动成功；子进程由内核接管（SIGCHLD 忽略态下不产生僵尸）
+    }).detach();
+    return true;
+  }
   int status = 0;
   waitpid(pid, &status, WNOHANG);  // 回收即刻状态，不阻塞
   return true;
@@ -603,7 +670,42 @@ bool ExternalEmulators::launch(const ExternalCore& c, const std::string& romPath
     }
     return true;
   }
+  // ★v1.3.1 动态库预检：Linux 下模拟器秒退的头号原因是缺 Qt6/boost 等运行库
+  //   （发行包只带引擎不带系统库）。先枚举缺失库，缺了就直接给出安装提示，
+  //   不再「点了没反应」。
+  {
+    const std::vector<std::string> missing = fsutil::missingSharedLibs(exe);
+    if (missing.size() == 1 && missing[0] == "?") {
+      // 无法判定（非 ELF / 检测失败）→ 照常启动，靠后台验证兜底
+    } else if (!missing.empty()) {
+      std::string libs;
+      for (const auto& m : missing) libs += libs.empty() ? m : ("、" + m);
+      std::string hint;
+      if (exe.find("dolphin") != std::string::npos ||
+          exe.find("Dolphin") != std::string::npos ||
+          exe.find("ishiiruka") != std::string::npos) {
+        hint = "\nDebian/Ubuntu 安装：sudo apt install libqt6widgets6 libqt6gui6 "
+               "libqt6core6 libqt6dbus6 libqt6svg6 libqt6charts6 libpulse0 libasound2";
+      } else if (exe.find("eden") != std::string::npos ||
+                 exe.find("Eden") != std::string::npos) {
+        hint = "\nDebian/Ubuntu 安装：sudo apt install libboost-locale1.74+ libfmt9 "
+               "liblz4-1 libopus0 libzstd1 zlib1g libvulkan1";
+      } else if (exe.find("Cemu") != std::string::npos) {
+        hint = "\nDebian/Ubuntu 安装：sudo apt install libgtk-3-0 libpulse0 "
+               "libvulkan1 libboost-filesystem1.74+ libboost-program-options1.74+";
+      }
+      if (err) *err = live->name + " 缺少系统运行库：" + libs + hint;
+      LOGE("外置核心启动失败（缺库）：%s", libs.c_str());
+      return false;
+    }
+  }
+  // ★v1.3.1 后台验证（stderr 捕获到 external/<id>-stderr.log，秒退时播报原因）
+  g_appPtr = appPtr_;
+  g_stderrLog = fsutil::join(dataDir_, "external", live->id + "-stderr.log");
+  fsutil::makeDirs(fsutil::join(dataDir_, "external"));
+  g_verify = true;
   if (!spawnDetached(exe, args)) {
+    g_verify = false;
     if (err) *err = "posix_spawn 失败（" + live->name + "）";
     return false;
   }

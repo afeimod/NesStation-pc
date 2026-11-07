@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 
+#include "emu/Cheats.h"
 #include "ui/Scenes.h"
 #include "util/Fs.h"
 #include "util/Log.h"
@@ -105,6 +106,15 @@ std::string EmuRunner::start(App& app, const GameEntry& game) {
     const std::string err = core_->lastError();
     teardown(app);
     return std::string("游戏载入失败：") + err;
+  }
+
+  // ★v1.3.1 持久化金手指自动应用（启用集不随退出丢失，下次启动直接生效）
+  {
+    const auto files = cheats::scanFiles(app.dataDir());
+    if (!files.empty()) {
+      const auto enabled = cheats::loadEnabled(app.dataDir());
+      core_->setCheats(cheats::activeWrites(files, enabled));
+    }
   }
 
   running_ = true;

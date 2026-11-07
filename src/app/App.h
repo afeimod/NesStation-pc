@@ -4,6 +4,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -28,7 +29,7 @@ class EmuRunner;
 
 // —— 版本号（CMake 注入；本地直编 g++ 时回退）——
 #ifndef NESSTATION_VERSION
-#define NESSTATION_VERSION "1.2.8"
+#define NESSTATION_VERSION "1.3.1"
 #endif
 inline const char* appVersionText() { return "v" NESSTATION_VERSION; }
 
@@ -61,6 +62,14 @@ struct Config {
   bool fullscreenOnLaunch = false;   // 启动游戏时自动全屏（退出游戏恢复）
   int audioBufferMs = 64;      // 音频缓冲毫秒（越大越稳、延迟越高）
   std::map<std::string, std::string> emulatorPaths;  // dolphin/cemu/eden → exe
+  // ★v1.3.1 SWF 游戏目录（主页 SWF 入口扫描 .swf；默认数据目录 swf/）
+  std::vector<std::string> swfDirs;
+  // ★v1.3.1 对战平台服务器（对齐 APK BattleSession 默认值 afei.ddns.net:1808/1909）
+  std::string battleHost = "afei.ddns.net";
+  std::string battleHttpPort = "1808";
+  std::string battleTcpPort = "1909";
+  std::string battleUser;    // 已登录用户名（空 = 未登录）
+  std::string battleToken;   // Bearer token（登录后保存）
   // ★v1.2.9（对齐 Android PadLayout.homeTileIcons / homeTileIconAlphas）：
   //   FSD 主页磁贴个性化 —— 自定义图标路径与卡片透明度（tileKey → 值）
   std::map<std::string, std::string> homeTileIcons;      // "platform:NES" → 图片绝对路径
@@ -122,6 +131,9 @@ class App {
 
   // —— 杂项 ——
   void toast(const std::string& msg) { toasts_.push_back({msg, 3.5f}); }
+  // ★v1.3.1 线程安全 toast：工作线程（外置模拟器启动验证 / 联机 HTTP）经此
+  //   投递，主循环每帧取走转为常规 toast —— 修复后台线程直接改 toasts_ 的竞争
+  void postNotice(const std::string& msg);
   void requestExit() { running_ = false; }
   void saveConfig();            // ★v1.2.9 立即持久化配置（磁贴个性化等即时生效场景）
   bool isFullscreen() const { return config.fullscreen; }
@@ -171,6 +183,8 @@ class App {
     float life;
   };
   std::vector<Toast> toasts_;
+  std::mutex noticeMu_;               // postNotice 队列锁
+  std::vector<std::string> notices_;  // 后台线程待显示消息
 
   // 纹理缓存
   struct TexEntry {
