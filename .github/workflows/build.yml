@@ -120,11 +120,46 @@ jobs:
       - name: External cores registry test
         # ★exeDir 断言已路径无关（v1.2.2）：二进制在哪编译运行都成立
         #   （不含 VideoBridge/PixelFilters，无需 hqx —— 已本地验证可链接）
+        #   ★v1.3.2：test_externals.cpp 内置 App::postNotice 链接桩
+        #   （v1.3.1 起 ExternalEmulators.cpp 引用该符号，旧命令缺桩必挂）
         run: |
           g++ -std=c++17 -w -I src -I third_party $(sdl2-config --cflags) \
               tests/test_externals.cpp src/util/Fs.cpp src/util/Log.cpp \
               $(sdl2-config --libs) -ldl -lpthread -o smoke/test_ext
           ./smoke/test_ext
+
+      - name: Audio/Video bridge regression tests
+        # ★v1.3.2 新增：用户实测反馈的回归集 ——
+        #   音频（乱/快进：重采样/帧计量/溢出下溢/误清空）+ 像素格式
+        #   （GBA 反色：XRGB8888 通道序/跨会话格式残留）
+        run: |
+          g++ -std=c++17 -w -I src -I third_party -I third_party/libretro \
+              -I third_party/hqx -I third_party/stb $(sdl2-config --cflags) \
+              tests/test_audio.cpp src/retro/AudioBridge.cpp src/util/Log.cpp \
+              $(sdl2-config --libs) -ldl -lpthread -o smoke/test_audio
+          SDL_AUDIODRIVER=dummy ./smoke/test_audio
+          g++ -std=c++17 -w -I src -I third_party -I third_party/libretro \
+              -I third_party/hqx -I third_party/stb $(sdl2-config --cflags) \
+              tests/test_pixfmt.cpp src/retro/VideoBridge.cpp \
+              src/retro/PixelFilters.cpp src/util/Log.cpp \
+              third_party/hqx/hq2x.c third_party/hqx/hq4x.c third_party/hqx/init.c \
+              third_party/stb/stb_impl.cpp \
+              $(sdl2-config --libs) -ldl -lpthread -o smoke/test_pixfmt
+          SDL_VIDEODRIVER=dummy ./smoke/test_pixfmt
+
+      - name: Headless UI selftest (core settings panels)
+        # ★v1.3.2 无头 UI 截图自检：核心设置面板三场景 ——
+        #   copts_ext（NGC/Wii 外置核心面板：v1.2.9「核心设置进不去」回归）
+        #   copts_switch（Switch 面板）/ copts（libretro 未安装弹回不崩溃）
+        #   断言：进程 rc=0 + 截图齐全（面板布局由本地像素级验证，CI 防崩溃回归）
+        timeout-minutes: 5
+        run: |
+          rm -rf smoke/shots && mkdir -p smoke/shots
+          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3" \
+            NESSTATION_SHOT_DIR=smoke/shots \
+            SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+            ./build/bin/nesstation
+          test "$(find smoke/shots -name '*.png' | wc -l)" = "3"
 
       - name: Bundle cores (buildbot x86_64)
         timeout-minutes: 25
@@ -212,6 +247,40 @@ jobs:
           SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./smoke/test \
             smoke/cores/fceumm_libretro.so smoke/test.nes smoke
 
+      - name: Audio/Video/externals regression tests (aarch64)
+        # ★v1.3.2：用户主用 ARM64 设备 —— 回归集（音频乱/快进 + GBA 反色 +
+        #   三大核心探测/启动）在目标架构上同样全量跑
+        run: |
+          g++ -std=c++17 -w -I src -I third_party -I third_party/libretro \
+              $(sdl2-config --cflags) \
+              tests/test_externals.cpp src/util/Fs.cpp src/util/Log.cpp \
+              $(sdl2-config --libs) -ldl -lpthread -o smoke/test_ext
+          ./smoke/test_ext
+          g++ -std=c++17 -w -I src -I third_party -I third_party/libretro \
+              $(sdl2-config --cflags) \
+              tests/test_audio.cpp src/retro/AudioBridge.cpp src/util/Log.cpp \
+              $(sdl2-config --libs) -ldl -lpthread -o smoke/test_audio
+          SDL_AUDIODRIVER=dummy ./smoke/test_audio
+          g++ -std=c++17 -w -I src -I third_party -I third_party/libretro \
+              -I third_party/hqx -I third_party/stb $(sdl2-config --cflags) \
+              tests/test_pixfmt.cpp src/retro/VideoBridge.cpp \
+              src/retro/PixelFilters.cpp src/util/Log.cpp \
+              third_party/hqx/hq2x.c third_party/hqx/hq4x.c third_party/hqx/init.c \
+              third_party/stb/stb_impl.cpp \
+              $(sdl2-config --libs) -ldl -lpthread -o smoke/test_pixfmt
+          SDL_VIDEODRIVER=dummy ./smoke/test_pixfmt
+
+      - name: Headless UI selftest (aarch64, core settings panels)
+        # ★v1.3.2 无头 UI 截图自检（ARM64 目标架构同跑；布局像素级验证在 x64 job）
+        timeout-minutes: 5
+        run: |
+          rm -rf smoke/shots && mkdir -p smoke/shots
+          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3" \
+            NESSTATION_SHOT_DIR=smoke/shots \
+            SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+            ./build/bin/nesstation
+          test "$(find smoke/shots -name '*.png' | wc -l)" = "3"
+
       - name: Bundle cores (buildbot aarch64)
         timeout-minutes: 25
         run: |
@@ -246,7 +315,7 @@ jobs:
 
       - name: Package (.deb, Debian/Ubuntu)
         env:
-          DEB_VERSION: "1.2.9"
+          DEB_VERSION: "1.3.2"
         run: |
           set -eux
           PKG="dist/root"

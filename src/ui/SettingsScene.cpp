@@ -938,9 +938,9 @@ class SettingsScene : public Scene {
           if (ready) {
             status = "✓ 已就绪（独立核心）";
           } else if (!exts.empty() && !exts[0]->githubApi.empty()) {
-            status = app.externals.downloadRunning() ? "… 下载中" : "✗ 未安装 · 点击下载";
+            status = app.externals.downloadRunning() ? "… 下载中" : "✗ 未安装 · 点击查看";
           } else {
-            status = "✗ 未安装 · 点击打开官网";
+            status = "✗ 未安装 · 点击查看";
           }
         }
         std::string title = std::string(platformShortName(p)) + " · " + pc.coreTitle;
@@ -961,34 +961,10 @@ class SettingsScene : public Scene {
               app.pushScene(createCoreOptionsScene(p));
             }
           } else {
-            const auto exts = app.externals.forPlatform(p);
-            if (!app.externals.available(p) && !exts.empty()) {
-              const ExternalCore* e = exts[0];
-              if (!e->githubApi.empty()) {
-                if (app.externals.downloadRunning()) {
-                  app.toast("正在下载，请稍候");
-                } else {
-                  app.externals.startDownload(e->id);
-                  app.toast("开始自动下载 " + e->name);
-                }
-              } else {
-                openUrl(e->downloadPage);
-                app.toast("已打开 " + e->name + " 官网下载页");
-              }
-            } else {
-              // ★v1.3.0：已就绪 → 明确展示实际使用的模拟器与路径（用户此前
-              //   点进来只看到「下载独立模拟器」——内置的其实已在，只是
-              //   旧版探测不到）。跳到外置核心区块可查看详情/手动选择。
-              std::string found;
-              for (const auto* c : exts)
-                if (!c->foundPath.empty()) {
-                  found = c->name + " → " + c->foundPath;
-                  break;
-                }
-              catSel_ = 6;
-              app.toast(found.empty() ? "已就绪（详见下方「外置核心」区块）"
-                                      : "已就绪：" + found);
-            }
+            // ★v1.3.2：外置核心平台一律进入核心设置面板（旧版已就绪时仅 toast
+            //   一闪而过、未就绪时直接触发下载 —— 「核心设置进不去」的根因；
+            //   下载/官网/手动选择收进面板内的独立按钮，语义清晰）
+            app.pushScene(createCoreOptionsScene(p));
           }
         }
         // 状态色（UTF-8 前缀比较，勿用 status[0] 字节比较）

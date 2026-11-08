@@ -94,8 +94,17 @@ void AudioBridge::push(const int16_t* samples, size_t frames) {
   if (coreRate_ == deviceRate_) {
     // —— 等率：写入环形缓冲（单位 = 帧，杜绝旧版帧/样本混用下溢）——
     const size_t capacity = kMaxFrames;
+    // ★v1.3.2 溢出修复：旧版 overflow = ringSize_ + frames - capacity，
+    //   缓冲为空（ringSize_=0）时推入超容量数据（快进连跑多帧）会
+    //   ringSize_ -= overflow → size_t 下溢成 SIZE_MAX，缓冲状态全错
+    //   （爆音/杂音的又一来源）。现分两段处理：
+    //     1) 单次写入本身超容量 → 只保留最新 capacity 帧（丢新数据头部）；
+    //     2) 常规溢出 → 丢最旧（overflow ≤ ringSize_，减法安全）。
+    if (frames >= capacity) {
+      src += (frames - capacity) * 2;
+      frames = capacity;
+    }
     if (ringSize_ + frames > capacity) {
-      // 溢出（快进/卡顿补帧）：丢最旧数据，保持低延迟（对齐旧语义）
       const size_t overflow = ringSize_ + frames - capacity;
       ringPos_ = (ringPos_ + overflow) % capacity;
       ringSize_ -= overflow;
@@ -124,13 +133,17 @@ void AudioBridge::push(const int16_t* samples, size_t frames) {
     LOGI("音频重采样开启：%dHz ×%d → %dHz ×2", coreRate_, coreChannels_,
          deviceRate_);
   }
-  const int bytes = (int)(frames * coreChannels_ * sizeof(int16_t));
-  if (SDL_AudioStreamPut(stream_, src, bytes) != 0) return;
-  // 快进/补帧时缓冲堆积 → 清空防延迟发散（会掉一小段声音，属正常）
+  // ★v1.3.2 堆积清空时机修复：旧版在 Put 之后检查 available，
+  //   核心单次大块提交（≥0.5s 音频，如补帧/换 core 首批）会立即被
+  //   SDL_AudioStreamClear 清光 → 整段无声。改为 Put 之前检查
+  //   「上一轮残留」：快进持续堆积仍会被清（延迟不发散），
+  //   而单次大块提交完整保留。
   if ((size_t)SDL_AudioStreamAvailable(stream_) >
       kStreamCapFrames * 2 * (size_t)sizeof(int16_t)) {
     SDL_AudioStreamClear(stream_);
   }
+  const int bytes = (int)(frames * coreChannels_ * sizeof(int16_t));
+  if (SDL_AudioStreamPut(stream_, src, bytes) != 0) return;
 }
 
 void AudioBridge::clear() {

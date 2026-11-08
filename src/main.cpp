@@ -155,6 +155,18 @@ void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
   } else if (name == "ext") {
     // 核心设置 tab 的外置核心区块（自动下载 / 手动选择 / 打开官网 / 移除）
     app.pushScene(ns::createSettingsScene(6));
+  } else if (name == "copts") {
+    // ★v1.3.2 核心设置面板（libretro 平台）：NES 的 FCEUmm 选项页
+    //   （核心未安装时 toast + 弹回——截图应显示提示过的主页/设置页）
+    app.pushScene(ns::createCoreOptionsScene(ns::GamePlatform::NES));
+  } else if (name == "copts_ext") {
+    // ★v1.3.2 核心设置面板（外置核心平台）：NGC/Wii → Ishiiruka 独立
+    //   模拟器状态面板。v1.2.9 此处 toast 一闪 + 立即弹回（「核心设置
+    //   进不去」）；现在必须停在面板上（状态卡/路径/参数/按钮可见）
+    app.pushScene(ns::createCoreOptionsScene(ns::GamePlatform::NGCWII));
+  } else if (name == "copts_switch") {
+    // ★v1.3.2 同上：Switch → Eden 面板（注册表第二 Standalone 平台）
+    app.pushScene(ns::createCoreOptionsScene(ns::GamePlatform::NSWITCH));
   } else if (name == "about") {
     app.pushScene(ns::createAboutScene());
   } else if (name == "online") {

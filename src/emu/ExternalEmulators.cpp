@@ -504,7 +504,16 @@ void ExternalEmulators::init(const std::string& dataDir) {
   freej2me.notes = "J2ME（Java ME）PC 端开源模拟器，需要系统已安装 Java 运行时（java）启动。";
   add(std::move(freej2me));
 
-  for (auto& e : list_) detect(&e);
+  for (auto& e : list_) {
+#if !defined(_WIN32) && !defined(__APPLE__) && defined(__aarch64__)
+    // ★v1.3.2 ARM64 Linux：上洲 Releases 只有 x86_64 资产（AppImage / deb /
+    //   Windows zip），自动下载装到 ARM 设备不可执行 —— 停用自动下载入口
+    //   （UI 转为「打开官网」+ box64 说明；freej2me 是 jar 架构无关，保留）。
+    //   dolphin/eden 的 ARM64 版由本仓库 CI 超级构建随包交付（emulators/ 目录）。
+    if (e.id != "freej2me") e.githubApi.clear();
+#endif
+    detect(&e);
+  }
 }
 
 // —— 探测（对齐 Android resolveExecutable 顺序） ——————————————————
@@ -592,7 +601,7 @@ std::string ExternalEmulators::statusText(GamePlatform p) const {
   for (const auto& e : list_) {
     if (e.platform != p) continue;
     if (!e.foundPath.empty()) return e.name + "：" + e.foundPath;
-    return e.name + " 未找到（可在「核心管理」自动下载 / 手动选择路径）";
+    return e.name + " 未找到（设置 → 核心设置 → 该平台面板内可安装/手动选择）";
   }
   return "该平台无外置核心";
 }
@@ -725,7 +734,7 @@ bool ExternalEmulators::launchPlatform(GamePlatform p, const std::string& romPat
     const ExternalCore* live = find(c->id);
     if (live && !live->foundPath.empty()) return launch(*live, romPath, err);
   }
-  if (err) *err = defs[0]->name + " 未安装（可在设置 → 核心管理安装）";
+  if (err) *err = defs[0]->name + " 未安装（设置 → 核心设置 → 该平台 可安装/手动选择；随包内置版本位于 emulators/ 目录）";
   return false;
 }
 

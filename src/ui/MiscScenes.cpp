@@ -2,6 +2,13 @@
 // + 文件浏览器 + 关于页
 #include <algorithm>
 
+#if defined(__has_include)
+#if __has_include(<SDL_misc.h>)
+#include <SDL_misc.h>
+#define NS_MISC_HAVE_OPENURL 1
+#endif
+#endif
+
 #include "emu/EmuRunner.h"
 #include "ui/OptionZh.h"
 #include "ui/Scenes.h"
@@ -14,11 +21,19 @@ namespace ns {
 namespace {
 
 // ==================== 核心选项 ====================
+// ★v1.3.2 支持外置核心平台（NGC/Wii、Wii U、Switch 等 Standalone 形态）：
+//   旧版对这些平台 corePathFor() 恒为空 → toast 一闪 + 立即 popScene，
+//   用户「点核心设置没反应/进不去」的根因。现在展示独立模拟器状态面板：
+//   探测路径 / 就绪状态 / 启动参数说明 / 手动选择 / 自动下载（可用时）/ 官网。
 class CoreOptionsScene : public Scene {
  public:
   explicit CoreOptionsScene(GamePlatform p) : platform_(p) {}
 
   void onEnter(App& app) override {
+    // —— 外置核心平台：不装载 libretro，绘制独立模拟器面板 ——
+    standalone_ = platformCore(platform_).kind == CoreKind::Standalone;
+    if (standalone_) return;
+
     // 运行中同核心 → 直接热改；否则临时装载核心读取选项
     // （按候选链解析后的实际核心，可能是替代核心）
     const PlatformCore resolved = app.cores.resolveCore(platform_);
@@ -68,6 +83,7 @@ class CoreOptionsScene : public Scene {
       app.popScene();
       return;
     }
+    if (standalone_) return;  // 面板交互全在 draw 的按钮里
     LibretroCore* c = core(app);
     if (!c) {
       app.popScene();
@@ -99,6 +115,10 @@ class CoreOptionsScene : public Scene {
       const float t = (float)i / 40;
       d.rect(Rect(0, app.draw.H * t, app.draw.W, app.draw.H / 40 + 1),
              sk.bg.lerp(sk.bgDeep, t));
+    }
+    if (standalone_) {
+      drawStandalone(app);
+      return;
     }
     const PlatformCore pc = app.cores.resolveCore(platform_);
     if (w::header(app, std::string("核心设置 · ") + pc.coreTitle,
@@ -183,7 +203,189 @@ class CoreOptionsScene : public Scene {
   }
 
  private:
+  // —— 外置核心平台面板（★v1.3.2：核心设置对这些平台也能进入） ——
+  void drawStandalone(App& app) {
+    const Skin& sk = Theme::skin();
+    Draw& d = app.draw;
+    const PlatformCore pc = platformCore(platform_);
+    if (w::header(app, std::string("核心设置 · ") + pc.coreTitle,
+                  platformFullName(platform_), true)) {
+      app.popScene();
+      return;
+    }
+
+    const auto exts = app.externals.forPlatform(platform_);
+    // 滚动区（拖拽 + 滚轮）
+    const Rect listRc(24, 110, app.draw.W - 48, app.draw.H - 150);
+    scroll_ += w::dragScroll(app, listRc);
+    if (listRc.contains(app.input.input().mouse))
+      scroll_ = std::max(0.0f, scroll_ - (float)app.input.input().wheel * 56.0f);
+
+    d.pushClip(listRc);
+    float y = 116 - scroll_;
+
+    // —— 说明块 ——
+    w::sectionLabel(app, 40, y, "独立模拟器（外置核心）");
+    y += 30;
+    {
+      const std::string l1 =
+          "该平台使用独立模拟器运行（与安卓版进程内引擎同源）：NesStation 负责探测、";
+      const std::string l2 =
+          "启动与游戏库管理，模拟器本体以独立进程运行。下方卡片显示探测结果；";
+      const std::string l3 =
+          "未就绪时可在卡片内自动下载（可用时）或手动选择已安装的可执行文件。";
+      app.font.draw(app.sdlRenderer(), l1, 40, y, 13, sk.textDim);
+      app.font.draw(app.sdlRenderer(), l2, 40, y + 20, 13, sk.textDim);
+      app.font.draw(app.sdlRenderer(), l3, 40, y + 40, 13, sk.textDim);
+      y += 66;
+    }
+
+    for (const auto* e : exts) {
+      const ExternalCore live = *e;  // 快照（重探测在按钮回调里刷新）
+      const bool ready = !live.foundPath.empty();
+      const float cardH = 150;
+      const Rect rc(24, y, app.draw.W - 60, cardH);
+      w::panel(app, rc, ready);
+      // 标题 + 状态
+      app.font.draw(app.sdlRenderer(), live.name, rc.x + 16, rc.y + 12, 16, sk.textHi,
+                    true);
+      {
+        const std::string st = ready ? "✓ 已就绪" : "✗ 未安装";
+        const float stW = app.font.textWidth(st, 12);
+        app.font.draw(app.sdlRenderer(), st, rc.right() - stW - 16, rc.y + 14, 12,
+                      ready ? sk.green : sk.red);
+      }
+      // 平台徽章
+      w::platformBadge(app, rc.x + 16 + app.font.textWidth(live.name, 16) + 10,
+                       rc.y + 20, platform_);
+      // 路径 / 说明
+      if (ready) {
+        app.font.draw(app.sdlRenderer(), "→ " + live.foundPath, rc.x + 16, rc.y + 38, 12,
+                      sk.green);
+      } else if (!live.userPath.empty()) {
+        app.font.draw(app.sdlRenderer(), "⚠ 配置的路径无效：" + live.userPath, rc.x + 16,
+                      rc.y + 38, 12, sk.red);
+      }
+      app.font.draw(app.sdlRenderer(), live.notes, rc.x + 16, rc.y + 58, 12, sk.textDim);
+      app.font.draw(app.sdlRenderer(),
+                    std::string("启动参数：") + live.argTemplate + "（{rom} = 游戏路径）",
+                    rc.x + 16, rc.y + 76, 12, sk.textDim);
+      // ARM64 无官方包提示
+#if !defined(_WIN32) && !defined(__APPLE__) && defined(__aarch64__)
+      if (live.githubApi.empty() && live.id != "freej2me") {
+        app.font.draw(app.sdlRenderer(),
+                      "ARM64 设备：官方仅提供 x86_64 包，自动下载已停用；"
+                      "可用 box64 运行 x86_64 版（手动选择 box64 包装脚本），"
+                      "或到官网查看 ARM 构建说明。",
+                      rc.x + 16, rc.y + 94, 11, sk.gold);
+      }
+#endif
+      // 按钮行：重新检测 | 手动选择 | 自动下载/官网 | 移除（已配置时）
+      {
+        const float bw = 108, bh = 30;
+        const float by = rc.y + rc.h - bh - 12;
+        float bx = rc.right() - bw - 14;
+        if (!live.userPath.empty() || ready) {
+          const Rect rm(bx, by, bw, bh);
+          if (w::button(app, rm, "移除配置", false, 12, false)) {
+            app.externals.clearUserPath(live.id);
+            app.config.emulatorPaths.erase(live.id);
+            app.config.save(fsutil::join(app.dataDir(), "config.json"));
+            app.toast("已移除 " + live.name + " 配置");
+          }
+          bx -= bw + 8;
+        }
+        if (live.githubApi.empty()) {
+          const Rect wp(bx, by, bw, bh);
+          if (w::button(app, wp, "打开官网", false, 12, false)) {
+            openExternalUrl(live.downloadPage);
+            app.toast("已打开 " + live.name + " 下载页");
+          }
+        } else {
+          const Rect dl(bx, by, bw, bh);
+          if (w::button(app, dl,
+                        app.externals.downloadRunning() ? "下载中…" : "⇩ 自动下载",
+                        false, 12, true)) {
+            if (app.externals.downloadRunning()) {
+              app.toast("正在下载，请稍候");
+            } else {
+              app.externals.startDownload(live.id);
+              app.toast("开始自动下载 " + live.name);
+            }
+          }
+        }
+        bx -= bw + 8;
+        {
+          const Rect pick(bx, by, bw, bh);
+          if (w::button(app, pick, "手动选择", false, 12, false)) {
+            BrowserRequest req;
+            req.title = "选择 " + live.name + " 可执行文件";
+            req.mode = 1;
+            req.startDir = fsutil::exeDir();
+            std::string id = live.id;
+            req.onPick = [&app, id](const std::string& exe) {
+              app.externals.setUserPath(id, exe);
+              app.config.emulatorPaths[id] = exe;
+              app.config.save(fsutil::join(app.dataDir(), "config.json"));
+              app.toast("已配置 " + id);
+            };
+            browsePath(app, req);
+          }
+        }
+        bx -= bw + 8;
+        {
+          const Rect rd(bx, by, bw, bh);
+          if (w::button(app, rd, "重新检测", false, 12, false)) {
+            app.externals.reDetect(live.id);
+            const ExternalCore* now = app.externals.find(live.id);
+            app.toast(now && !now->foundPath.empty()
+                          ? "已就绪：" + now->foundPath
+                          : live.name + " 仍未找到");
+          }
+        }
+      }
+      y += cardH + 14;
+    }
+
+    // 下载进度（后台线程）
+    {
+      const auto pr = app.externals.progress();
+      if (pr.running || pr.finished) {
+        app.font.draw(app.sdlRenderer(), pr.label, 40, y, 12,
+                      pr.ok ? sk.green : sk.gold);
+        y += 24;
+        if (pr.finished) app.externals.clearFinishFlag();
+      }
+    }
+    d.popClip();
+
+    // 滚动边界钳制
+    {
+      const float total = 116 + (y + scroll_) - 116 + 40;
+      const float viewH = listRc.h;
+      const float maxScroll = std::max(0.0f, total - viewH);
+      if (scroll_ > maxScroll) scroll_ = maxScroll;
+      if (scroll_ < 0) scroll_ = 0;
+    }
+
+    w::keyHintBar(app, {{"B / Esc", "返回"}});
+  }
+
+  // 打开浏览器（SDL_OpenURL；与 SettingsScene 同款）
+  static void openExternalUrl(const std::string& url) {
+#if defined(NS_MISC_HAVE_OPENURL)
+    SDL_OpenURL(url.c_str());
+#elif defined(_WIN32)
+    std::string cmd = "start \"\" \"" + url + "\"";
+    std::system(cmd.c_str());
+#else
+    std::string cmd = "xdg-open '" + url + "'";
+    std::system(cmd.c_str());
+#endif
+  }
+
   GamePlatform platform_;
+  bool standalone_ = false;  // ★v1.3.2 外置核心平台（面板模式）
   bool live_ = false;
   std::unique_ptr<LibretroCore> temp_;
   int sel_ = 0;
