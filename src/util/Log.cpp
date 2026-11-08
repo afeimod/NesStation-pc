@@ -1,5 +1,6 @@
 #include "util/Log.h"
 
+#include <atomic>
 #include <cstdio>
 #include <ctime>
 #include <mutex>
@@ -10,6 +11,8 @@ namespace {
 std::mutex g_logMutex;
 FILE* g_logFile = nullptr;
 std::string g_logPath;
+// ★v1.3.3 自检模式镜像开关（见 Log.h 注释；写先于任何读线程启动）
+std::atomic<bool> g_mirrorStderr{false};
 
 const char* levelName(LogLevel lv) {
   switch (lv) {
@@ -36,6 +39,8 @@ void logInit(const std::string& filePath) {
 }
 
 std::string logGetPath() { return g_logPath; }
+
+void logSetMirrorStderr(bool on) { g_mirrorStderr.store(on); }
 
 void logClose() {
   std::lock_guard<std::mutex> lock(g_logMutex);
@@ -64,6 +69,11 @@ void logWrite(LogLevel level, const char* tag, const char* fmt, ...) {
     fflush(g_logFile);
   } else {
     fputs(line.c_str(), stderr);
+  }
+  // ★v1.3.3：自检模式下同步镜像到 stderr（CI 可见）
+  if (g_mirrorStderr.load()) {
+    fputs(line.c_str(), stderr);
+    fflush(stderr);
   }
 }
 

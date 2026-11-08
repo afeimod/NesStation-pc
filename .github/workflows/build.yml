@@ -75,10 +75,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install deps
+        # ★v1.3.3：+fonts-wqy-zenhei —— 无头自检需要字体（initFontChain 找不到
+        #   任何字体时 App::init 直接失败，rc=1 零截图；ubuntu runner 自带
+        #   字体不保证含 CJK，统一装文泉驿正黑保证截图内容可验证）
         timeout-minutes: 15
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential cmake libsdl2-dev
+          sudo apt-get install -y build-essential cmake libsdl2-dev fonts-wqy-zenhei
 
       - name: Configure
         # FETCH_CORES=OFF：CI 在 Bundle cores 步骤按目标目录显式下载，避免重复拉取
@@ -123,7 +126,8 @@ jobs:
         #   ★v1.3.2：test_externals.cpp 内置 App::postNotice 链接桩
         #   （v1.3.1 起 ExternalEmulators.cpp 引用该符号，旧命令缺桩必挂）
         run: |
-          g++ -std=c++17 -w -I src -I third_party $(sdl2-config --cflags) \
+          g++ -std=c++17 -w -I src -I third_party -I third_party/libretro \
+              $(sdl2-config --cflags) \
               tests/test_externals.cpp src/util/Fs.cpp src/util/Log.cpp \
               $(sdl2-config --libs) -ldl -lpthread -o smoke/test_ext
           ./smoke/test_ext
@@ -152,14 +156,24 @@ jobs:
         #   copts_ext（NGC/Wii 外置核心面板：v1.2.9「核心设置进不去」回归）
         #   copts_switch（Switch 面板）/ copts（libretro 未安装弹回不崩溃）
         #   断言：进程 rc=0 + 截图齐全（面板布局由本地像素级验证，CI 防崩溃回归）
+        # ★v1.3.3：失败时 dump 应用日志 —— 旧版错误只写 nesstation.log 文件，
+        #   CI 上只剩 exit code 零线索（本次 arm64 job 空容器无字体，自检
+        #   rc=1 挂了三分钟才定位）；配合 main.cpp 的 stderr 镜像双保险
         timeout-minutes: 5
         run: |
           rm -rf smoke/shots && mkdir -p smoke/shots
           NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3" \
             NESSTATION_SHOT_DIR=smoke/shots \
             SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
-            ./build/bin/nesstation
-          test "$(find smoke/shots -name '*.png' | wc -l)" = "3"
+            ./build/bin/nesstation || { \
+              echo "=== 自检进程异常退出，dump 应用日志 ==="; \
+              cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null; exit 1; }
+          n=$(find smoke/shots -name '*.png' | wc -l)
+          if [ "$n" != "3" ]; then
+            echo "=== 截图 $n/3，dump 应用日志 ==="
+            cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null
+            exit 1
+          fi
 
       - name: Bundle cores (buildbot x86_64)
         timeout-minutes: 25
@@ -207,8 +221,12 @@ jobs:
           apt-get update -qq
           # ca-certificates 必须显式安装：--no-install-recommends 会跳过
           # libcurl4 对它的 Recommends 依赖，导致 curl (77) 证书错误
+          # ★v1.3.3：+fonts-wqy-zenhei —— debian:12 空容器没有任何字体，
+          #   App::initFontChain 三段候选（env → assets/fonts → 系统扫描）
+          #   全部落空 → init 失败 rc=1 → 自检 0 截图（本次 deb job 死因）
           apt-get install -y --no-install-recommends \
-            build-essential cmake libsdl2-dev ca-certificates curl unzip python3
+            build-essential cmake libsdl2-dev ca-certificates curl unzip python3 \
+            fonts-wqy-zenhei
 
       - name: Configure
         run: |
@@ -272,14 +290,22 @@ jobs:
 
       - name: Headless UI selftest (aarch64, core settings panels)
         # ★v1.3.2 无头 UI 截图自检（ARM64 目标架构同跑；布局像素级验证在 x64 job）
+        # ★v1.3.3：同 x64 job —— 失败时 dump 应用日志（本 job 死因即容器无字体）
         timeout-minutes: 5
         run: |
           rm -rf smoke/shots && mkdir -p smoke/shots
           NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3" \
             NESSTATION_SHOT_DIR=smoke/shots \
             SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
-            ./build/bin/nesstation
-          test "$(find smoke/shots -name '*.png' | wc -l)" = "3"
+            ./build/bin/nesstation || { \
+              echo "=== 自检进程异常退出，dump 应用日志 ==="; \
+              cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null; exit 1; }
+          n=$(find smoke/shots -name '*.png' | wc -l)
+          if [ "$n" != "3" ]; then
+            echo "=== 截图 $n/3，dump 应用日志 ==="
+            cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null
+            exit 1
+          fi
 
       - name: Bundle cores (buildbot aarch64)
         timeout-minutes: 25

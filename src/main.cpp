@@ -389,6 +389,10 @@ int main(int argc, char** argv) {
   if (const char* script = SDL_getenv("NESSTATION_SELFTEST")) {
     SDL_setenv("SDL_VIDEODRIVER", "dummy", 1);
     SDL_setenv("SDL_AUDIODRIVER", "dummy", 1);
+    // ★v1.3.3：日志镜像到 stderr —— logInit 之后日志默认只写文件，
+    //   CI 上自检失败时（如容器内无字体导致 initFontChain 失败）只有
+    //   exit code 没有原因；镜像后 LOGE 直接出现在 Actions 日志
+    ns::logSetMirrorStderr(true);
     auto st = std::make_shared<SelftestState>();
     st->steps = parseScript(script);
     st->shotDir = SDL_getenv("NESSTATION_SHOT_DIR")
