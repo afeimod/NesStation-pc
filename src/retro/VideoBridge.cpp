@@ -22,6 +22,7 @@ void VideoBridge::setRenderer(SDL_Renderer*) {}
 
 void VideoBridge::beginSession() {
   // 像素格式回默认（核心声明时经 SET_PIXEL_FORMAT 覆盖）
+  const std::lock_guard<std::mutex> lk(bufMu_);
   fmt_ = RETRO_PIXEL_FORMAT_0RGB1555;
   pending_.clear();
   pendingW_ = pendingH_ = 0;
@@ -32,6 +33,7 @@ void VideoBridge::beginSession() {
 }
 
 void VideoBridge::setPixelFormat(enum retro_pixel_format fmt) {
+  const std::lock_guard<std::mutex> lk(bufMu_);
   fmt_ = fmt;
   const char* name = fmt == RETRO_PIXEL_FORMAT_XRGB8888 ? "XRGB8888"
                     : fmt == RETRO_PIXEL_FORMAT_RGB565    ? "RGB565"
@@ -59,6 +61,7 @@ void VideoBridge::setGeometry(unsigned w, unsigned h, double aspect) {
 void VideoBridge::frame(const void* data, unsigned width, unsigned height, size_t pitch) {
   if (!data || !width || !height) return;
   if (width > 8192 || height > 8192) return;
+  const std::lock_guard<std::mutex> lk(bufMu_);
   // ★v1.3.0 帧到达即拷贝到自有缓冲（与核心内部缓冲完全解耦，
   //   渲染期间无论核心怎么写都不会读到半帧 —— 割裂闪烁根治）
   const size_t need = (size_t)pitch * height;
@@ -97,6 +100,7 @@ void VideoBridge::ensureTexture(SDL_Renderer* r, unsigned needW, unsigned needH)
 //   超预算 / 内存不足 → 静默直通（原帧）。
 void VideoBridge::uploadFrame(SDL_Renderer* r) {
   if (!dirty_ || pending_.empty()) return;
+  const std::lock_guard<std::mutex> lk(bufMu_);
 
   const unsigned srcW = pendingW_;
   const unsigned srcH = pendingH_;

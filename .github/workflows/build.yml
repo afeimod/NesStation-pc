@@ -151,6 +151,32 @@ jobs:
               $(sdl2-config --libs) -ldl -lpthread -o smoke/test_pixfmt
           SDL_VIDEODRIVER=dummy ./smoke/test_pixfmt
 
+      - name: "Core links regression (real cores: INTL/options/GBA color)"
+        # ★v1.3.3 用户实测三大问题回归集（真实核心）——
+        #   ① INTL 中文：核心菜单全英文的根因（旧版取 intl->us）
+        #   ② 持久层选项生效：Region=PAL → fps≈50（旧版 resolver 时序颠倒，
+        #      恒拿默认值 ——「核心设置没有效果」根因）
+        #   ③ GBA 颜色：自制纯蓝 ROM → 整链路回读纯蓝（反色回归）
+        timeout-minutes: 10
+        run: |
+          mkdir -p smoke/cores2
+          curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 -o fce2.zip \
+            https://buildbot.libretro.com/nightly/linux/x86_64/latest/fceumm_libretro.so.zip
+          python3 -c "import zipfile; zipfile.ZipFile('fce2.zip').extractall('smoke/cores2')"
+          curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 -o mgb.zip \
+            https://buildbot.libretro.com/nightly/linux/x86_64/latest/mgba_libretro.so.zip
+          python3 -c "import zipfile; zipfile.ZipFile('mgb.zip').extractall('smoke/cores2')"
+          rm -f fce2.zip mgb.zip
+          g++ -std=c++17 -w -I src -I third_party -I third_party/stb \
+              -I third_party/libretro -I third_party/hqx $(sdl2-config --cflags) \
+              tests/test_core_links.cpp src/util/Log.cpp src/util/Fs.cpp \
+              src/retro/LibretroCore.cpp src/retro/AudioBridge.cpp src/retro/VideoBridge.cpp \
+              src/retro/InputManager.cpp src/retro/PixelFilters.cpp \
+              third_party/hqx/hq2x.c third_party/hqx/hq4x.c third_party/hqx/init.c \
+              third_party/stb/stb_impl.cpp \
+              $(sdl2-config --libs) -ldl -lpthread -o smoke/test_corelinks
+          SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./smoke/test_corelinks smoke/cores2
+
       - name: Headless UI selftest (core settings panels)
         # ★v1.3.2 无头 UI 截图自检：核心设置面板三场景 ——
         #   copts_ext（NGC/Wii 外置核心面板：v1.2.9「核心设置进不去」回归）
@@ -287,6 +313,28 @@ jobs:
               third_party/stb/stb_impl.cpp \
               $(sdl2-config --libs) -ldl -lpthread -o smoke/test_pixfmt
           SDL_VIDEODRIVER=dummy ./smoke/test_pixfmt
+
+      - name: "Core links regression (aarch64, real cores)"
+        # ★v1.3.3 同 x64 job（目标架构实测；核心位于 linux/aarch64）
+        timeout-minutes: 10
+        run: |
+          mkdir -p smoke/cores2
+          curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 -o fce2.zip \
+            https://buildbot.libretro.com/nightly/linux/aarch64/latest/fceumm_libretro.so.zip
+          python3 -c "import zipfile; zipfile.ZipFile('fce2.zip').extractall('smoke/cores2')"
+          curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 -o mgb.zip \
+            https://buildbot.libretro.com/nightly/linux/aarch64/latest/mgba_libretro.so.zip
+          python3 -c "import zipfile; zipfile.ZipFile('mgb.zip').extractall('smoke/cores2')"
+          rm -f fce2.zip mgb.zip
+          g++ -std=c++17 -w -I src -I third_party -I third_party/stb \
+              -I third_party/libretro -I third_party/hqx $(sdl2-config --cflags) \
+              tests/test_core_links.cpp src/util/Log.cpp src/util/Fs.cpp \
+              src/retro/LibretroCore.cpp src/retro/AudioBridge.cpp src/retro/VideoBridge.cpp \
+              src/retro/InputManager.cpp src/retro/PixelFilters.cpp \
+              third_party/hqx/hq2x.c third_party/hqx/hq4x.c third_party/hqx/init.c \
+              third_party/stb/stb_impl.cpp \
+              $(sdl2-config --libs) -ldl -lpthread -o smoke/test_corelinks
+          SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./smoke/test_corelinks smoke/cores2
 
       - name: Headless UI selftest (aarch64, core settings panels)
         # ★v1.3.2 无头 UI 截图自检（ARM64 目标架构同跑；布局像素级验证在 x64 job）

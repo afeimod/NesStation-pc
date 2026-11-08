@@ -75,8 +75,14 @@ std::string toUtf8(const std::wstring& wide);   // UTF-16 → UTF-8
 
 // 可移植 fopen：路径为 UTF-8（Windows 内部 _wfopen，中文路径可用）
 FILE* openFile(const std::string& utf8Path, const char* mode);
-// 可移植 system：命令为 UTF-8（Windows 内部 _wsystem，中文路径可用）
+// 执行 shell 命令并等待退出。Windows 下经 cmd.exe /c 但【完全无窗口】
+// （★v1.3.3：旧版 _wsystem 每次弹一个 cmd 黑窗 —— 封面后台下载线程
+//   对每个缺封面的游戏跑一次 curl，库一大就「一闪一闪不停弹 cmd」）。
 int runCommand(const std::string& utf8Cmd);
+
+// 同上，并捕获 stdout（替代 popen；Windows 上同样无窗口）。
+// 返回退出码；stdoutOut 可为 nullptr。
+int runCommandCapture(const std::string& utf8Cmd, std::string* stdoutOut);
 
 // ★v1.3.1 用系统默认浏览器打开 URL（在线游戏 / SWF Ruffle 演示页用）。
 //   Windows: start ""；macOS: open；Linux: xdg-open（缺失时返回 false）。

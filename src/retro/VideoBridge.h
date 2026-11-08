@@ -5,6 +5,7 @@
 //   retro/PixelFilters.h）。
 #pragma once
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -99,6 +100,10 @@ class VideoBridge {
   //   渲染读到中途被改写的缓冲 → 画面出现闪烁割裂块。
   //   现在每帧到达即拷贝（256×240 仅 ~123KB，60fps 代价可忽略），
   //   uploadFrame 只读自有数据，与核心完全解耦。
+  // ★v1.3.3 bufMu_：个别 libretro 核心会从自己的工作线程直调
+  //   video_refresh（违反 spec 但确实存在）——拷贝与转换互斥，
+  //   杜绝“半帧新半帧旧”的割裂/噪声（单线程核心零开销：无竞争快路径）。
+  std::mutex bufMu_;
   std::vector<uint8_t> pending_;
   unsigned pendingW_ = 0, pendingH_ = 0;
   size_t pendingPitch_ = 0;

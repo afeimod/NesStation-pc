@@ -160,6 +160,11 @@ class LibretroCore {
   bool environment(unsigned cmd, void* data);
   void parseOptionsV2(const struct retro_core_options_v2* opts);
   void parseOptionsV1(const struct retro_core_option_definition* defs);
+  // ★v1.3.3 INTL 合并：local 结构只含【已翻译】的选项（实测 fceumm zh_CN
+  //   比英文版少 14 项）——直接解析 local 会丢选项。先解析 us（全集），
+  //   再用 local 的翻译覆盖显示文本；值字符串（回传核心的 API 值）不动。
+  void overlayLocalizedV2(const struct retro_core_options_v2* opts);
+  void overlayLocalizedV1(const struct retro_core_option_definition* defs);
   void parseVariablesLegacy(const struct retro_variable* vars);
   void fillOptionDefaults();
   void applyAvInfo(const struct retro_system_av_info* av);

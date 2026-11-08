@@ -86,12 +86,80 @@ FILE* openFile(const std::string& utf8Path, const char* mode) {
 #endif
 }
 
+#ifdef _WIN32
+// ★v1.3.3 无窗口命令执行：cmd.exe /c <cmd> + CREATE_NO_WINDOW。
+//   语义与 _wsystem 完全一致（重定向 >NUL、&& 等仍由 cmd 解释），只是
+//   不再弹黑窗。等价实现：隐藏控制台 + 等待退出 + 取退出码。
+static int runCmdHidden(const std::string& utf8Cmd, std::string* stdoutOut) {
+  std::wstring wcmd = L"cmd.exe /c " + toWide(utf8Cmd);
+  wcmd.resize(wcmd.size() + 1, L'\0');  // CreateProcessW 需要可写缓冲
+
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi{};
+
+  // stdout 捕获（可选）：管道读端不继承，写端交给子进程
+  HANDLE rd = nullptr, wr = nullptr;
+  SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+  if (stdoutOut) {
+    if (!CreatePipe(&rd, &wr, &sa, 0)) { stdoutOut = nullptr; }
+    else {
+      SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+      si.dwFlags |= STARTF_USESTDHANDLES;
+      si.hStdOutput = wr;
+      si.hStdError = wr;
+      si.hStdInput = nullptr;
+    }
+  }
+
+  const BOOL ok = CreateProcessW(nullptr, &wcmd[0], nullptr, nullptr, stdoutOut ? TRUE : FALSE,
+                                 CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, nullptr,
+                                 nullptr, &si, &pi);
+  if (!ok) {
+    if (rd) CloseHandle(rd);
+    if (wr) CloseHandle(wr);
+    return -1;
+  }
+  CloseHandle(pi.hThread);
+  if (wr) CloseHandle(wr);  // 父进程写端关闭，读端才能读到 EOF
+
+  std::string out;
+  if (stdoutOut && rd) {
+    char buf[4096];
+    DWORD n = 0;
+    while (ReadFile(rd, buf, sizeof(buf), &n, nullptr) && n > 0) out.append(buf, n);
+  }
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD code = 0;
+  GetExitCodeProcess(pi.hProcess, &code);
+  CloseHandle(pi.hProcess);
+  if (rd) CloseHandle(rd);
+  if (stdoutOut) stdoutOut->swap(out);
+  return (int)code;
+}
+#endif
+
 int runCommand(const std::string& utf8Cmd) {
 #ifdef _WIN32
-  // _wsystem：宽字符命令行 → cmd 正确处理中文路径（curl -o 落盘 / 解压等）
-  return _wsystem(toWide(utf8Cmd).c_str());
+  return runCmdHidden(utf8Cmd, nullptr);
 #else
   return std::system(utf8Cmd.c_str());
+#endif
+}
+
+int runCommandCapture(const std::string& utf8Cmd, std::string* stdoutOut) {
+#ifdef _WIN32
+  return runCmdHidden(utf8Cmd, stdoutOut);
+#else
+  FILE* p = popen(utf8Cmd.c_str(), "r");
+  if (!p) return -1;
+  std::string out;
+  char buf[4096];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), p)) > 0) out.append(buf, n);
+  const int rc = pclose(p);
+  if (stdoutOut) stdoutOut->swap(out);
+  return rc;
 #endif
 }
 
@@ -99,7 +167,8 @@ bool openUrl(const std::string& url) {
   if (url.empty()) return false;
 #ifdef _WIN32
   // start ""：空标题参数防 URL 被当作窗口标题（cmd 陷阱）
-  return _wsystem((std::wstring(L"start \"\" ") + toWide(url)).c_str()) == 0;
+  // ★v1.3.3：改无窗口执行（旧版 _wsystem 同样弹 cmd 黑窗）
+  return runCmdHidden("start \"\" \"" + url + "\"", nullptr) == 0;
 #elif defined(__APPLE__)
   return std::system(("open '" + url + "'").c_str()) == 0;
 #else

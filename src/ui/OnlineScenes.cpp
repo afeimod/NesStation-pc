@@ -28,12 +28,6 @@
 #include "util/Fs.h"
 #include "util/Log.h"
 
-// popen/pclose 的 MSVC 名（CI Windows 构建）
-#ifdef _WIN32
-#define popen _popen
-#define pclose _pclose
-#endif
-
 namespace ns {
 namespace {
 
@@ -619,12 +613,10 @@ class BattleScene : public Scene {
     if (!bearer.empty()) cmd += " -H \"Authorization: Bearer " + bearer + "\"";
     cmd += " -o " + (tmpPath.find(' ') == std::string::npos ? tmpPath : "\"" + tmpPath + "\"");
     cmd += " " + url;
-    FILE* p = popen(cmd.c_str(), "r");
-    if (!p) return false;
-    char buf[64] = {0};
-    fgets(buf, sizeof(buf), p);
-    pclose(p);
-    if (code) *code = atol(buf);
+    // ★v1.3.3：popen → runCommandCapture（Windows 上 _popen 弹 cmd 黑窗）
+    std::string codeStr;
+    if (fsutil::runCommandCapture(cmd, &codeStr) != 0 && codeStr.empty()) return false;
+    if (code) *code = atol(codeStr.c_str());
     fsutil::readFile(tmpPath, out);
     fsutil::removeFile(tmpPath);
     return true;
@@ -738,13 +730,10 @@ class BattleScene : public Scene {
             " -w \"%{http_code}\" -X POST -H \"Content-Type: application/json\" -d @" +
             (tmpPayload.find(' ') == std::string::npos ? tmpPayload : "\"" + tmpPayload + "\"") +
             " " + base + path;
-        FILE* p = popen(cmd.c_str(), "r");
-        char buf[64] = {0};
-        if (p) {
-          fgets(buf, sizeof(buf), p);
-          pclose(p);
-        }
-        return atol(buf);
+        // ★v1.3.3：同 curlJson —— 无窗口捕获（Windows 不闪 cmd）
+        std::string codeStr;
+        fsutil::runCommandCapture(cmd, &codeStr);
+        return atol(codeStr.c_str());
       };
       code = post("/api/auth/login");
       std::string resp;

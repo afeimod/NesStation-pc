@@ -169,15 +169,22 @@ bool LibretroCore::load(const std::string& corePath, const std::string& systemDi
   g_activeCore = this;
   (void)prev;
 
+  // ★v1.3.3 选项值预载【必须先于 retro_set_environment】：
+  //   libretro-common 系核心（fceumm/mGBA/snes9x/genesis_plus_gx/PPSSPP…
+  //   几乎全部主流核心）在 retro_set_environment 回调里【立即】注册
+  //   选项（SET_CORE_OPTIONS*）→ 触发 fillOptionDefaults → 查
+  //   optionResolver_。旧版赋值在 retroSetEnvironment_ 之后 →
+  //   当时 resolver 恒为空 → 持久层设置永远加载不进 currentValues_，
+  //   核心拿到的永远是默认值 ——「改了设置不生效/重启后丢失」的根因。
+  //   （实测：存 fceumm_region=PAL 后加载，fps 仍 60.1 NTSC）
+  optionResolver_ = std::move(optionResolver);
+
   retroSetEnvironment_(&LibretroCore::cbEnvironment);
   retroSetVideoRefresh_(&LibretroCore::cbVideoRefresh);
   retroSetAudioSample_(&LibretroCore::cbAudioSample);
   retroSetAudioSampleBatch_(&LibretroCore::cbAudioBatch);
   retroSetInputPoll_(&LibretroCore::cbInputPoll);
   retroSetInputState_(&LibretroCore::cbInputState);
-
-  // 选项值预载（核心声明后即可解析 UI；GET_VARIABLE 时回查）
-  optionResolver_ = std::move(optionResolver);
 
   struct retro_system_info info{};
   retroGetSystemInfo_(&info);
@@ -451,6 +458,61 @@ void LibretroCore::parseOptionsV2(const struct retro_core_options_v2* opts) {
   }
 }
 
+void LibretroCore::overlayLocalizedV2(const struct retro_core_options_v2* opts) {
+  if (!opts) return;
+  std::map<std::string, std::string> catDesc;
+  if (opts->categories) {
+    for (const struct retro_core_option_v2_category* c = opts->categories;
+         c && c->key; c++)
+      catDesc[c->key] = c->desc ? c->desc : c->key;
+  }
+  std::map<std::string, CoreOption*> byKey;
+  for (auto& o : options_) byKey[o.key] = &o;
+  for (const struct retro_core_option_v2_definition* d = opts->definitions;
+       d && d->key; d++) {
+    auto it = byKey.find(d->key);
+    if (it == byKey.end()) continue;  // local 多出的键（不应发生）忽略
+    CoreOption& o = *it->second;
+    if (d->category_key && *d->category_key && d->desc_categorized)
+      o.desc = d->desc_categorized;
+    else if (d->desc)
+      o.desc = d->desc;
+    if (d->info) o.info = d->info;
+    if (d->category_key && *d->category_key) {
+      auto cit = catDesc.find(d->category_key);
+      if (cit != catDesc.end()) o.categoryKey = cit->second;
+    }
+    // 取值标签按值字符串配对覆盖（values 两结构一致；不动 o.values）
+    for (const struct retro_core_option_value* v = d->values; v && v->value; v++) {
+      for (size_t k = 0; k < o.values.size(); k++)
+        if (o.values[k] == v->value) {
+          o.labels[k] = v->label ? v->label : v->value;
+          break;
+        }
+    }
+  }
+}
+
+void LibretroCore::overlayLocalizedV1(const struct retro_core_option_definition* defs) {
+  if (!defs) return;
+  std::map<std::string, CoreOption*> byKey;
+  for (auto& o : options_) byKey[o.key] = &o;
+  for (const struct retro_core_option_definition* d = defs; d && d->key; d++) {
+    auto it = byKey.find(d->key);
+    if (it == byKey.end()) continue;
+    CoreOption& o = *it->second;
+    if (d->desc) o.desc = d->desc;
+    if (d->info) o.info = d->info;
+    for (const struct retro_core_option_value* v = d->values; v && v->value; v++) {
+      for (size_t k = 0; k < o.values.size(); k++)
+        if (o.values[k] == v->value) {
+          o.labels[k] = v->label ? v->label : v->value;
+          break;
+        }
+    }
+  }
+}
+
 void LibretroCore::parseOptionsV1(const struct retro_core_option_definition* defs) {
   options_.clear();
   if (!defs) return;
@@ -648,16 +710,23 @@ bool LibretroCore::environment(unsigned cmd, void* data) {
       fillOptionDefaults();
       return true;
     case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2_INTL: {
+      // ★v1.3.3 INTL 合并：GET_LANGUAGE 返回简中 → 核心把官方中文放
+      //   local 字段。旧版取 us → 永远英文（「核心菜单全是英文」根因）；
+      //   但 local 只含已翻译选项（实测 fceumm zh_CN 比英文少 14 项）——
+      //   直接解析 local 会丢选项。正确解法：先 us（全集）后 local（覆盖）。
       const struct retro_core_options_v2_intl* intl =
           (const struct retro_core_options_v2_intl*)data;
-      parseOptionsV2(intl ? intl->us : nullptr);
+      parseOptionsV2(intl ? (intl->us ? intl->us : intl->local) : nullptr);
+      if (intl && intl->us && intl->local) overlayLocalizedV2(intl->local);
       fillOptionDefaults();
       return true;
     }
     case RETRO_ENVIRONMENT_SET_CORE_OPTIONS_INTL: {
       const struct retro_core_options_intl* intl =
           (const struct retro_core_options_intl*)data;
-      parseOptionsV1(intl && intl->us ? intl->us : nullptr);
+      // ★v1.3.3：同 v2 —— us 全集 + local 覆盖
+      parseOptionsV1(intl ? (intl->us ? intl->us : intl->local) : nullptr);
+      if (intl && intl->us && intl->local) overlayLocalizedV1(intl->local);
       fillOptionDefaults();
       return true;
     }

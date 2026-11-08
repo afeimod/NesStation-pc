@@ -17,4 +17,9 @@ std::string zhOptionInfo(const std::string& en);
 std::string zhOptionCategory(const std::string& en);
 std::string zhOptionValue(const std::string& en);
 
+// ★v1.3.3 键级翻译（核心选项键 → 中文；PSP/PPSSPP 目录移植自 APK）。
+//   先按键精确命中，未命中回落到字符串级翻译。
+std::string zhOptionDescByKey(const std::string& key, const std::string& en);
+std::string zhOptionValueByKey(const std::string& key, const std::string& en);
+
 }  // namespace ns

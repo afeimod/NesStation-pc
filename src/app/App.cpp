@@ -778,6 +778,18 @@ void App::pumpEvents() {
 
 void App::frame(float dt) {
   frameNo_++;
+  // ★v1.3.3 每帧先清屏：OpenGL 规范里 Present 交换后的后备缓冲内容是
+  //   【未定义】的 —— Mesa/AMD/Intel 的 Linux 驱动会把上一帧残留/随机
+  //   显存内容暴露给新帧（Windows D3D9 后备缓冲保留旧内容，所以只在
+  //   Linux 上出现）。旧版只有首页/库页清屏，游戏画面等场景若某像素
+  //   未被本帧覆盖（信箱黑边、UI 间隙、视口取整边缘），就会显示随机
+  //   噪点（麻点）+ 内容每帧变化的黑块（一闪一闪）。
+  //   每帧 RenderClear 保证任何像素都有确定初始值，所有场景统一受益。
+  if (renderer_) {
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+    SDL_RenderClear(renderer_);
+  }
   // ★v1.3.1 后台线程投递的通知 → 转 toast（postNotice 线程安全）
   {
     std::vector<std::string> pending;

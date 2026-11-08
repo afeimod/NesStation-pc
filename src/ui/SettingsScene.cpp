@@ -34,12 +34,10 @@ namespace {
 void openUrl(const std::string& url) {
 #if defined(NS_HAVE_SDL_OPENURL)
   SDL_OpenURL(url.c_str());
-#elif defined(_WIN32)
-  std::string cmd = "start \"\" \"" + url + "\"";
-  std::system(cmd.c_str());
 #else
-  std::string cmd = "xdg-open '" + url + "'";
-  std::system(cmd.c_str());
+  // ★v1.3.3：兜底统一走 fsutil::openUrl（Windows 无窗口执行，
+  //   旧版 std::system("start …") 会闪 cmd 黑窗）
+  fsutil::openUrl(url);
 #endif
 }
 

@@ -800,7 +800,8 @@ class EmulatorScene : public Scene {
             int cur = hdValueIndex(app, hd);
             std::vector<std::string> labels;
             labels.reserve(hd->labels.size());
-            for (const auto& lb : hd->labels) labels.push_back(zhOptionValue(lb));
+            for (const auto& lb : hd->labels)
+              labels.push_back(zhOptionValueByKey(hd->key, lb));
             if (w::cycleRow(app, rc, "高清缩放（内部分辨率）", labels, cur,
                             subIndex_ == idx)) {
               applyHdOption(app, hd, cur);

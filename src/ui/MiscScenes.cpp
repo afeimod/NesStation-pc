@@ -172,11 +172,11 @@ class CoreOptionsScene : public Scene {
       // ★ 显示名与取值标签中文化（未命中词条时回退英文原文）
       std::vector<std::string> labels;
       labels.reserve(o.labels.size());
-      for (const auto& lb : o.labels) labels.push_back(zhOptionValue(lb));
+      for (const auto& lb : o.labels) labels.push_back(zhOptionValueByKey(o.key, lb));
       int idx = cur;
       const Rect rc(24, y, app.draw.W - 60, 50);
       const bool focused = sel_ == (int)i;
-      if (w::cycleRow(app, rc, zhOptionDesc(o.desc), labels, idx, focused,
+      if (w::cycleRow(app, rc, zhOptionDescByKey(o.key, o.desc), labels, idx, focused,
                       o.info)) {
         applyOption(app, o, idx);
       }
@@ -375,12 +375,10 @@ class CoreOptionsScene : public Scene {
   static void openExternalUrl(const std::string& url) {
 #if defined(NS_MISC_HAVE_OPENURL)
     SDL_OpenURL(url.c_str());
-#elif defined(_WIN32)
-    std::string cmd = "start \"\" \"" + url + "\"";
-    std::system(cmd.c_str());
 #else
-    std::string cmd = "xdg-open '" + url + "'";
-    std::system(cmd.c_str());
+    // ★v1.3.3：兜底统一走 fsutil::openUrl（Windows 无窗口执行，
+    //   旧版 std::system("start …") 会闪 cmd 黑窗）
+    fsutil::openUrl(url);
 #endif
   }
 
