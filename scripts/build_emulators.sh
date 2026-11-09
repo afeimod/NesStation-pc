@@ -109,6 +109,20 @@ build_dolphin() {
     -DENABLE_TESTS=OFF $CCACHE_ARGS $QT_ARGS $POLICY_ARGS
   build_ok build/dolphin
   install_ok build/dolphin
+  # ★v1.3.4 Windows：Dolphin 的 CMake install 规则不含二进制（官方打包走
+  #   独立 setup 脚本），产物留在 build/dolphin/Binaries 下（VS 多配置生成器
+  #   在 Binaries/x64/Release；核心自带 POST_BUILD windeployqt 已把 Qt DLL
+  #   部署到 exe 旁）。OUT 里没有 exe 时整目录拷贝 Binaries → OUT/dolphin，
+  #   否则 full 包会因「产物二进制未生成」跳过 dolphin（NGC/Wii 整平台缺失）。
+  if ! find "$OUT/dolphin" -type f \( -name 'Dolphin.exe' -o -name 'dolphin-emu' \) 2>/dev/null | grep -q .; then
+    EXE=$(find build/dolphin/Binaries -type f \( -name 'Dolphin.exe' -o -name 'dolphin-emu' \) 2>/dev/null | head -1 || true)
+    if [ -n "$EXE" ]; then
+      SRC_DIR=$(dirname "$EXE")
+      echo "（install 未含二进制 —— 从构建树补拷 $SRC_DIR → $OUT/dolphin）"
+      mkdir -p "$OUT/dolphin"
+      cp -r "$SRC_DIR"/. "$OUT/dolphin/"
+    fi
+  fi
   # Windows：windeployqt 部署 Qt DLL（PATH 有 Qt 时；CI 的 install-qt-action 已加）
   if [ "$WINDOWS" = "1" ] && command -v windeployqt >/dev/null 2>&1; then
     EXE=$(find "$OUT/dolphin" -name 'Dolphin.exe' | head -1 || true)

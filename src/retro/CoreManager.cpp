@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 
+#include "core/SystemAssets.h"
 #include "util/Fs.h"
 #include "util/Log.h"
 #include <nlohmann/json.hpp>
@@ -36,6 +37,12 @@ void CoreManager::init(const std::string& dataDir) {
   fsutil::makeDirs(fsutil::join(systemDir_, "azahar"));
   fsutil::makeDirs(fsutil::join(systemDir_, "dc"));
   LOGI("CoreManager 初始化：%s", dataDir.c_str());
+  // ★v1.3.4 随包核心支撑文件播种（对齐 APK NesApp ensureXxxBios 系列）：
+  //   assets/system 的 BIOS/密钥/系统档案装进 system/ 与 saves/
+  //   （FDS/FBNeo/Mega-CD/PCE-CD/DC/PS2 BIOS + Azahar 3DS 系统数据 +
+  //    PSP 原版字体）。已存在文件永不覆盖 —— “大部分核心打不开游戏”
+  //   的直填方案。
+  sysassets::seedSystemAssets(systemDir_, savesDir_);
 }
 
 std::string CoreManager::findCoreFile(const std::string& coreFile) const {

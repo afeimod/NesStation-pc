@@ -38,13 +38,17 @@ class LibraryScene : public Scene {
 
   void rebuild(App& app) {
     cats_.clear();
-    cats_.push_back({-1, "全部游戏", "ALL"});
-    cats_.push_back({-2, "收藏", "FAV"});
-    cats_.push_back({-3, "最近游玩", "RECENT"});
-    // ★v1.2.10 对齐 APK：侧栏/平台列表全量展示（APK NeonCoreSidebar 19 项
-    //   始终显示含 0 计数；FSD 平台 chips 18 个全量 —— 顺序统一用 APK coreOrder），
-    //   旧版 Neon 只显示有游戏的平台，与 APK 不一致
-    static const GamePlatform kApkChipOrder[] = {
+    // ★v1.3.4 对齐 APK（严格同源同序）：
+    //   Neon 侧栏 = NeonLibraryScreen.kt coreOrder：
+    //     「全部」+ NES, SFC, GB, GBA, MD, PCE, PSX, PS2, NDS, N3DS,
+    //     NGCWII, WIIU, DC, ARCADE, DOS, JAVA, PSP, NSWITCH（全量含 0 计数）
+    //   FSD 平台 chips = LibraryScreen.kt 平台标签行：
+    //     NES, SFC, GB, GBA, DOS, ARCADE, MD, PCE, NDS, N3DS, NGCWII, WIIU,
+    //     PSX, PS2, JAVA, DC, PSP, NSWITCH（两套顺序不同，不得混用）
+    //   收藏/最近不再是侧栏伪条目 —— 对齐 APK：主页深链进来改的是「模式」
+    //   （NeonLibraryScreen mode = all/fav/recent），侧栏始终只有 全部+18 核心。
+    cats_.push_back({-1, "全部", "ALL"});
+    static const GamePlatform kNeonCoreOrder[] = {
         GamePlatform::NES,  GamePlatform::SFC,   GamePlatform::GB,
         GamePlatform::GBA,  GamePlatform::MD,    GamePlatform::PCE,
         GamePlatform::PSX,  GamePlatform::PS2,   GamePlatform::NDS,
@@ -52,12 +56,25 @@ class LibraryScene : public Scene {
         GamePlatform::DC,   GamePlatform::ARCADE, GamePlatform::DOS,
         GamePlatform::JAVA, GamePlatform::PSP,  GamePlatform::NSWITCH,
     };
-    for (GamePlatform p : kApkChipOrder)
+    for (GamePlatform p : kNeonCoreOrder)
       cats_.push_back({(int)p, platformShortName(p), ""});
+    fsdChips_.clear();
+    static const GamePlatform kFsdChipOrder[] = {
+        GamePlatform::NES,   GamePlatform::SFC,  GamePlatform::GB,
+        GamePlatform::GBA,   GamePlatform::DOS,  GamePlatform::ARCADE,
+        GamePlatform::MD,    GamePlatform::PCE,  GamePlatform::NDS,
+        GamePlatform::N3DS,  GamePlatform::NGCWII, GamePlatform::WIIU,
+        GamePlatform::PSX,   GamePlatform::PS2,  GamePlatform::JAVA,
+        GamePlatform::DC,    GamePlatform::PSP,  GamePlatform::NSWITCH,
+    };
+    for (GamePlatform p : kFsdChipOrder) fsdChips_.push_back((int)p);
     if (catSel_ >= (int)cats_.size()) catSel_ = 0;
+    // 深链：-2 收藏 / -3 最近 → 模式（不选侧栏伪条目）；>= 0 → 选对应平台
     if (filter_ != -9) {
+      if (filter_ == -2) mode_ = 1;
+      else if (filter_ == -3) mode_ = 2;
       for (size_t i = 0; i < cats_.size(); i++) {
-        if (cats_[i].id == filter_) {
+        if (cats_[i].id == (filter_ >= 0 ? filter_ : -1)) {
           catSel_ = (int)i;
           break;
         }
@@ -69,35 +86,39 @@ class LibraryScene : public Scene {
 
   void refreshGames(App& app) {
     games_.clear();
-    const int id = cats_[(size_t)catSel_].id;
-    if (id == -1) {
-      games_ = app.library.games();
-    } else if (id == -2) {
-      games_ = app.library.favorites();
-    } else if (id == -3) {
-      games_ = app.library.recent(100);
-    } else {
-      games_ = app.library.byPlatform((GamePlatform)id);
-    }
-    if (id != -3) {
-      std::sort(games_.begin(), games_.end(), [](const GameEntry& a, const GameEntry& b) {
-        return a.displayTitle() < b.displayTitle();
-      });
-    }
+    // ★v1.3.4 对齐 APK displayGames：modeGames（模式基底）→ 搜索（跨全部
+    //   平台）/ 平台过滤（选中核心）→ 排序。收藏/最近来自主页深链的
+    //   「模式」（APK mode = fav/recent），不再是侧栏条目。
+    std::vector<GameEntry> modeGames;
+    if (mode_ == 1)
+      modeGames = app.library.favorites();
+    else if (mode_ == 2)
+      modeGames = app.library.recent(100);
+    else
+      modeGames = app.library.games();
+    const int id = cats_.empty() ? -1 : cats_[(size_t)catSel_].id;
     if (!searchBuf_.empty()) {
+      // 搜索态：跨全部平台（APK 同款）
       std::string q = searchBuf_;
       std::transform(q.begin(), q.end(), q.begin(),
                      [](unsigned char c) { return (char)std::tolower(c); });
-      games_.erase(std::remove_if(games_.begin(), games_.end(),
-                                  [&q](const GameEntry& g) {
-                                    std::string t = g.displayTitle();
-                                    std::transform(t.begin(), t.end(), t.begin(),
-                                                   [](unsigned char c) {
-                                                     return (char)std::tolower(c);
-                                                   });
-                                    return t.find(q) == std::string::npos;
-                                  }),
-                   games_.end());
+      for (auto& g : modeGames) {
+        std::string t = g.displayTitle();
+        std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) {
+          return (char)std::tolower(c);
+        });
+        if (t.find(q) != std::string::npos) games_.push_back(g);
+      }
+    } else if (id >= 0) {
+      for (auto& g : modeGames)
+        if (g.platform == (GamePlatform)id) games_.push_back(g);
+    } else {
+      games_ = modeGames;
+    }
+    if (mode_ != 2) {  // 最近游玩保持时间序（APK sortedByDescending lastPlayedAt）
+      std::sort(games_.begin(), games_.end(), [](const GameEntry& a, const GameEntry& b) {
+        return a.displayTitle() < b.displayTitle();
+      });
     }
     if (gridSel_ >= (int)games_.size()) gridSel_ = 0;
     const int want = 12;
@@ -177,16 +198,27 @@ class LibraryScene : public Scene {
           gridSel_ = 0;
         }
       } else {
-        // ★v1.2.9 FSD：↑↓ 在平台 chips 间切换（仅平台条目，跳过 头部分类）
-        auto isPlatform = [&](int idx) { return idx >= 0 && idx < (int)cats_.size() &&
-                                                cats_[(size_t)idx].id >= 0; };
+        // ★v1.2.9 FSD：↑↓ 在平台 chips 间切换（APK chips = 18 平台，无「全部」；
+        //   ★v1.3.4 按 FSD chips 顺序走，不再用侧栏 coreOrder 顺序）
         if (in.pressed[(int)Btn::Up] || in.pressed[(int)Btn::Down]) {
           const int dir = in.pressed[(int)Btn::Down] ? 1 : -1;
-          int idx = catSel_;
-          for (int k = 0; k < (int)cats_.size(); k++) {
-            idx += dir;
-            if (idx < 0 || idx >= (int)cats_.size()) break;
-            if (isPlatform(idx)) { catSel_ = idx; break; }
+          const int curId = cats_[(size_t)catSel_].id;
+          int pos = -1;
+          for (size_t i = 0; i < fsdChips_.size(); i++)
+            if (fsdChips_[i] == curId) {
+              pos = (int)i;
+              break;
+            }
+          if (pos < 0)
+            pos = 0;  // 当前在「全部」→ 从首个 chip 开始
+          else
+            pos = std::max(0, std::min((int)fsdChips_.size() - 1, pos + dir));
+          const int want = fsdChips_[(size_t)pos];
+          for (size_t i = 0; i < cats_.size(); i++) {
+            if (cats_[i].id == want) {
+              catSel_ = (int)i;
+              break;
+            }
           }
           refreshGames(app);
           gridSel_ = 0;
@@ -378,11 +410,10 @@ class LibraryScene : public Scene {
       if (w::activated(app, rc, false)) app.popScene();
       y += 46;
     }
-    // 模式标签
+    // 模式标签（APK modeTitle：游戏库 / 收藏游戏 / 最近游玩）
     {
-      const std::string mode = cats_[(size_t)catSel_].id == -2
-                                   ? "收藏"
-                                   : (cats_[(size_t)catSel_].id == -3 ? "最近游玩" : "全部游戏");
+      const std::string mode = mode_ == 1 ? "收藏游戏"
+                                    : (mode_ == 2 ? "最近游玩" : "游戏库");
       app.font.draw(app.sdlRenderer(), mode, 28, y + 2, 11, sk.textDim);
       y += 18;
     }
@@ -414,16 +445,20 @@ class LibraryScene : public Scene {
         }
         const Color8 dotCol = cats_[i].id >= 0
                                   ? Color8::hex(c1)
-                                  : (cats_[i].id == -2 ? sk.gold : sk.accent);
+                                  : sk.accent;
         d.rect(Rect(rc.x + 12, rc.cy() - 3, 6, 6),
                selected ? dotCol : sk.textDim);
         app.font.drawVCentered(app.sdlRenderer(), cats_[i].name, rc.x + 30, rc.cy(), 13,
                                selected ? sk.textHi : sk.text, selected);
         std::string cnt;
-        if (cats_[i].id == -1) cnt = std::to_string(app.library.games().size());
-        else if (cats_[i].id == -2) cnt = std::to_string(app.library.favorites().size());
-        else if (cats_[i].id == -3) cnt = std::to_string(app.library.recent(100).size());
-        else cnt = std::to_string(app.library.countFor((GamePlatform)cats_[i].id));
+        if (cats_[i].id == -1) {
+          // 「全部」计数 = 当前模式基底（APK NeonCoreEntry(null, "全部", modeGames.size)）
+          cnt = std::to_string(mode_ == 1   ? app.library.favorites().size()
+                               : mode_ == 2 ? app.library.recent(100).size()
+                                            : app.library.games().size());
+        } else {
+          cnt = std::to_string(app.library.countFor((GamePlatform)cats_[i].id));
+        }
         app.font.drawVCentered(app.sdlRenderer(), cnt,
                                rc.right() - 14 - app.font.textWidth(cnt, 11), rc.cy(), 11,
                                sk.textDim);
@@ -500,9 +535,10 @@ class LibraryScene : public Scene {
         platformGradient(p, &c1, &c2);
         subCol = Color8::hex(c1);
       } else {
-        title = cats_[(size_t)catSel_].id == -2
-                    ? "收藏的游戏"
-                    : (cats_[(size_t)catSel_].id == -3 ? "最近游玩" : "全部游戏");
+        // 全部：APK modeTitle（游戏库 / 收藏游戏 / 最近游玩）
+        title = mode_ == 1 ? "收藏游戏"
+              : mode_ == 2 ? "最近游玩"
+              : "游戏库";
         sub = "LIBRARY · " + std::to_string(games_.size()) + " GAMES";
       }
       app.font.draw(app.sdlRenderer(), title, rx, 18, 19, sk.textHi, true);
@@ -777,14 +813,12 @@ class LibraryScene : public Scene {
       std::string seg2;
       if (!searchBuf_.empty())
         seg2 = "搜索「" + searchBuf_ + "」";
-      else if (curId == -1)
-        seg2 = "全部游戏";
-      else if (curId == -2)
-        seg2 = "收藏";
-      else if (curId == -3)
-        seg2 = "最近游玩";
+      else if (curId >= 0)
+        seg2 = platformShortName((GamePlatform)curId);
       else
-        seg2 = cats_[(size_t)catSel_].name;
+        seg2 = mode_ == 1   ? "收藏游戏"
+              : mode_ == 2 ? "最近游玩"
+              : "游戏库";
       w::fsdBreadcrumb(app, 34 * D, y + toolRowH * 0.5f, "游戏库", seg2);
       // 右侧工具按钮（tools[i]：i 越往右越靠屏幕右侧）
       const float tw = 52 * D, th = toolRowH - 4 * D;
@@ -844,20 +878,27 @@ class LibraryScene : public Scene {
       y += fh + 4 * D;
     }
 
-    // —— 平台 chips（固定 18，可横向拖动滚动）——
+    // —— 平台 chips（★v1.3.4 APK FSD 顺序：18 平台 +「全部」在首位，可横向拖动滚动）——
     {
       const float chipH = 30 * D;
       const Rect rowRc(0, y, W, chipH + 4 * D);
       chipScroll_ += w::dragScroll(app, rowRc);
       d.pushClip(rowRc);
       float x = 34 * D - chipScroll_;
-      for (size_t i = 0; i < cats_.size(); i++) {
-        if (cats_[i].id < 0) continue;  // FSD 只展示平台 chips（对齐 APK）
-        const std::string& label = cats_[i].name;
+      // chips 列表 = 「全部」+ 18 平台（fsdChips_ 顺序，APK LibraryScreen 同序）
+      auto chipList = [&]() -> std::vector<int> {
+        std::vector<int> out{-1};
+        out.insert(out.end(), fsdChips_.begin(), fsdChips_.end());
+        return out;
+      }();
+      const int selId = cats_[(size_t)catSel_].id;
+      for (int id : chipList) {
+        const std::string label =
+            id < 0 ? "全部" : platformShortName((GamePlatform)id);
         const float fs = 12 * D;
         const float cw = app.font.textWidth(label, fs, true) + 28 * D;
         if (x + cw > 0 && x < W) {
-          const bool selected = (int)i == catSel_;
+          const bool selected = id == selId;
           const Rect rc(x, y + 2 * D, cw, chipH);
           if (selected) {  // 蓝渐变（2E86E0 → 0D4FA8）
             for (int b = 0; b < 8; b++) {
@@ -879,7 +920,12 @@ class LibraryScene : public Scene {
                                           : Color8::hex(0x9FB6D4),
                                  selected);
           if (w::activated(app, rc, false)) {
-            catSel_ = (int)i;
+            for (size_t i = 0; i < cats_.size(); i++) {
+              if (cats_[i].id == id) {
+                catSel_ = (int)i;
+                break;
+              }
+            }
             refreshGames(app);
             gridSel_ = 0;
             chipScroll_ = 0;
@@ -1310,7 +1356,10 @@ class LibraryScene : public Scene {
   };
 
   int filter_ = -9;
+  int mode_ = 0;  // ★v1.3.4 APK NeonLibraryScreen.mode：0=游戏库 1=收藏 2=最近
+                  //   （主页深链进来；不再是侧栏伪条目）
   std::vector<Cat> cats_;
+  std::vector<int> fsdChips_;  // ★v1.3.4 FSD 平台 chips（APK LibraryScreen 顺序）
   std::vector<GameEntry> games_;
   int catSel_ = 0;
   int gridSel_ = 0;

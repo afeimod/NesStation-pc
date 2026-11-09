@@ -188,15 +188,16 @@ jobs:
         timeout-minutes: 5
         run: |
           rm -rf smoke/shots && mkdir -p smoke/shots
-          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3" \
+          # ★v1.3.4：+library / fsd 库（核心列表两套 APK 顺序回归）
+          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3,library:30,fsd:5,library:30" \
             NESSTATION_SHOT_DIR=smoke/shots \
             SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
             ./build/bin/nesstation || { \
               echo "=== 自检进程异常退出，dump 应用日志 ==="; \
               cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null; exit 1; }
           n=$(find smoke/shots -name '*.png' | wc -l)
-          if [ "$n" != "3" ]; then
-            echo "=== 截图 $n/3，dump 应用日志 ==="
+          if [ "$n" != "6" ]; then
+            echo "=== 截图 $n/6，dump 应用日志 ==="
             cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null
             exit 1
           fi
@@ -216,8 +217,10 @@ jobs:
       - name: Package (portable tar.gz)
         run: |
           # ★v1.2.4：不附带字体（运行时选系统字体；用户可自备 assets/fonts/）
-          mkdir -p dist/NesStation-linux/cores
+          # ★v1.3.4：随包 assets/system（BIOS/密钥/系统档案，首启自动播种）
+          mkdir -p dist/NesStation-linux/cores dist/NesStation-linux/assets
           cp build/bin/nesstation dist/NesStation-linux/
+          cp -r assets/system dist/NesStation-linux/assets/system
           cp README.md LICENSE dist/NesStation-linux/
           cd dist && tar czf NesStation-linux-x64.tar.gz NesStation-linux
 
@@ -342,15 +345,16 @@ jobs:
         timeout-minutes: 5
         run: |
           rm -rf smoke/shots && mkdir -p smoke/shots
-          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3" \
+          # ★v1.3.4：+library / fsd 库（核心列表两套 APK 顺序回归）
+          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3,library:30,fsd:5,library:30" \
             NESSTATION_SHOT_DIR=smoke/shots \
             SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
             ./build/bin/nesstation || { \
               echo "=== 自检进程异常退出，dump 应用日志 ==="; \
               cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null; exit 1; }
           n=$(find smoke/shots -name '*.png' | wc -l)
-          if [ "$n" != "3" ]; then
-            echo "=== 截图 $n/3，dump 应用日志 ==="
+          if [ "$n" != "6" ]; then
+            echo "=== 截图 $n/6，dump 应用日志 ==="
             cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null
             exit 1
           fi
@@ -402,7 +406,10 @@ jobs:
 
           # /opt 布局（exeDir 经 /proc/self/exe 解析，/usr/bin 软链可用）
           # ★v1.2.4：不附带字体（运行时选系统字体，中文字体优先）
+          # ★v1.3.4：assets/system（BIOS/密钥/系统档案）装 /opt/nesstation/assets
           cp build/bin/nesstation          "$PKG/opt/nesstation/"
+          mkdir -p                        "$PKG/opt/nesstation/assets"
+          cp -r assets/system             "$PKG/opt/nesstation/assets/system"
           cp assets/legal/THIRD_PARTY_NOTICES.txt "$PKG/usr/share/doc/nesstation/"
           cp LICENSE                       "$PKG/usr/share/doc/nesstation/copyright"
           cp README.md                     "$PKG/usr/share/doc/nesstation/"
@@ -491,9 +498,11 @@ jobs:
         shell: pwsh
         run: |
           # ★v1.2.4：不附带字体（运行时选系统字体 msyh/deng/simhei…）
+          # ★v1.3.4：随包 assets/system（BIOS/密钥/系统档案，首启自动播种）
           $out = "dist/NesStation-windows"
-          New-Item -ItemType Directory -Force -Path "$out/cores" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$out/cores", "$out/assets" | Out-Null
           Copy-Item build/bin/Release/nesstation.exe $out/
+          Copy-Item -Recurse -Force assets/system "$out/assets/system"
           Copy-Item README.md, LICENSE $out/
           Copy-Item scripts/fetch_cores.ps1 $out/
           # 内置核心目录（已由上一步下载填充）

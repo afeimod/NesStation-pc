@@ -11,6 +11,7 @@
 
 #include "emu/EmuRunner.h"
 #include "ui/OptionZh.h"
+#include "ui/PanelSpec.h"
 #include "ui/Scenes.h"
 #include "ui/Widgets.h"
 #include "core/Platform.h"
@@ -89,12 +90,16 @@ class CoreOptionsScene : public Scene {
       app.popScene();
       return;
     }
-    const int N = (int)c->options().size();
+    // ★v1.3.4：面板行 = 金手指入口（游戏运行中）+ 精选选项行 + 更多选项行，
+    //   分区标题/状态行不参与导航（对齐 APK SettingsPanel 的滚动面板）
+    buildRows(app);
+    const int N = (int)rows_.size();
     if (N > 0) {
       // ★焦点跟随仅在键盘/手柄移动选择时执行一次（每帧执行会把拖拽滚动
       //   强行拉回选中行 —— 滑动条/列表拉不动的根因）
       if (in.pressed[(int)Btn::Up]) { sel_ = (sel_ + N - 1) % N; followSel_ = true; }
       if (in.pressed[(int)Btn::Down]) { sel_ = (sel_ + 1) % N; followSel_ = true; }
+      if (sel_ >= N) sel_ = 0;
     }
   }
 
@@ -106,6 +111,134 @@ class CoreOptionsScene : public Scene {
     app.cores.storeOption(app.cores.resolveCore(platform_).coreFile, o.key, val);
     if (live_) app.toast("已应用（部分核心需重开游戏生效）");
     else app.toast("已保存（下次启动游戏生效）");
+  }
+
+  // ==================== 面板行模型（★v1.3.4 对齐 APK SettingsPanel） ====================
+  // 行类型：金手指入口（live）/ 核心选项行（精选或更多）。
+  // 分区标题与 BIOS 状态行是纯展示，不进 rows_（键盘导航只在可交互行间移动）。
+  struct Row {
+    int optIdx;              // -1 = 金手指入口
+    std::string label;       // 显示名（精选表 APK 标签 / OptionZh 译文 / 原文）
+  };
+
+  void buildRows(App& app) {
+    rows_.clear();
+    LibretroCore* c = core(app);
+    if (!c) return;
+    if (live_) rows_.push_back({-1, "金手指"});  // APK v69：面板顶部金手指入口
+    const auto& opts = c->options();
+    int secCount = 0;
+    const panelSpec::SectionSpec* secs = panelSpec::sectionsFor(platform_, &secCount);
+    if (secs) {
+      for (int s = 0; s < secCount; s++)
+        for (int r = 0; r < secs[s].rowCount; r++)
+          for (size_t i = 0; i < opts.size(); i++)
+            if (opts[i].key == secs[s].rows[r].key) {
+              rows_.push_back({(int)i, secs[s].rows[r].label});
+              break;
+            }
+    }
+    // 「更多选项」：未被精选收录的选项（保持核心原始顺序）
+    for (size_t i = 0; i < opts.size(); i++) {
+      bool curated = false;
+      if (secs) {
+        for (int s = 0; s < secCount && !curated; s++)
+          for (int r = 0; r < secs[s].rowCount && !curated; r++)
+            if (opts[i].key == secs[s].rows[r].key) curated = true;
+      }
+      if (!curated)
+        rows_.push_back({(int)i, zhOptionDescByKey(opts[i].key, opts[i].desc)});
+    }
+  }
+
+  // —— BIOS / 密钥状态行（APK 各平台 BIOS 管理区的「状态展示」部分；
+  //    PC 端随包 assets/system 自动播种，此处只报状态 + 放置路径） ——
+  void drawBiosStatus(App& app, float& y) {
+    const Skin& sk = Theme::skin();
+    auto statusRow = [&](const std::string& name, const std::string& path,
+                         const std::string& note) {
+      const bool ok = (fsutil::isFile(path) && fsutil::fileSize(path) > 0) ||
+                      fsutil::isDir(path);
+      const std::string val = ok ? "✓ 已就绪" : "缺失";
+      const Rect rc(24, y, (float)app.draw.W - 60, 34);
+      w::panel(app, rc, ok);
+      app.font.drawVCentered(app.sdlRenderer(), name, rc.x + 14, rc.cy(), 13,
+                             ok ? sk.text : sk.textDim);
+      app.font.drawVCentered(app.sdlRenderer(), val, rc.right() - 14, rc.cy(), 12,
+                             ok ? sk.green : sk.gold);
+      if (!ok && !note.empty())
+        app.font.drawVCentered(app.sdlRenderer(), note, rc.cx() + 40, rc.cy(), 11,
+                               sk.textDim);
+      y += rc.h + 6;
+    };
+    const std::string sys = app.cores.systemDir();
+    const std::string saves = app.cores.savesDir();
+    bool drewTitle = false;
+    auto title = [&](const char* t) {
+      if (!drewTitle) {
+        w::sectionLabel(app, 40, y, t);
+        y += 28;
+        drewTitle = true;
+      }
+    };
+    switch (platform_) {
+      case GamePlatform::NES:
+        title("FDS BIOS（磁盘系统）");
+        statusRow("disksys.rom（FDS 游戏必需）", fsutil::join(sys, "disksys.rom"),
+                  "随包自动安装到系统目录");
+        break;
+      case GamePlatform::ARCADE:
+        title("FBNeo BIOS 管理");
+        statusRow("neogeo.zip（NeoGeo 必需）", fsutil::join(sys, "fbneo/neogeo.zip"), "");
+        statusRow("pgm.zip（PGM 必需）", fsutil::join(sys, "fbneo/pgm.zip"), "");
+        statusRow("neocdz.zip（NeoGeo CD）", fsutil::join(sys, "fbneo/neocdz.zip"), "");
+        break;
+      case GamePlatform::MD:
+        title("Mega-CD BIOS 管理");
+        statusRow("bios_CD_E.bin（欧洲）", fsutil::join(sys, "bios_CD_E.bin"), "");
+        statusRow("bios_CD_J.bin（日本）", fsutil::join(sys, "bios_CD_J.bin"), "");
+        statusRow("bios_CD_U.bin（美国）", fsutil::join(sys, "bios_CD_U.bin"), "");
+        break;
+      case GamePlatform::PCE:
+        title("PCE-CD BIOS 管理");
+        statusRow("syscard3.pce（System Card 3）", fsutil::join(sys, "syscard3.pce"),
+                  "卡带 .pce 无需 BIOS");
+        break;
+      case GamePlatform::PSX:
+        title("PSX BIOS 管理");
+        statusRow("scph1001.bin（真实 BIOS）", fsutil::join(sys, "scph1001.bin"),
+                  "缺失时自动用内置 HLE BIOS");
+        break;
+      case GamePlatform::PS2:
+        title("PS2 BIOS 管理");
+        statusRow("SCPH50003.bin（随包）",
+                  fsutil::join(sys, "pcsx2/bios/SCPH50003.bin"), "");
+        break;
+      case GamePlatform::DC:
+        title("DC BIOS（NAOMI / AtomisWave）");
+        statusRow("dc_boot.bin + dc_flash.bin（光盘游戏必需）",
+                  fsutil::join(sys, "dc/dc_boot.bin"), "");
+        statusRow("naomi.zip / awbios.zip（街机）",
+                  fsutil::join(sys, "dc/naomi.zip"), "");
+        break;
+      case GamePlatform::N3DS:
+        title("3DS 密钥与系统档案");
+        statusRow("aes_keys.txt（加密卡带解密）",
+                  fsutil::join(saves, "Azahar/sysdata/aes_keys.txt"), "");
+        statusRow("共享字体（shared_font.bin）",
+                  fsutil::join(saves, "Azahar/sysdata/shared_font.bin"), "");
+        statusRow("Mii 数据（Mii.zip 系统档案）",
+                  fsutil::join(saves, "Azahar/nand/00000000000000000000000000000000"), "");
+        break;
+      case GamePlatform::PSP:
+        title("PSP 系统字体（可选）");
+        statusRow("flash0/font（原版字体）",
+                  fsutil::join(sys, "PPSSPP/flash0/font/jpn0.pgf"),
+                  "缺失时用内置替代字体");
+        break;
+      default:
+        break;
+    }
   }
 
   void draw(App& app) override {
@@ -130,6 +263,8 @@ class CoreOptionsScene : public Scene {
     LibretroCore* c = core(app);
     if (!c) return;
     const auto& opts = c->options();
+    buildRows(app);
+    rowYs_.clear();
 
     // 滚轮 + ★拖拽滚动长列表
     const Rect listRc(24, 110, app.draw.W - 48, app.draw.H - 150);
@@ -137,31 +272,22 @@ class CoreOptionsScene : public Scene {
     if (listRc.contains(app.input.input().mouse)) {
       scroll_ = std::max(0.0f, scroll_ - (float)app.input.input().wheel * 56.0f);
     }
-    // 焦点行跟随滚动可见（仅键盘移动选择时执行一次，不与拖拽滚动打架）
-    if (followSel_) {
-      followSel_ = false;
-      const float rowY = 116 + (float)sel_ * 56 - scroll_;
-      if (rowY < listRc.y) scroll_ -= (listRc.y - rowY);
-      if (rowY > listRc.bottom() - 56) scroll_ += (rowY - (listRc.bottom() - 56));
-    }
     d.pushClip(listRc);
     float y = 116 - scroll_;
-    if (opts.empty()) {
+    float contentBottom = y;
+
+    if (opts.empty() && rows_.empty()) {
       app.font.draw(app.sdlRenderer(), "该核心没有可配置选项", 40, 140, 16, sk.textDim);
     }
-    std::string lastCat;
-    for (size_t i = 0; i < opts.size(); i++) {
-      const CoreOption& o = opts[i];
-      if (!o.visible) continue;
-      if (!o.categoryKey.empty() && o.categoryKey != lastCat) {
-        lastCat = o.categoryKey;
-        w::sectionLabel(app, 40, y, zhOptionCategory(o.categoryKey));
-        y += 28;
-      }
+
+    // —— 平台专属设置标题（APK 黄色标题行）——
+    const char* platTitle = panelSpec::platformSectionTitle(platform_);
+    int selRow = 0;  // rows_ 游标（分区标题/状态行不消耗）
+
+    // 当前值查询（CoreManager 持久层 + 核心默认；原版逻辑保留）
+    auto currentValueIdx = [&](const CoreOption& o) {
       int cur = 0;
       for (size_t v = 0; v < o.values.size(); v++) {
-        // 当前值查询（经 GET_VARIABLE 路径走 currentValues —— 这里读 CoreManager
-        // 持久层 + 默认）
         const std::string stored =
             app.cores.resolveOption(app.cores.resolveCore(platform_).coreFile, o.key);
         if (!stored.empty() && stored == o.values[v]) {
@@ -169,33 +295,121 @@ class CoreOptionsScene : public Scene {
           break;
         }
       }
-      // ★ 显示名与取值标签中文化（未命中词条时回退英文原文）
+      return cur;
+    };
+
+    // 行绘制统一出口（可选行 + 金手指行）
+    auto drawOptRow = [&](const Row& row) {
+      if (row.optIdx < 0) {
+        // ★ 金手指入口（APK v69：绿色入口行；activated 自带 键盘焦点+Enter）
+        const Rect rc(24, y, (float)app.draw.W - 60, 46);
+        w::panel(app, rc, sel_ == selRow);
+        app.font.draw(app.sdlRenderer(), "金手指", rc.x + 14, rc.y + 8, 14, sk.green, true);
+        app.font.draw(app.sdlRenderer(), "无限血/无限币 · .cht 金手指 · 热生效",
+                      rc.x + 14, rc.y + 27, 11, sk.textDim);
+        if (w::activated(app, rc, sel_ == selRow)) {
+          app.pushScene(createCheatsScene());
+        }
+        rowYs_.push_back(y);
+        y += rc.h + 8;
+        selRow++;
+        return;
+      }
+      const CoreOption& o = opts[(size_t)row.optIdx];
+      int cur = currentValueIdx(o);
       std::vector<std::string> labels;
       labels.reserve(o.labels.size());
       for (const auto& lb : o.labels) labels.push_back(zhOptionValueByKey(o.key, lb));
       int idx = cur;
       const Rect rc(24, y, app.draw.W - 60, 50);
-      const bool focused = sel_ == (int)i;
-      if (w::cycleRow(app, rc, zhOptionDescByKey(o.key, o.desc), labels, idx, focused,
-                      o.info)) {
+      const bool focused = sel_ == selRow;
+      if (w::cycleRow(app, rc, row.label, labels, idx, focused, o.info)) {
         applyOption(app, o, idx);
       }
+      rowYs_.push_back(y);
       y += 56;
+      selRow++;
+    };
+
+    // —— 金手指入口（APK v69：面板顶部；rows_[0]，先于分区绘制）——
+    if (!rows_.empty() && rows_[0].optIdx < 0) drawOptRow(rows_[0]);
+
+    // —— 精选分区（APK SettingsPanel 按平台手写分区）——
+    int secCount = 0;
+    const panelSpec::SectionSpec* secs = panelSpec::sectionsFor(platform_, &secCount);
+    if (secs && secCount > 0) {
+      if (platTitle && *platTitle) {
+        app.font.draw(app.sdlRenderer(), platTitle, 40, y, 13, sk.gold, true);
+        y += 24;
+      }
+      int ri = live_ ? 1 : 0;  // 金手指行已画，游标从 1 起
+      for (int s = 0; s < secCount; s++) {
+        w::sectionLabel(app, 40, y, secs[s].title);
+        y += 28;
+        for (int r = 0; r < secs[s].rowCount; r++) {
+          // 找到该键对应的 rows_ 行（键不存在于核心 → 静默跳过）
+          const std::string& key = secs[s].rows[r].key;
+          int found = -1;
+          for (size_t k = (size_t)ri; k < rows_.size(); k++) {
+            if (rows_[k].optIdx >= 0 &&
+                opts[(size_t)rows_[k].optIdx].key == key) {
+              found = (int)k;
+              break;
+            }
+          }
+          if (found < 0) continue;  // 核心无此选项（架构差异）
+          ri = found + 1;
+          drawOptRow(rows_[(size_t)found]);
+        }
+      }
+      // BIOS / 密钥状态区（APK「XX BIOS 管理」的展示部分）
+      drawBiosStatus(app, y);
     }
+
+    // —— 更多选项（未收录进精选分区的核心原始选项）——
+    {
+      auto isCurated = [&](const std::string& key) {
+        if (!secs) return false;
+        for (int s = 0; s < secCount; s++)
+          for (int r = 0; r < secs[s].rowCount; r++)
+            if (key == secs[s].rows[r].key) return true;
+        return false;
+      };
+      bool any = false;
+      for (const auto& row : rows_) {
+        if (row.optIdx < 0) continue;  // 金手指行已画
+        if (isCurated(opts[(size_t)row.optIdx].key)) continue;
+        if (!any) {
+          w::sectionLabel(app, 40, y, "更多选项（核心原始选项 · 未命中词条显示原文）");
+          y += 28;
+          any = true;
+        }
+        drawOptRow(row);
+      }
+    }
+    contentBottom = y;
     d.popClip();
+
+    // 焦点行跟随滚动可见（仅键盘移动选择时执行一次，不与拖拽滚动打架）
+    // ★rowYs_ 记录本帧各行绝对 y（含分区标题偏移）→ 精确跟随
+    if (followSel_ && !rowYs_.empty() && sel_ < (int)rowYs_.size()) {
+      followSel_ = false;
+      const float rowY = rowYs_[(size_t)sel_];
+      if (rowY < listRc.y) scroll_ -= (listRc.y - rowY);
+      if (rowY > listRc.bottom() - 56) scroll_ += (rowY - (listRc.bottom() - 56));
+    }
+
     // 滚动边界钳制 + 滚动条
     {
-      const float total = 116 + (float)opts.size() * 56;
+      const float total = contentBottom + scroll_;
       const float viewH = listRc.h;
-      const float maxScroll = std::max(0.0f, total - 116 - viewH);
+      const float maxScroll = std::max(0.0f, total - viewH);
       if (scroll_ > maxScroll) scroll_ = maxScroll;
       if (scroll_ < 0) scroll_ = 0;
       if (total > viewH) {
-        // ★滚动条可直接拖拽：返回新位置回写 scroll
         scroll_ = w::scrollIndicator(app, Rect(app.draw.W - 12, listRc.y, 6, listRc.h),
-                                     viewH / (total - 116),
-                                     scroll_ / (total - 116 - viewH)) *
-                  (total - 116 - viewH);
+                                     viewH / total, scroll_ / maxScroll) *
+                  maxScroll;
       }
     }
 
@@ -388,7 +602,9 @@ class CoreOptionsScene : public Scene {
   std::unique_ptr<LibretroCore> temp_;
   int sel_ = 0;
   float scroll_ = 0;
-  bool followSel_ = false;  // 键盘移动选择时置位 → 绘制期跟随一次
+  bool followSel_ = false;      // 键盘移动选择时置位 → 绘制期跟随一次
+  std::vector<Row> rows_;       // ★v1.3.4 可交互行（金手指 + 选项）
+  std::vector<float> rowYs_;    // 本帧各行绝对 y（焦点跟随滚动用）
 };
 
 // ==================== 文件浏览器 ====================

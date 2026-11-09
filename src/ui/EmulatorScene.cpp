@@ -204,15 +204,17 @@ class EmulatorScene : public Scene {
     }
   }
 
-  // 快进档位循环（对齐 Android 菜单：0→2→4→6→8→16→0）
+  // 快进档位循环（F6：0→2→4→6→8→16→0，APK 档位环同款）
   void cycleFfLevel(App& app) {
-    static const int levels[] = {0, 2, 4, 6, 8, 16};
-    int i = 0;
-    for (int k = 0; k < 6; k++)
-      if (levels[k] == ffLevel_) { i = k; break; }
-    ffLevel_ = levels[(i + 1) % 6];
-    app.config.fastForwardSpeed = ffLevel_ > 1 ? ffLevel_ : app.config.fastForwardSpeed;
-    app.config.save(fsutil::join(app.dataDir(), "config.json"));
+    switch (ffLevel_) {
+      case 0: ffLevel_ = 2; break;
+      case 2: ffLevel_ = 4; break;
+      case 4: ffLevel_ = 6; break;
+      case 6: ffLevel_ = 8; break;
+      case 8: ffLevel_ = 16; break;
+      default: ffLevel_ = 0; break;
+    }
+    if (ffLevel_ > 1) lastFfLevel_ = ffLevel_;
     app.toast(ffLevel_ > 1 ? std::string("快进 ×") + std::to_string(ffLevel_)
                            : std::string("快进已关闭"));
   }
@@ -255,7 +257,7 @@ class EmulatorScene : public Scene {
         break;
       }
       case Sub::States:
-      case Sub::Video:
+      case Sub::Speed:
       case Sub::Disk: {
         const int N = subItemCount(app);
         if (N > 0) {
@@ -285,22 +287,24 @@ class EmulatorScene : public Scene {
   }
 
   int menuItemCount(App& app) const {
-    // 继续/暂停/重置/存档/读档/快进/截图/画面设置/退出（对齐 APK 游戏内菜单顺序；
-    // 核心设置/金手指/磁盘切换按条件插入，与 drawMenu 的 idx 顺序一致）
-    int n = 9;
+    // ★v1.3.4 对齐 APK MenuOverlay（EmulatorScreen.kt:12491-12518）按钮顺序：
+    //   暂停/继续 → 快进 → 倍速 → 截图 → 存档 → 读档 → 重置 → 金手指 →
+    //   手柄布局 → 设置 → 核心日志 → 隐藏菜单 → 退出（固定 12 项）
+    //   + PC 专属「切换磁盘」（核心上报多盘镜像时；APK 无此项，PC 多盘
+    //     CD 游戏必需，放退出前）。
+    int n = 12;
     EmuRunner* emu = app.activeEmu();
+    if (emu && emu->running() && emu->isLibretro()) n++;  // 金手指
     if (emu && emu->core() && emu->core()->diskControl().available() &&
         emu->core()->diskControl().numImages() > 1)
-      n++;
-    if (emu && emu->core() && !emu->core()->options().empty()) n++;
-    if (emu && emu->running() && emu->isLibretro()) n++;  // ★v1.3.1 金手指
+      n++;  // 切换磁盘
     return n;
   }
 
   // ★v1.2.10 行号体系：子页第 0 行统一为「‹ 返回主菜单」，其余顺延
   int subItemCount(App& app) const {
     if (subMode_ == Sub::States) return 12;  // 返回 + 槽位 0-10
-    if (subMode_ == Sub::Video) return videoRowCount(app) + 1;  // + 返回行
+    if (subMode_ == Sub::Speed) return 6;   // 返回 + 2/4/6/8/16（APK 档位）
     if (subMode_ == Sub::Disk) {
       EmuRunner* emu = app.activeEmu();
       if (emu && emu->core())
@@ -310,69 +314,10 @@ class EmulatorScene : public Scene {
     return 0;
   }
 
-  // 画面设置子页行数（不含返回行；★v1.2.10 新增「高清缩放」行）
-  int videoRowCount(App& app) const {
-    EmuRunner* emu = app.activeEmu();
-    int n = 6;  // 画面缩放 / 视频滤镜 / 高清缩放 / 整数缩放 / 平滑缩放 / 显示 FPS
-    if (emu && platformIsDualScreen(emu->game().platform)) n++;  // 双屏布局
-    n++;  // 全屏切换
-    return n;
-  }
-
-  // —— ★v1.2.10 高清缩放（内部分辨率倍数）——
-  // 在当前核心选项中定位「内部分辨率/分辨率倍数」类选项（已知键名优先，
-  // 描述特征兜底）。返回 nullptr = 该核心不支持（2D 核心等）。
-  const CoreOption* hdOption(App& app) const {
-    EmuRunner* emu = app.activeEmu();
-    if (!emu || !emu->core() || !emu->isLibretro()) return nullptr;
-    // 已知键名表（libretro 常见 3D 核心的内部分辨率选项）
-    static const char* kHdKeys[] = {
-        "pcsx_rearmed_internal_resolution",  // PSX 分辨率倍数 1x-4x
-        "pcsx2_upscale_multiplier",          // PS2 分辨率倍数 1x-6x
-        "melonds_gles_resolution",           // NDS 渲染分辨率 1x-8x
-        "reicast_internal_resolution",       // Flycast(DC) 内部分辨率
-        "flycast_internal_resolution",
-        "citra_resolution",                  // 3DS (Citra) 分辨率
-        "azahar_resolution",                 // 3DS (Azahar) 分辨率
-    };
-    for (const auto& o : emu->core()->options())
-      for (const char* k : kHdKeys)
-        if (o.key == k) return &o;
-    // 描述特征兜底（新核心/改名键）
-    for (const auto& o : emu->core()->options()) {
-      if (!o.visible || o.values.empty()) continue;
-      if (o.desc.find("内部分辨率") != std::string::npos ||
-          o.desc.find("Internal Resolution") != std::string::npos ||
-          o.desc.find("Resolution Multiplier") != std::string::npos ||
-          o.desc.find("Render Resolution") != std::string::npos ||
-          o.desc.find("分辨率倍数") != std::string::npos)
-        return &o;
-    }
-    return nullptr;
-  }
-
-  // 高清缩放当前档位索引（持久层值 → 选项索引；未存储用核心默认）
-  int hdValueIndex(App& app, const CoreOption* o) const {
-    EmuRunner* emu = app.activeEmu();
-    if (!emu || !emu->core() || !o || o->values.empty()) return 0;
-    const std::string cur = app.cores.resolveOption(
-        app.cores.resolveCore(emu->game().platform).coreFile, o->key);
-    if (!cur.empty())
-      for (size_t v = 0; v < o->values.size(); v++)
-        if (cur == o->values[v]) return (int)v;
-    return o->defaultValue;
-  }
-
-  // 应用高清缩放档位（写运行中核心 + 持久层）
-  void applyHdOption(App& app, const CoreOption* o, int idx) {
-    EmuRunner* emu = app.activeEmu();
-    if (!emu || !emu->core() || !o || idx < 0 || idx >= (int)o->values.size()) return;
-    const std::string val = o->values[(size_t)idx];
-    emu->core()->setOptionValue(o->key, val);
-    app.cores.storeOption(app.cores.resolveCore(emu->game().platform).coreFile,
-                          o->key, val);
-    app.toast("高清缩放已应用（部分核心需重开游戏生效）");
-  }
+  // ★v1.3.4：画面设置子页与通用「高清缩放」行已并入「核心设置」面板
+  //   （APK SettingsPanel 按平台分区：分辨率倍数/渲染分辨率/内部分辨率
+  //    都是各平台面板的专属行，见 ui/PanelSpec.cpp）；全局 画面缩放/视频滤镜
+  //    留在主设置（APK SettingsScreen 同款）。
 
   void draw(App& app) override {
     EmuRunner* emu = app.activeEmu();
@@ -616,7 +561,7 @@ class EmulatorScene : public Scene {
     // —— 标题行（标题 + 游戏名副行）+ 分隔线（APK 20% 白）——
     const char* title = subMode_ == Sub::States
                             ? (saveMode_ ? "保存即时存档" : "读取即时存档")
-                            : subMode_ == Sub::Video ? "画面设置"
+                            : subMode_ == Sub::Speed ? "快进速度"
                             : subMode_ == Sub::Disk ? "切换磁盘"
                                                     : "游戏菜单";
     app.font.draw(app.sdlRenderer(), title, panel.x + pad, panel.y + 11, 16, sk.textHi,
@@ -667,55 +612,95 @@ class EmulatorScene : public Scene {
 
     switch (subMode_) {
       case Sub::Main: {
+        // ★v1.3.4 顺序 1:1 对齐 APK MenuOverlay（暂停 → 快进 → 倍速 → 截图 →
+        //   存档 → 读档 → 重置 → 金手指 → 手柄布局 → 设置 → 核心日志 →
+        //   隐藏菜单 → 退出）；快捷键标注用 PC 键位。
         int idx = 0;
-        if (row("继续游戏", idx++)) closeMenu();
         if (row(paused_ ? "继续游戏（取消暂停）" : "暂停游戏", idx++, "F7")) {
           paused_ = !paused_;
           closeMenu();
+        }
+        if (row(ffLevel_ > 1 ? "快进（开）" : "快进（关）", idx++,
+                ffLevel_ > 1 ? "×" + std::to_string(ffLevel_) : "Tab")) {
+          // APK onToggleFastForward：>0 → 0；0 → 上次非零档位
+          ffLevel_ = ffLevel_ > 1 ? 0 : (lastFfLevel_ > 1 ? lastFfLevel_ : 6);
+          if (ffLevel_ > 1) lastFfLevel_ = ffLevel_;
+          app.toast(ffLevel_ > 1 ? std::string("快进 ×") + std::to_string(ffLevel_)
+                                 : std::string("快进已关闭"));
+        }
+        if (row("倍速", idx++, ffLevel_ > 1 ? "×" + std::to_string(ffLevel_) : "F6")) {
+          subMode_ = Sub::Speed;
+          subIndex_ = 0;
+          menuScroll_ = 0;
+        }
+        if (row("截图", idx++, "F12")) {
+          closeMenu();
+          takeScreenshot(app);
+        }
+        if (row("存档", idx++, "F5")) {
+          subMode_ = Sub::States;
+          subIndex_ = 0;
+          menuScroll_ = 0;
+          saveMode_ = true;
+        }
+        if (row("读档", idx++, "F8")) {
+          subMode_ = Sub::States;
+          subIndex_ = 0;
+          menuScroll_ = 0;
+          saveMode_ = false;
         }
         if (row("重置", idx++)) {
           if (emu) emu->resetCore();
           app.toast("已重置");
           closeMenu();
         }
-        if (row("即时存档", idx++, "F5")) {
-          subMode_ = Sub::States;
-          subIndex_ = 0;
-          menuScroll_ = 0;
-          saveMode_ = true;
-        }
-        if (row("即时读档", idx++, "F8")) {
-          subMode_ = Sub::States;
-          subIndex_ = 0;
-          menuScroll_ = 0;
-          saveMode_ = false;
-        }
-        if (row(ffLevel_ > 1 ? "快进（点击换挡）" : "快进（关）", idx++,
-                ffLevel_ > 1 ? "×" + std::to_string(ffLevel_) : "Tab")) {
-          cycleFfLevel(app);
-        }
-        if (row("截图", idx++, "F12")) {
-          closeMenu();
-          takeScreenshot(app);
-        }
-        if (row("画面设置", idx++)) {
-          subMode_ = Sub::Video;
-          subIndex_ = 0;
-          menuScroll_ = 0;
-        }
-        if (emu && emu->core() && !emu->core()->options().empty()) {
-          if (row("核心设置", idx++)) {
-            app.pushScene(createCoreOptionsScene(emu->game().platform));
-            menuOpen_ = false;
-          }
-        }
-        // ★v1.3.1 金手指（APK 底部工具栏同款入口；RetroArch .cht 逐帧应用）
+        // ★v1.3.1 金手指（APK onCheats；RetroArch .cht 逐帧应用）
         if (emu && emu->running() && emu->isLibretro()) {
           if (row("金手指", idx++)) {
             app.pushScene(createCheatsScene());
             menuOpen_ = false;
           }
         }
+        // APK onLayoutEditor（触屏布局编辑器）→ PC 映射为键位/手柄输入设置
+        if (row("手柄布局", idx++, "键位设置")) {
+          app.pushScene(createSettingsScene(4));  // 设置 → 输入
+          menuOpen_ = false;
+        }
+        // APK onSettings → SettingsPanel（核心设置，按平台分区）
+        if (row("设置", idx++)) {
+          app.pushScene(createCoreOptionsScene(
+              emu ? emu->game().platform : GamePlatform::NES));
+          menuOpen_ = false;
+        }
+        // APK onCoreLog → 核心日志
+        if (row("核心日志", idx++)) {
+          std::string log;
+          fsutil::readFile(fsutil::join(app.dataDir(), "nesstation.log"), &log);
+          // 尾部 40 行（最近一次会话的日志）
+          std::vector<std::string> lines;
+          {  // 按行切分
+            std::string cur;
+            for (char c : log) {
+              if (c == '\n') {
+                lines.push_back(cur);
+                cur.clear();
+              } else {
+                cur += c;
+              }
+            }
+            if (!cur.empty()) lines.push_back(cur);
+          }
+          std::string body;
+          const size_t from = lines.size() > 40 ? lines.size() - 40 : 0;
+          for (size_t i = from; i < lines.size(); i++)
+            body += lines[i] + "\n";
+          app.pushScene(createMessageScene(
+              "核心日志（最近 40 行 · 完整日志见数据目录 nesstation.log）",
+              body.empty() ? "暂无日志" : body, false));
+          menuOpen_ = false;
+        }
+        if (row("隐藏菜单", idx++, "Esc")) closeMenu();
+        // PC 专属：多盘镜像切换（FDS / 多 CD 游戏；APK 无此项）
         if (emu && emu->core() && emu->core()->diskControl().available() &&
             emu->core()->diskControl().numImages() > 1) {
           if (row("切换磁盘", idx++)) {
@@ -758,103 +743,23 @@ class EmulatorScene : public Scene {
         }
         break;
       }
-      case Sub::Video: {
+      case Sub::Speed: {
+        // ★v1.3.4 对齐 APK FFSpeedPicker：2/4/6/8/16，6=默认，16=极速
         if (row("‹ 返回主菜单", 0)) subMode_ = Sub::Main;
-        const GamePlatform plat = emu ? emu->game().platform : GamePlatform::NES;
-        int idx = 1;
-        // —— 画面缩放（整体窗口比例；APK SettingsPanel「画面缩放」） ——
-        {
-          const Rect rc(panel.x + 8, y, pw - 16, rowH);
-          int vi = indexFor(videoScaleKeys(), platformVideoScale(app, plat));
-          if (w::cycleRow(app, rc, "画面缩放", videoScaleOptions(), vi,
-                          subIndex_ == idx)) {
-            const std::string v = videoScaleKeys()[vi];
-            setPlatformVideoScale(app, plat, v);
-            if (v == "custom") {  // APK：选 custom 直进四角编辑器
-              d.popClip();
-              enterLayoutEditor(app);
-              return;
-            }
+        static const int kSpeeds[] = {2, 4, 6, 8, 16};
+        int si = 1;
+        for (int sp : kSpeeds) {
+          std::string label = std::to_string(sp) + " 倍速";
+          if (sp == 6) label += "（默认）";
+          if (sp == 16) label += "（极速）";
+          const bool cur = ffLevel_ == sp;
+          if (row(label, si++, cur ? "当前" : "")) {
+            ffLevel_ = sp;
+            lastFfLevel_ = sp;
+            app.toast(std::string("快进 ×") + std::to_string(sp));
+            subMode_ = Sub::Main;
+            menuScroll_ = 0;
           }
-          y += rowH + rowGap;
-          idx++;
-        }
-        // —— 视频滤镜（叠加滤镜 11 档） ——
-        {
-          const Rect rc(panel.x + 8, y, pw - 16, rowH);
-          int fi = indexFor(videoFilterKeys(), platformVideoFilter(app, plat));
-          if (w::cycleRow(app, rc, "视频滤镜", videoFilterOptions(), fi,
-                          subIndex_ == idx)) {
-            setPlatformVideoFilter(app, plat, videoFilterKeys()[fi]);
-          }
-          y += rowH + rowGap;
-          idx++;
-        }
-        // —— ★v1.2.10 高清缩放（内部分辨率倍数 —— 3D 核心内部渲染分辨率，
-        //    非整体画面缩放；对齐 APK PSX「分辨率倍数 (立即生效)」/
-        //    PS2「分辨率倍数」/ NDS「渲染分辨率」/ DC「内部分辨率」） ——
-        {
-          const CoreOption* hd = hdOption(app);
-          if (hd && !hd->values.empty()) {
-            const Rect rc(panel.x + 8, y, pw - 16, rowH);
-            int cur = hdValueIndex(app, hd);
-            std::vector<std::string> labels;
-            labels.reserve(hd->labels.size());
-            for (const auto& lb : hd->labels)
-              labels.push_back(zhOptionValueByKey(hd->key, lb));
-            if (w::cycleRow(app, rc, "高清缩放（内部分辨率）", labels, cur,
-                            subIndex_ == idx)) {
-              applyHdOption(app, hd, cur);
-            }
-          } else {
-            // 2D 核心等无内部分辨率概念：明确提示而非缺行（用户点名要该项）
-            row("高清缩放（内部分辨率）", idx, "不支持", false);
-          }
-          y += rowH + rowGap;
-          idx++;
-        }
-        // —— 整数缩放（像素完美） ——
-        {
-          const Rect rc(panel.x + 8, y, pw - 16, rowH);
-          if (w::toggleRow(app, rc, "整数缩放（像素完美）", app.config.integerScale,
-                           subIndex_ == idx))
-            app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          y += rowH + rowGap;
-          idx++;
-        }
-        // —— 平滑缩放 ——
-        {
-          const Rect rc(panel.x + 8, y, pw - 16, rowH);
-          if (w::toggleRow(app, rc, "平滑缩放", app.config.videoSmooth,
-                           subIndex_ == idx))
-            app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          y += rowH + rowGap;
-          idx++;
-        }
-        // —— 显示 FPS ——
-        {
-          const Rect rc(panel.x + 8, y, pw - 16, rowH);
-          if (w::toggleRow(app, rc, "显示 FPS", app.config.showFps,
-                           subIndex_ == idx))
-            app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          y += rowH + rowGap;
-          idx++;
-        }
-        if (emu && platformIsDualScreen(emu->game().platform)) {
-          const Rect rc(panel.x + 8, y, pw - 16, rowH);
-          std::vector<std::string> opts = {"双屏", "仅上屏", "仅下屏"};
-          if (w::cycleRow(app, rc, "双屏布局", opts, app.config.dualLayout,
-                          subIndex_ == idx))
-            app.config.save(fsutil::join(app.dataDir(), "config.json"));
-          y += rowH + rowGap;
-          idx++;
-        }
-        {
-          const Rect rc(panel.x + 8, y, pw - 16, rowH);
-          if (w::listRow(app, rc, "全屏切换", "F11", subIndex_ == idx))
-            app.toggleFullscreen();
-          y += rowH + rowGap;
-          idx++;
         }
         break;
       }
@@ -892,7 +797,7 @@ class EmulatorScene : public Scene {
   }
 
  private:
-  enum class Sub { Main, States, Video, Disk };
+  enum class Sub { Main, States, Speed, Disk };
   bool menuOpen_ = false;
   bool justOpened_ = false;  // ★v1.2.10 呼出帧的同一次按键不触发关闭
   bool wasFullscreen_ = true;   // ★v1.2.6 进入游戏前的全屏状态（自动全屏恢复用）
@@ -901,7 +806,8 @@ class EmulatorScene : public Scene {
   int subIndex_ = 0;
   bool saveMode_ = true;
   bool paused_ = false;       // F7 / 菜单暂停（对齐 Android 暂停浮层）
-  int ffLevel_ = 0;           // 快进档位 0/2/4/6/8/16（0 = 关；对齐 Android 档位环）
+  int ffLevel_ = 0;           // 快进档位 0/2/4/6/8/16（0 = 关；APK onToggleFastForward）
+  int lastFfLevel_ = 6;       // 上次非零档位（APK lastNonZeroFFSpeed，默认 6）
   int emu_ffMult_ = 2;        // 最近一次生效的快进倍数（HUD 显示用）
   bool f5Prev_ = false, f6Prev_ = false, f7Prev_ = false, f8Prev_ = false;
   bool f11Prev_ = false;
