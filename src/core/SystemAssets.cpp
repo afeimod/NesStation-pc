@@ -18,8 +18,12 @@ using fsutil::join;
 // ---- 基础原语 -------------------------------------------------------------
 
 // 目标已存在且非空 → 保留（用户自备优先，对齐 APK “keep existing”语义）
+// ★v1.3.5：源本身就是 0 字节（如 azahar/sysdata/tag 占位）时，目标存在即算
+//   就绪 —— 否则 0 字节目标永远过不了“非空”检查，每次启动都重拷一遍
 bool copyFileIfMissing(const std::string& src, const std::string& dst) {
-  if (fsutil::isFile(dst) && fsutil::fileSize(dst) > 0) return false;
+  if (fsutil::isFile(dst) &&
+      (fsutil::fileSize(dst) > 0 || fsutil::fileSize(src) == 0))
+    return false;
   std::string data;
   if (!fsutil::readFile(src, &data)) {
     LOGW("系统档案播种：读取失败 %s", src.c_str());

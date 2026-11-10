@@ -105,7 +105,10 @@ int main(int argc, char** argv) {
   // ========== B. mGBA：GBA 纯蓝整链路颜色 ==========
   {
     printf("========== B. mGBA ==========\n");
-    SDL_SetHint(SDL_HINT_VIDEODRIVER, "dummy");
+    // ★v1.3.5：SDL_HINT_VIDEODRIVER 是 SDL 2.24+/SDL3 的宏，ubuntu-22.04 的
+    //   SDL 2.0.20 没有它（linux-x64 job 编译挂点）；SDL2 全系可用 SDL_setenv
+    //   在视频子系统初始化前选 dummy 驱动，等价且无版本差异
+    SDL_setenv("SDL_VIDEODRIVER", "dummy", 1);
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
       printf("     [跳过] SDL init：%s\n", SDL_GetError());
     } else {
