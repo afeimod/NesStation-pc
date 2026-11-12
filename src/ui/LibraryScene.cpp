@@ -389,73 +389,185 @@ class LibraryScene : public Scene {
   }
 
   // ==================== Neon 3D 风格 ====================
+  // ==================== Neon 3D 风格（★v1.3.5 顶栏横排工具栏 1:1 对齐
+  //   APK NeonLibraryScreen.kt 577-812：顶栏 = 返回箭头 + 模式标题 +
+  //   「GAME LIBRARY · N GAMES」副题 + 右侧横排工具按钮；工具按钮按
+  //   当前核心差异（Java=安装JAR；3DS=+安装CIA；Switch=+小程序；
+  //   其余=导入ROM/导入文件夹）+ 刷新/获取封面/主页；搜索行为内嵌行；
+  //   左侧核心列表全高；底部 = 透明信息条（游戏名+平台徽章+N of M）
+  //   + A/B/Y/X 按键提示条。
   void drawNeon(App& app) {
     const Skin& sk = Theme::skin();
     Draw& d = app.draw;
     const InputState& in = app.input.input();
     drawBackdrop(app);
 
-    // —— 左侧 220dp 核心列表（BgPanel 60%）——
-    const float navW = 230;
-    d.rect(Rect(0, 0, navW, (float)d.H), Color8(sk.bgPanel.r, sk.bgPanel.g, sk.bgPanel.b, 153));
-    float y = 14;
-    // 返回主页
+    const float W = (float)d.W, H = (float)d.H;
+    const GamePlatform tabHint = currentTabPlatform();
+    const int curId = cats_[(size_t)catSel_].id;
+
+    // —— 顶栏（APK：Row padding 8/6，返回 38dp + 标题 19sp ExtraBold +
+    //    副题 9sp Accent letterSpacing2 + 右侧工具按钮）——
+    const float topH = 56;
     {
-      const Rect rc(12, y, navW - 24, 38);
-      const bool hov = rc.contains(in.mouse);
-      if (hov) d.chamferRect(rc, 11, sk.bgPanelHi);
-      w::iconArrowLeft(app, Rect(rc.x + 12, rc.cy() - 8, 16, 16), hov ? sk.accent : sk.accent);
-      app.font.drawVCentered(app.sdlRenderer(), "返回主页", rc.x + 36, rc.cy(), 14,
-                             hov ? sk.textHi : sk.text);
-      if (w::activated(app, rc, false)) app.popScene();
-      y += 46;
+      // 返回箭头（38dp 命中区）
+      const Rect back(8, 9, 38, 38);
+      if (back.contains(in.mouse)) {
+        d.chamferRect(back, 10, sk.bgPanelHi);
+        d.chamferRectOutline(back, 10, sk.accent, 1.2f);
+      }
+      w::iconArrowLeft(app, Rect(back.x + 9, back.cy() - 9, 18, 18), sk.textHi);
+      if (w::activated(app, back, false)) {
+        app.popScene();
+        return;
+      }
+      // 标题 + 副题（APK modeTitle / modeSub）
+      const std::string modeTitle = mode_ == 1 ? "收藏游戏"
+                                    : mode_ == 2 ? "最近游玩" : "游戏库";
+      app.font.draw(app.sdlRenderer(), modeTitle, 54, 8, 19, sk.textHi, true);
+      std::string sub;
+      if (!searchBuf_.empty())
+        sub = std::string("GAME LIBRARY · ") + std::to_string((int)games_.size()) + " 结果";
+      else {
+        const size_t base = mode_ == 1 ? app.library.favorites().size()
+                            : mode_ == 2 ? app.library.recent(100).size()
+                                         : app.library.games().size();
+        sub = std::string(mode_ == 1 ? "FAVORITES · " : mode_ == 2 ? "RECENT · " : "GAME LIBRARY · ") +
+              std::to_string((int)base) + " GAMES";
+      }
+      app.font.draw(app.sdlRenderer(), sub, 54, 36, 9, sk.accent);
+
+      // —— 右侧横排工具按钮（APK toolbarContent；NeonToolbarButton：
+      //    BgPanel60% 切角 0.22 + Line 边 + 图标 20 + 下标 9sp）——
+      auto neonTool = [&app, &d, &in, &sk](const Rect& rc, int iconId,
+                                           const std::string& label,
+                                           Color8 tint) -> bool {
+        const bool hov = rc.contains(in.mouse);
+        d.chamferRect(rc, rc.h * 0.22f, Color8(sk.bgPanel.r, sk.bgPanel.g, sk.bgPanel.b, 153));
+        if (hov) d.chamferRectOutline(rc, rc.h * 0.22f, sk.accent, 1.2f);
+        else d.chamferRectOutline(rc, rc.h * 0.22f, sk.line, 1.0f);
+        w::icon(app, iconId, Rect(rc.cx() - 10, rc.y + 6, 20, 20), tint);
+        app.font.draw(app.sdlRenderer(), label,
+                      rc.cx() - app.font.textWidth(label, 9) / 2, rc.bottom() - 13,
+                      9, tint);
+        return w::activated(app, rc, false);
+      };
+      const float tbW = 58, tbH = 48;
+      std::vector<std::pair<int, std::string>> tools;
+      tools.push_back({11, "搜索"});
+      if (curId == (int)GamePlatform::JAVA) {
+        tools.push_back({48, "安装JAR"});  // APK：Java 页只显示安装JAR
+      } else {
+        tools.push_back({48, "导入ROM"});
+        tools.push_back({4, "导入文件夹"});
+        if (curId == (int)GamePlatform::N3DS)
+          tools.push_back({39, "安装CIA"});   // APK：3DS 专属
+        if (curId == (int)GamePlatform::NSWITCH)
+          tools.push_back({12, "小程序"});    // APK v9：Switch 专属
+      }
+      tools.push_back({20, "刷新"});
+      tools.push_back({38, "获取封面"});
+      tools.push_back({49, "主页"});
+      // 从右往左排布
+      float tx = W - 10;
+      for (int i = (int)tools.size() - 1; i >= 0; i--) {
+        tx -= tbW;
+        const Rect rc(tx, 4, tbW, tbH);
+        const int idx = i;
+        const bool active = (tools[(size_t)idx].second == "搜索" && searching_) ||
+                            (tools[(size_t)idx].second == "主页");
+        if (neonTool(rc, tools[(size_t)idx].first, tools[(size_t)idx].second,
+                     active ? sk.accent : sk.text)) {
+          const std::string& label = tools[(size_t)idx].second;
+          if (label == "搜索") {
+            if (searching_) stopEditing(app);
+            else {
+              searching_ = true;
+              app.input.textClear();
+              app.input.textInputStart();
+            }
+          } else if (label == "安装JAR") {
+            startImportRomFile(app, GamePlatform::JAVA);
+          } else if (label == "导入ROM") {
+            startImportRomFile(app, tabHint);
+          } else if (label == "导入文件夹") {
+            startImportFolder(app, tabHint);
+          } else if (label == "安装CIA") {
+            startImportRomFile(app, GamePlatform::N3DS);  // .cia 安装包导入
+          } else if (label == "小程序") {
+            app.toast("Switch 小程序需固件支持（设置 → 核心设置 → Switch）");
+          } else if (label == "刷新") {
+            refreshCurrentTab(app);
+          } else if (label == "获取封面") {
+            app.covers.requestFetchAllMissing(games_);
+            app.toast("已排队获取 " + std::to_string(games_.size()) + " 个游戏的封面");
+          } else if (label == "主页") {
+            app.popScene();
+            return;
+          }
+        }
+        tx -= 6;
+      }
     }
-    // 模式标签（APK modeTitle：游戏库 / 收藏游戏 / 最近游玩）
-    {
-      const std::string mode = mode_ == 1 ? "收藏游戏"
-                                    : (mode_ == 2 ? "最近游玩" : "游戏库");
-      app.font.draw(app.sdlRenderer(), mode, 28, y + 2, 11, sk.textDim);
-      y += 18;
+
+    // —— 搜索行（APK NeonSearchField：切角 0.4 深底 + 搜索图标 + 清除钮）——
+    float y = topH;
+    if (searching_) {
+      const Rect field(16, y + 2, W - 32, 30);
+      d.chamferRect(field, 12, Color8(5, 7, 14, 204));
+      d.chamferRectOutline(field, 12,
+                           searchBuf_.empty() ? sk.line : sk.accentDim, 1.2f);
+      w::iconSearch(app, Rect(field.x + 10, field.cy() - 7, 15, 15), sk.textDim);
+      const std::string txt = searchBuf_.empty() ? "搜索游戏…" : searchBuf_;
+      app.font.drawVCentered(app.sdlRenderer(), txt, field.x + 32, field.cy(), 11,
+                             searchBuf_.empty() ? sk.textDim : sk.textHi);
+      if (!searchBuf_.empty()) {
+        const Rect clr(field.right() - 26, field.cy() - 8, 16, 16);
+        d.circleOutline(clr.cx(), clr.cy(), 8, sk.line, 1.4f);
+        app.font.draw(app.sdlRenderer(), "✕", clr.x + 5, clr.y + 3, 9, sk.text);
+        if (clr.contains(in.mouse) && in.mouseReleased) {
+          searchBuf_.clear();
+          app.input.textClear();
+          refreshGames(app);
+        }
+      }
+      y += 36;
     }
-    // 平台 SideEntry 列表（可滚动：滚轮 + 拖拽）
+
+    // —— 主体：左侧核心列表（172dp，APK NeonCoreSidebar 全高）——
+    const float navW = 176;
+    const float listTop = y + 4;
+    const float listBottom = H - 44;  // 底部按键提示条留位
     {
-      const float listTop = y;
-      const float listBottom = (float)d.H - 232;  // 给底部搜索/按钮区留位（4 按钮两行）
+      d.rect(Rect(0, 0, navW, (float)d.H), Color8(sk.bgPanel.r, sk.bgPanel.g, sk.bgPanel.b, 153));
+      float sy = listTop;
       const Rect listRc(0, listTop, navW, listBottom - listTop);
       sideScroll_ += w::dragScroll(app, listRc);
       if (in.wheel != 0 && listRc.contains(in.mouse)) sideScroll_ -= (float)in.wheel * 40;
       const float total = (float)cats_.size() * 36;
       const float maxScroll = total > listRc.h ? total - listRc.h : 0;
       sideScroll_ = std::max(0.0f, std::min(sideScroll_, maxScroll));
-      d.pushClip(listRc);
-      float sy = listTop - sideScroll_;
+      d.pushClip(Rect(0, listTop, navW, listBottom - listTop));
+      sy = listTop - sideScroll_;
       for (size_t i = 0; i < cats_.size(); i++) {
-        // ★v1.2.10：全平台始终显示（对齐 APK NeonCoreSidebar 含 0 计数）
         const Rect rc(8, sy, navW - 16, 34);
         if (rc.bottom() < listTop - 40 || rc.y > listBottom + 40) {
           sy += 36;
           continue;
         }
         const bool selected = catSel_ == (int)i;
-        // SideEntry：选中 BgPanelHi 底 + 彩点 + 文字 + 数量
         if (selected) d.chamferRect(rc, 10, sk.bgPanelHi);
         uint32_t c1 = 0, c2 = 0;
-        if (cats_[i].id >= 0) {
-          platformGradient((GamePlatform)cats_[i].id, &c1, &c2);
-        }
-        const Color8 dotCol = cats_[i].id >= 0
-                                  ? Color8::hex(c1)
-                                  : sk.accent;
-        d.rect(Rect(rc.x + 12, rc.cy() - 3, 6, 6),
-               selected ? dotCol : sk.textDim);
+        if (cats_[i].id >= 0) platformGradient((GamePlatform)cats_[i].id, &c1, &c2);
+        const Color8 dotCol = cats_[i].id >= 0 ? Color8::hex(c1) : sk.accent;
+        d.rect(Rect(rc.x + 12, rc.cy() - 3, 6, 6), selected ? dotCol : sk.textDim);
         app.font.drawVCentered(app.sdlRenderer(), cats_[i].name, rc.x + 30, rc.cy(), 13,
                                selected ? sk.textHi : sk.text, selected);
         std::string cnt;
         if (cats_[i].id == -1) {
-          // 「全部」计数 = 当前模式基底（APK NeonCoreEntry(null, "全部", modeGames.size)）
-          cnt = std::to_string(mode_ == 1   ? app.library.favorites().size()
-                               : mode_ == 2 ? app.library.recent(100).size()
-                                            : app.library.games().size());
+          cnt = std::to_string(mode_ == 1 ? app.library.favorites().size()
+                                : mode_ == 2 ? app.library.recent(100).size()
+                                             : app.library.games().size());
         } else {
           cnt = std::to_string(app.library.countFor((GamePlatform)cats_[i].id));
         }
@@ -471,98 +583,29 @@ class LibraryScene : public Scene {
       }
       d.popClip();
     }
-    // 底部：搜索框 + 导入ROM / 导入文件夹 / 刷新 / 获取封面
-    //（★v1.2.11 对齐 APK Neon 工具栏按钮组；避开底部信息条 H-92）
-    {
-      const float by = (float)d.H - 218;
-      const Rect src(14, by, navW - 28, 38);
-      const bool hov = src.contains(in.mouse) || searching_;
-      d.chamferRect(src, 10, hov ? sk.bgPanelHi : sk.bgPanel);
-      d.chamferRectOutline(src, 10, searching_ ? sk.accent : sk.line, 1.2f);
-      w::iconSearch(app, Rect(src.x + 10, src.y + 9, 18, 18), sk.textDim);
-      const std::string& shown =
-          searchBuf_.empty() && !searching_ ? std::string("搜索游戏…") : searchBuf_;
-      app.font.drawVCentered(app.sdlRenderer(), shown.empty() && searching_ ? "|" : shown,
-                             src.x + 36, src.cy(), 13,
-                             searchBuf_.empty() && !searching_ ? sk.textDim : sk.textHi);
-      if (hov && in.mousePressed && !searching_) {
-        searching_ = true;
-        app.input.textClear();
-        app.input.textInputStart();
-      }
-      // 带图标文字的工具按钮（当前平台页 hint —— APK 按平台页导入）
-      auto toolBtn = [&app, &d, &in, &sk](const Rect& rc, int iconId, const char* label,
-                                        Color8 col) -> bool {
-        const bool bHov = rc.contains(in.mouse);
-        d.chamferRect(rc, 10, sk.bgPanelHi);
-        if (bHov) d.chamferRectOutline(rc, 10, sk.accent, 1.2f);
-        w::icon(app, iconId, Rect(rc.x + 10, rc.cy() - 8, 16, 16), col);
-        app.font.drawVCentered(app.sdlRenderer(), label, rc.x + 32, rc.cy(), 11,
-                               bHov ? sk.textHi : sk.text);
-        return w::activated(app, rc, false);
-      };
-      const float bw = (navW - 28 - 8) / 2;
-      const float bh = 34;
-      // 行 1：导入ROM / 导入文件夹
-      const GamePlatform tabHint = currentTabPlatform();
-      if (toolBtn(Rect(14, by + 46, bw, bh), 39, "导入ROM", sk.green))
-        startImportRomFile(app, tabHint);
-      if (toolBtn(Rect(14 + bw + 8, by + 46, bw, bh), 4, "导入文件夹", sk.blue))
-        startImportFolder(app, tabHint);
-      // 行 2：刷新 / 获取封面
-      if (toolBtn(Rect(14, by + 86, bw, bh), 20, "刷新", sk.accent))
-        refreshCurrentTab(app);
-      if (toolBtn(Rect(14 + bw + 8, by + 86, bw, bh), 38, "获取封面", sk.gold)) {
-        app.covers.requestFetchAllMissing(games_);
-        app.toast("已排队获取 " + std::to_string(games_.size()) + " 个游戏的封面");
-      }
-    }
 
-    // —— 右侧内容 ——
-    const float rx = navW + 26;
-    const float rw = (float)d.W - rx - 26;
-    // 顶部平台标题 + 时代副标题
-    {
-      const int id = cats_[(size_t)catSel_].id;
-      std::string title;
-      Color8 subCol = sk.accent;
-      std::string sub;
-      if (id >= 0) {
-        const GamePlatform p = (GamePlatform)id;
-        title = platformFullName(p);
-        sub = platformEra(p);
-        uint32_t c1 = 0, c2 = 0;
-        platformGradient(p, &c1, &c2);
-        subCol = Color8::hex(c1);
-      } else {
-        // 全部：APK modeTitle（游戏库 / 收藏游戏 / 最近游玩）
-        title = mode_ == 1 ? "收藏游戏"
-              : mode_ == 2 ? "最近游玩"
-              : "游戏库";
-        sub = "LIBRARY · " + std::to_string(games_.size()) + " GAMES";
-      }
-      app.font.draw(app.sdlRenderer(), title, rx, 18, 19, sk.textHi, true);
-      app.font.draw(app.sdlRenderer(), sub, rx, 46, 11, subCol);
-    }
-
-    // —— 3D 封面流（NeonFlow 参数）——
+    // —— 右侧 3D 封面流（NeonFlow：178x238 + 下沉 26 + 倒影区）——
+    const float rx = navW + 16;
+    const float rw = W - rx - 16;
     hitCards_.clear();
-    const float flowTop = 66, flowBottom = (float)d.H - 108;
+    const float flowTop = y + 8, flowBottom = H - 76;
     const float flowCy = (flowTop + flowBottom) * 0.5f;
-    const float cardW = 170;              // NeonLibraryScreen cardWidth = 170dp
+    const float cardW = 170;
     const float cardH = cardW * 1.36f;
     if (games_.empty()) {
-      app.font.draw(app.sdlRenderer(), "这里还没有游戏",
-                    rx + rw / 2 - app.font.textWidth("这里还没有游戏", 14) / 2, flowCy - 12,
-                    14, sk.textDim);
-      const std::string tip =
-          "左下角「导入ROM / 导入文件夹」按当前平台页导入游戏";
-      app.font.draw(app.sdlRenderer(), app.font.ellipsize(tip, 12, rw),
-                    rx + rw / 2 - app.font.textWidth(app.font.ellipsize(tip, 12, rw), 12) / 2,
-                    flowCy + 14, 12, Color8(sk.textDim.r, sk.textDim.g, sk.textDim.b, 180));
+      const std::string main = searchBuf_.empty() ? "该分类还没有游戏"
+                                 : "未找到匹配「" + searchBuf_ + "」的游戏";
+      app.font.draw(app.sdlRenderer(), main,
+                    rx + rw / 2 - app.font.textWidth(main, 15, true) / 2, flowCy - 14,
+                    15, sk.textHi, true);
+      const std::string tip2 = searchBuf_.empty()
+                                   ? "点击右上角「导入ROM / 导入文件夹」添加游戏"
+                                   : "换个关键词试试，或点 ✕ 关闭搜索";
+      app.font.draw(app.sdlRenderer(), app.font.ellipsize(tip2, 12, (int)rw),
+                    rx + rw / 2 - app.font.textWidth(app.font.ellipsize(tip2, 12, (int)rw), 12) / 2,
+                    flowCy + 14, 12, sk.textDim);
     } else {
       const int N = (int)games_.size();
-      // 远 → 近（scale 0.12 衰减 / alpha 0.16 衰减 / 间距 0.72 卡宽 / 下沉 24）
       for (int dist = 4; dist >= 1; dist--) {
         for (int sgn : {-1, 1}) {
           const int i = gridSel_ + sgn * dist;
@@ -573,13 +616,11 @@ class LibraryScene : public Scene {
           const float alpha = std::min(0.85f, std::max(0.18f, 0.95f - 0.16f * ad));
           const float cx = rx + rw / 2 + dir * ad * cardW * 0.72f;
           const float cy = flowCy + ad * 24.0f;
-          const float w = cardW * scale, h = cardH * scale;
-          w::coverCard(app, Rect(cx - w / 2, cy - h / 2, w, h), games_[(size_t)i], false)
-              ;
-          // 侧卡透明度由 coverCard 内部不支持 → 用暗化叠加近似
-          d.rect(Rect(cx - w / 2, cy - h / 2, w, h),
+          const float w2 = cardW * scale, h2 = cardH * scale;
+          w::coverCard(app, Rect(cx - w2 / 2, cy - h2 / 2, w2, h2), games_[(size_t)i], false);
+          d.rect(Rect(cx - w2 / 2, cy - h2 / 2, w2, h2),
                  Color8(sk.bg.r, sk.bg.g, sk.bg.b, (uint8_t)(255 * (1.0f - alpha) * 0.55f)));
-          if (alpha > 0.3f) hitCards_.push_back({Rect(cx - w / 2, cy - h / 2, w, h), i});
+          if (alpha > 0.3f) hitCards_.push_back({Rect(cx - w2 / 2, cy - h2 / 2, w2, h2), i});
         }
       }
       // 中心卡（上浮 14 + 辉光）
@@ -594,10 +635,8 @@ class LibraryScene : public Scene {
       if (in.mousePressed) {
         for (auto it = hitCards_.rbegin(); it != hitCards_.rend(); ++it) {
           if (it->first.contains(in.mouse)) {
-            if (it->second == gridSel_)
-              app.launchGame(games_[(size_t)gridSel_]);
-            else
-              gridSel_ = it->second;
+            if (it->second == gridSel_) app.launchGame(games_[(size_t)gridSel_]);
+            else gridSel_ = it->second;
             break;
           }
         }
@@ -612,7 +651,8 @@ class LibraryScene : public Scene {
         }
       }
       // 拖拽换卡（detectHorizontalDragGestures）
-      if (in.mouseHeld && in.mouse.y > flowTop && in.mouse.y < flowBottom) {
+      if (in.mouseHeld && in.mouse.y > flowTop && in.mouse.y < flowBottom &&
+          in.mouse.x > rx) {
         if (!dragging_) {
           dragging_ = true;
           dragLastX_ = in.mouse.x;
@@ -634,50 +674,60 @@ class LibraryScene : public Scene {
       } else {
         dragging_ = false;
       }
+
+      // —— 信息条（APK NeonLibraryInfoBar：透明底 + 游戏名 13sp +
+      //    平台徽章（Accent16% 切角 + AccentDim 边）+ 「N of M」）——
+      {
+        const GameEntry& g = games_[(size_t)gridSel_];
+        const float iy = H - 70;
+        const float ix = rx;
+        const std::string title =
+            app.font.ellipsize(g.displayTitle(), 13, (int)(rw - 240), true);
+        app.font.draw(app.sdlRenderer(), title, ix, iy, 13, sk.textHi, true);
+        float mx = ix + app.font.textWidth(title, 13, true) + 12;
+        // 平台徽章
+        {
+          const std::string pname = platformShortName(g.platform);
+          const float bw2 = app.font.textWidth(pname, 9, true) + 14;
+          const Rect brc(mx, iy - 1, bw2, 15);
+          d.chamferRect(brc, 7, Color8(sk.accent.r, sk.accent.g, sk.accent.b, 41));
+          d.chamferRectOutline(brc, 7, sk.accentDim, 1.0f);
+          app.font.drawVCentered(app.sdlRenderer(), pname, brc.x + 7, brc.cy(), 9,
+                                 sk.accent, true);
+          mx = brc.right() + 8;
+        }
+        const std::string cnt = std::to_string(gridSel_ + 1) + " of " +
+                                std::to_string((int)games_.size());
+        app.font.drawVCentered(app.sdlRenderer(), cnt, rx + rw - app.font.textWidth(cnt, 11, true),
+                               iy + 6, 11, sk.accent, true);
+      }
     }
 
-    // —— 底部信息条（BgDeep 80%）——
-    if (!games_.empty()) {
-      const GameEntry& g = games_[(size_t)gridSel_];
-      const float by = (float)d.H - 92;
-      d.rect(Rect(0, by, (float)d.W, 44), Color8(sk.bgDeep.r, sk.bgDeep.g, sk.bgDeep.b, 204));
-      const float ix = rx;
-      app.font.draw(app.sdlRenderer(), app.font.ellipsize(g.displayTitle(), 15, rw - 320, true),
-                    ix, by + 6, 15, sk.textHi, true);
-      float mx = ix;
-      mx += w::platformBadge(app, mx, by + 30, g.platform) + 10;
-      app.font.drawVCentered(app.sdlRenderer(),
-                             fsutil::baseOf(fsutil::dirOf(g.romPath)), mx, by + 30, 11,
-                             sk.textDim);
-      // ★ 收藏 / ✗ 删除
-      {
-        const Rect fav(rw + rx - 240, by + 10, 36, 24);
-        app.font.draw(app.sdlRenderer(), "★", fav.x, by + 12, 17,
-                      g.favorite ? sk.gold : sk.textDim);
-        if (fav.contains(in.mouse) && in.mouseReleased && !w::dragGestureActive()) {
-          app.library.toggleFavorite(g.id);
-          app.library.save();
-          refreshGames(app);
-        }
+    // —— 底部按键提示条（APK NeonHintsBar：A 启动 / B 返回 / Y 选项 / X 搜索）——
+    {
+      struct Hint {
+        char letter;
+        const char* label;
+        Color8 col;
+      };
+      const Hint hints[] = {
+          {'A', "启动", Color8::hex(0x6DBE28)},
+          {'B', "返回", Color8::hex(0xE23B3B)},
+          {'Y', "选项", Color8::hex(0xF2C200)},
+          {'X', "搜索", Color8::hex(0x2F7BD9)},
+      };
+      float hx = W / 2 - 130;
+      const float hy = H - 34;
+      for (const auto& h : hints) {
+        d.circle(hx + 9, hy + 10, 9, h.col);
+        app.font.draw(app.sdlRenderer(), std::string(1, h.letter), hx + 6, hy + 5, 10,
+                      Color8(255, 255, 255), true);
+        app.font.drawVCentered(app.sdlRenderer(), h.label, hx + 22, hy + 10, 11, sk.text);
+        hx += app.font.textWidth(h.label, 11) + 44;
       }
-      {
-        const Rect del(rw + rx - 196, by + 10, 36, 24);
-        app.font.draw(app.sdlRenderer(), "✕", del.x + 4, by + 12, 15, sk.red);
-        if (del.contains(in.mouse) && in.mouseReleased && !w::dragGestureActive()) {
-          app.library.remove(g.id);
-          app.library.save();
-          refreshGames(app);
-          app.toast("已从库中移除");
-        }
-      }
-      // 开始按钮（NeonPrimaryButton）
-      const Rect playRc(rx + rw - 150, by + 6, 150, 32);
-      if (w::primaryButton(app, playRc, "开始", 1)) app.launchGame(g);
     }
-
-    w::keyHintBar(app, {{"←→", "切换"}, {"Enter / 双击", "开始"}, {"F", "收藏"},
-                        {"右键", "快捷菜单"}, {"B / Esc", "返回"}});
   }
+
 
   // ==================== FSD 经典（★v1.2.9 重制：1:1 对齐 APK LibraryScreen） ====================
   //   FsdTopBar（CPU/内存/存储 + 时钟）
@@ -821,42 +871,81 @@ class LibraryScene : public Scene {
               : "游戏库";
       w::fsdBreadcrumb(app, 34 * D, y + toolRowH * 0.5f, "游戏库", seg2);
       // 右侧工具按钮（tools[i]：i 越往右越靠屏幕右侧）
+      // ★v1.3.5 对齐 APK FSD 工具行（LibraryScreen.kt:1383-1419）：
+      //   搜索 / 导入ROM / [3DS:安装CIA] / 导入文件夹 / 本地浏览 /
+      //   [Switch:小程序] / 刷新 / 获取封面 / 主页（按当前平台差异）
       const float tw = 52 * D, th = toolRowH - 4 * D;
       struct Tool {
         int icon;
         const char* label;
       };
-      const Tool tools[] = {{11, "搜索"}, {39, "导入ROM"}, {4, "导入文件夹"},
-                            {20, "刷新"}, {38, "获取封面"}};
+      std::vector<Tool> tools;
+      tools.push_back({11, "搜索"});
+      if (curId == (int)GamePlatform::JAVA) {
+        tools.push_back({48, "安装JAR"});  // APK：Java 页专属入口
+      } else {
+        tools.push_back({48, "导入ROM"});
+        if (curId == (int)GamePlatform::N3DS)
+          tools.push_back({39, "安装CIA"});   // APK：3DS 专属
+        tools.push_back({4, "导入文件夹"});
+        tools.push_back({15, "本地浏览"});    // APK Storage（内置浏览器）
+        if (curId == (int)GamePlatform::NSWITCH)
+          tools.push_back({12, "小程序"});    // APK v9：Switch 专属
+      }
+      tools.push_back({20, "刷新"});
+      tools.push_back({38, "获取封面"});
+      tools.push_back({49, "主页"});
       // ★v1.2.11 导入ROM/导入文件夹/刷新 都按「当前平台页」hint（APK 按钮组）
       const GamePlatform tabHint = currentTabPlatform();
-      for (int i = 4; i >= 0; i--) {
-        const float tx = W - 24 * D - tw - (float)(4 - i) * (tw + 6 * D);
+      const int nTools = (int)tools.size();
+      for (int i = nTools - 1; i >= 0; i--) {
+        const float tx = W - 24 * D - tw - (float)(nTools - 1 - i) * (tw + 6 * D);
         const Rect rc(tx, y + 2 * D, tw, th);
-        if (w::fsdToolButton(app, rc, tools[i].icon, tools[i].label)) {
-          switch (i) {
-            case 0:  // 搜索开关（APK X 键同款）
-              if (searching_) {
-                stopEditing(app);
-              } else {
-                searching_ = true;
-                app.input.textClear();
-                app.input.textInputStart();
+        if (w::fsdToolButton(app, rc, tools[(size_t)i].icon,
+                             tools[(size_t)i].label)) {
+          const std::string label = tools[(size_t)i].label;
+          if (label == "搜索") {  // 搜索开关（APK X 键同款）
+            if (searching_) {
+              stopEditing(app);
+            } else {
+              searching_ = true;
+              app.input.textClear();
+              app.input.textInputStart();
+            }
+          } else if (label == "安装JAR") {
+            startImportRomFile(app, GamePlatform::JAVA);
+          } else if (label == "导入ROM") {  // 选文件（当前平台页 hint）
+            startImportRomFile(app, tabHint);
+          } else if (label == "安装CIA") {
+            startImportRomFile(app, GamePlatform::N3DS);
+          } else if (label == "导入文件夹") {  // 注册到当前平台页
+            startImportFolder(app, tabHint);
+          } else if (label == "本地浏览") {  // 内置文件浏览器
+            BrowserRequest req;
+            req.title = std::string("本地浏览（") + platformShortName(tabHint) + "）";
+            req.mode = 0;
+            req.startDir = fsutil::homeDir();
+            req.onPick = [&app, tabHint](const std::string& dir) {
+              if (!fsutil::isDir(dir)) return;
+              if (app.library.scanRunning()) {
+                app.toast("上一次导入还在进行中，请稍候再试");
+                return;
               }
-              break;
-            case 1:  // 导入ROM：选文件（当前平台页 hint）
-              startImportRomFile(app, tabHint);
-              break;
-            case 2:  // 导入文件夹：注册到当前平台页（不再全局扫描）
-              startImportFolder(app, tabHint);
-              break;
-            case 3:  // 刷新：核心隔离 —— 只重扫当前平台页导入的文件夹
-              refreshCurrentTab(app);
-              break;
-            case 4:
-              app.covers.requestFetchAllMissing(games_);
-              app.toast("已排队获取 " + std::to_string(games_.size()) + " 个游戏的封面");
-              break;
+              app.library.startBackgroundImport(dir, tabHint);
+              app.library.save();
+            };
+            req.onCancel = [] {};
+            app.pushScene(createFileBrowser(req));
+          } else if (label == "小程序") {
+            app.toast("Switch 小程序需固件支持（设置 → 核心设置 → Switch）");
+          } else if (label == "刷新") {  // 核心隔离：只重扫当前平台页
+            refreshCurrentTab(app);
+          } else if (label == "获取封面") {
+            app.covers.requestFetchAllMissing(games_);
+            app.toast("已排队获取 " + std::to_string(games_.size()) + " 个游戏的封面");
+          } else if (label == "主页") {
+            app.popScene();
+            return;
           }
         }
       }

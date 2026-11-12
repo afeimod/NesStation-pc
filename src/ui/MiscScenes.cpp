@@ -854,6 +854,15 @@ class FileBrowserScene : public Scene {
       }
     }
 
+    // ★v1.3.5 在系统文件管理器中打开当前目录（thunar 优先 → 其他 FM）
+    if (!quickMode_ && !drivesMode_ && !cur_.empty() && fsutil::isDir(cur_)) {
+      const Rect openRc(app.draw.W - 240 - 216 - 190, 30, 176, 46);
+      if (w::button(app, openRc, "在系统中打开", false)) {
+        if (!nativedlg::openInFileManager(cur_))
+          app.toast("未找到系统文件管理器（thunar 等）");
+      }
+    }
+
     // 目录模式下：选择当前目录按钮（仅纯净视图）
     if (req_.mode == 0 && !drivesMode_ && !quickMode_ &&
         !cur_.empty() && fsutil::isDir(cur_)) {

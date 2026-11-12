@@ -95,6 +95,50 @@ SDL_Event synthKey(SDL_Scancode sc, bool down) {
   return e;
 }
 
+// ★v1.3.5 GBA MODE3 彩条 ROM（gba / gamemenu 自检共用）：
+//   240x160，8 条横色带（每色 20 行，自上而下 红/绿/蓝/黄/青/品/白/黑）。
+//   ARM 代码只用已验证原语（立即数均可 8 位旋转编码；详见 gba 步骤注释）。
+//   GBA MODE3 = xBBBBBGGGGGRRRRR（555）：纯绿=0x03E0、纯黄=0x03FF。
+void makeGbaColorBars(const std::string& path) {
+  std::vector<uint8_t> rom(0x8000, 0x00);
+  auto w32 = [&](size_t off, uint32_t v) {
+    rom[off] = (uint8_t)v; rom[off+1] = (uint8_t)(v>>8);
+    rom[off+2] = (uint8_t)(v>>16); rom[off+3] = (uint8_t)(v>>24);
+  };
+  w32(0x00, 0xEA00002E);   // b 0xC0
+  w32(0xC0, 0xE59F0048);   // ldr r0,[pc,#0x48] → [0x110]=IO
+  w32(0xC4, 0xE59F1048);   // ldr r1,[pc,#0x48] → [0x114]=MODE3|BG2
+  w32(0xC8, 0xE1C010B0);   // strh r1,[r0]
+  w32(0xCC, 0xE59F0044);   // ldr r0,[pc,#0x44] → [0x118]=VRAM
+  w32(0xD0, 0xE59F6044);   // ldr r6,[pc,#0x44] → [0x11C]=色表（ROM 基址）
+  w32(0xD4, 0xE0D610B2);   // ldrh r1,[r6],#2   首色
+  w32(0xD8, 0xE3A030A0);   // mov r3,#160 行
+  w32(0xDC, 0xE3A05014);   // mov r5,#20 每色行数
+  w32(0xE0, 0xE3A020F0);   // outer: mov r2,#240 列
+  w32(0xE4, 0xE0C010B2);   // inner: strh r1,[r0],#2
+  w32(0xE8, 0xE2522001);   // subs r2,r2,#1
+  w32(0xEC, 0x1AFFFFFC);   // bne 0xE4
+  w32(0xF0, 0xE2555001);   // subs r5,r5,#1
+  w32(0xF4, 0x1A000001);   // bne 0x100
+  w32(0xF8, 0xE0D610B2);   // ldrh r1,[r6],#2 下一色
+  w32(0xFC, 0xE3A05014);   // mov r5,#20
+  w32(0x100, 0xE2533001);  // subs r3,r3,#1
+  w32(0x104, 0x1AFFFFF5);  // bne 0xE0
+  w32(0x108, 0xEAFFFFFE);  // b .
+  w32(0x110, 0x04000000);  // 字面池：IO
+  w32(0x114, 0x00000403);  //        DISPCNT = MODE3|BG2
+  w32(0x118, 0x06000000);  //        VRAM
+  w32(0x11C, 0x08000120);  //        色表地址（0x08000000 + 0x120）
+  static const uint16_t kBars[8] = {0x001F, 0x03E0, 0x7C00, 0x03FF,
+                                    0x7FE0, 0x7C1F, 0x7FFF, 0x0000};
+  for (int i = 0; i < 8; i++) {
+    rom[0x120 + i * 2] = (uint8_t)(kBars[i] & 0xFF);
+    rom[0x121 + i * 2] = (uint8_t)(kBars[i] >> 8);
+  }
+  std::ofstream f(path, std::ios::binary);
+  f.write((const char*)rom.data(), (std::streamsize)rom.size());
+}
+
 void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
   st.synthFrame = -1;
   st.synth.clear();
@@ -111,6 +155,27 @@ void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
   } else if (name == "video") {
     // ★v1.2.8 视频分类（画面缩放 6 档 / 视频滤镜 11 档回归截图）
     app.pushScene(ns::createSettingsScene(1));
+  } else if (name == "gba") {
+    // ★v1.3.5 真实 mGBA 核心 + 彩条 GBA ROM 全链路（用户反复反馈
+    //   「GBA 颜色不对」的端到端回归）：MODE3 八条横色带 → EmulatorScene
+    //   渲染 → 截图。像素级检验各色带位置与色值，覆盖 核心像素格式协商
+    //   （RGB565 声明被拒的回归）→ VideoBridge 转换 → 纹理上传 →
+    //   比例数学 → SDL 渲染 + 渲染后端色彩探针 整条链路。
+    {
+      const std::string dir = "/tmp/nesstation-selftest-roms";
+      fsutil::makeDirs(dir);
+      const std::string gbaPath = fsutil::join(dir, "颜色测试.gba");
+      makeGbaColorBars(gbaPath);
+      app.library.addRomDir(dir);
+      app.library.scanDirectory(dir, ns::GamePlatform::GBA, false, false);
+      app.library.save();
+      for (const auto& g : app.library.games()) {
+        if (g.romPath == gbaPath) {
+          app.launchGame(g);
+          break;
+        }
+      }
+    }
   } else if (name == "game") {
     // ★v1.2.8 真实核心全链路：造 NES ROM + 入库 + 启动（渲染若干帧后截图）。
     //   滤镜/画面比例经 config.json 正常加载路径生效（外部预置），
@@ -327,20 +392,26 @@ void applyStep(ns::App& app, const std::string& name, SelftestState& st) {
     if (pick)
       app.pushScene(ns::createCorePickerScene(*pick, [](const std::string&) {}));
   } else if (name == "gamemenu") {
-    // ★v1.2.10 游戏内菜单回归：造 ROM → 启动 → 第 12 帧按 Esc 呼出菜单 →
-    //   截图应为「上方一列竖排菜单」（继续游戏/暂停游戏F7/重置/即时存档F5/…）
+    // ★v1.3.5 游戏内菜单回归（横排图标栏）：GBA 彩条 ROM → 启动 →
+    //   第 12 帧按 Esc 呼出菜单 → 截图应为「底部横排图标栏」（APK
+    //   MenuOverlay：暂停/快进/倍速/截图/存档/读档/重置/金手指/手柄布局/
+    //   设置/核心日志/隐藏菜单/退出 + 图标下方小字标签）。
+    //   （旧版用 NES ROM；现用 GBA 彩条 —— 复用 gba 步骤的 mgba 核心，
+    //    截图同时验证菜单布局与画面颜色，CI 无需额外下载 fceumm）
     {
       const std::string dir = "/tmp/nesstation-selftest-roms";
       fsutil::makeDirs(dir);
-      {
-        std::ofstream f(fsutil::join(dir, "菜单测试.nes"), std::ios::binary);
-        f << "NES\x1a" << std::string(64, '\0');
-      }
+      const std::string gbaPath = fsutil::join(dir, "颜色测试.gba");
+      if (!fsutil::isFile(gbaPath)) makeGbaColorBars(gbaPath);
       app.library.addRomDir(dir);
-      app.library.scanDirectory(dir, ns::GamePlatform::NES, false, false);
+      app.library.scanDirectory(dir, ns::GamePlatform::GBA, false, false);
       app.library.save();
-      const auto& games = app.library.games();
-      if (!games.empty()) app.launchGame(games.back());
+      for (const auto& g : app.library.games()) {
+        if (g.romPath == gbaPath) {
+          app.launchGame(g);
+          break;
+        }
+      }
       st.synthFrame = 0;
       st.synth[12].push_back(synthKey(SDL_SCANCODE_ESCAPE, true));
       st.synth[14].push_back(synthKey(SDL_SCANCODE_ESCAPE, false));

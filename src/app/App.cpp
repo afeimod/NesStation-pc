@@ -93,6 +93,7 @@ void Config::load(const std::string& file) {
     homeBackground = j.value("homeBackground", "");          // ★v1.2.6 自定义主页背景
     fullscreenOnLaunch = j.value("fullscreenOnLaunch", false); // ★v1.2.6 启动游戏时全屏
     audioBufferMs = j.value("audioBufferMs", 64);              // ★v1.2.6 音频缓冲毫秒
+    renderSoftware = j.value("renderSoftware", false);         // ★v1.3.5 软件渲染排障开关
     if (j.contains("defaultCores") && j["defaultCores"].is_object()) {
       for (auto it = j["defaultCores"].begin(); it != j["defaultCores"].end(); ++it)
         defaultCores[it.key()] = it.value().get<std::string>();
@@ -172,6 +173,7 @@ void Config::save(const std::string& file) const {
   j["homeBackground"] = homeBackground;         // ★v1.2.6
   j["fullscreenOnLaunch"] = fullscreenOnLaunch; // ★v1.2.6
   j["audioBufferMs"] = audioBufferMs;           // ★v1.2.6
+  j["renderSoftware"] = renderSoftware;        // ★v1.3.5
   j["defaultCores"] = json::object();           // ★v1.2.6
   for (const auto& [k, v] : defaultCores) j["defaultCores"][k] = v;
   j["emulatorPaths"] = json::object();
@@ -439,18 +441,31 @@ bool App::init() {
   // ★v1.3.0 渲染器回退链：加速+VSync → 加速（无 VSync，应用内已按墙钟节流）
   //   → 软件。旧版二段回退在个别驱动/远程桌面下直接落到软件渲染，
   //   输出未与刷新同步 → 画面割裂块闪烁；现在保留加速无同步档，并记录后端。
-  renderer_ = SDL_CreateRenderer(
-      window_, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-  if (!renderer_) {
-    LOGW("加速+VSync 渲染器失败：%s；尝试加速（无同步）", SDL_GetError());
-    renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
-  }
-  if (!renderer_) {
-    LOGW("加速渲染器失败，回退软件：%s", SDL_GetError());
+  // ★v1.3.5 软件渲染排障开关 / 环境变量：部分 GPU 驱动与 Wine/box64 转译层
+  //   会打乱 ARGB 纹理通道序（「GBA 颜色发紫/偏色」的设备端根因），
+  //   config.renderSoftware=true 或 NESSTATION_SOFTWARE_RENDERER=1 直接软件渲染。
+  const bool wantSoftware =
+      config.renderSoftware || getenv("NESSTATION_SOFTWARE_RENDERER");
+  if (wantSoftware) {
     renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
     if (!renderer_) {
-      LOGE("创建渲染器失败：%s", SDL_GetError());
+      LOGE("软件渲染器创建失败：%s", SDL_GetError());
       return false;
+    }
+  } else {
+    renderer_ = SDL_CreateRenderer(
+        window_, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!renderer_) {
+      LOGW("加速+VSync 渲染器失败：%s；尝试加速（无同步）", SDL_GetError());
+      renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
+    }
+    if (!renderer_) {
+      LOGW("加速渲染器失败，回退软件：%s", SDL_GetError());
+      renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
+      if (!renderer_) {
+        LOGE("创建渲染器失败：%s", SDL_GetError());
+        return false;
+      }
     }
   }
   {
@@ -461,6 +476,32 @@ bool App::init() {
     }
   }
   updateSurface();  // ★v1.2.7 逻辑尺寸/UI 缩放/鼠标映射一次性就绪（config 已加载）
+
+  // ★v1.3.5 渲染后端色彩探针（仅加速渲染器；软件渲染必然正确）：
+  //   部分驱动/Wine 转译层会打乱 ARGB 纹理通道序（「GBA 颜色发紫/
+  //   偏色」的设备端根因）。用与游戏画面完全相同的路径（ARGB8888
+  //   纹理 → RenderCopy → 回读）注入红/绿/蓝/白四色探针；任一色条
+  //   通道异常 → 销毁加速渲染器改用软件渲染（字体未烘焙、无纹理缓存，
+  //   此刻重建零成本），并 toast 告知。CI 无头 dummy 驱动走软件渲染，
+  //   探针自动跳过。
+  if (!wantSoftware && !probeRendererColors()) {
+    LOGW("色彩探针失败：渲染后端打乱 ARGB 通道序，切换软件渲染兜底");
+    SDL_DestroyRenderer(renderer_);
+    renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
+    if (!renderer_) {
+      LOGE("软件渲染器创建失败：%s", SDL_GetError());
+      return false;
+    }
+    softwareRendererForced_ = true;
+    updateSurface();
+    {
+      SDL_RendererInfo ri{};
+      if (SDL_GetRendererInfo(renderer_, &ri) == 0)
+        LOGI("已切换渲染后端：%s（软件兜底）", ri.name);
+    }
+    postNotice("检测到显卡驱动颜色输出异常（游戏画面会偏色/发紫），"
+               "已自动切换软件渲染；如画面卡顿可到 设置→性能 关闭");
+  }
 
   setWindowIcon();
 
@@ -573,6 +614,53 @@ bool App::saveScreenshot(const std::string& pngPath) {
 //   · 字号/卡片等设计值不变，全部经渲染器统一变换放大 —— 布局逻辑零改动；
 //   · 鼠标坐标用 SDL_RenderWindowToLogical 精确反演渲染器变换（含
 //     letterbox/取整/DPI 一切边界），命中测试与所见像素严格一致。
+// ★v1.3.5 渲染后端色彩探针：走与游戏画面相同的链路（ARGB8888 纹理 →
+// RenderCopy → 回读）注入红/绿/蓝/白四色竖条。四条全部通道正确 → true；
+// 任一异常（通道交换/染色/丢弃）→ false（调用方切换软件渲染）。
+bool App::probeRendererColors() {
+  if (!renderer_) return true;  // 无渲染器（异常态）不拦截
+  int pw = 0, ph = 0;
+  SDL_GetRendererOutputSize(renderer_, &pw, &ph);
+  if (pw < 16 || ph < 16) return true;
+  SDL_Texture* t = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_ARGB8888,
+                                     SDL_TEXTUREACCESS_STATIC, 4, 1);
+  if (!t) return true;  // 探针纹理建不出来：放行（软件渲染同样建不出时无解）
+  const Uint32 kProbe[4] = {0xFFFF0000u, 0xFF00FF00u, 0xFF0000FFu, 0xFFFFFFFFu};
+  SDL_UpdateTexture(t, nullptr, kProbe, 4 * sizeof(Uint32));
+  SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
+  SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
+  // 探测期间取消逻辑尺寸（物理像素直读直写）
+  SDL_RenderSetLogicalSize(renderer_, 0, 0);
+  SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+  SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+  SDL_RenderClear(renderer_);
+  SDL_Rect full{0, 0, pw, ph};
+  SDL_RenderCopy(renderer_, t, nullptr, &full);
+  Uint32 got[4] = {0, 0, 0, 0};
+  for (int i = 0; i < 4; i++) {
+    SDL_Rect px{(int)(((float)i + 0.5f) * (float)pw / 4.0f), ph / 2, 1, 1};
+    SDL_RenderReadPixels(renderer_, &px, SDL_PIXELFORMAT_ARGB8888, &got[i],
+                         sizeof(Uint32));
+  }
+  SDL_DestroyTexture(t);
+  updateSurface();  // 恢复逻辑尺寸/UI 缩放
+  auto ch = [](Uint32 c, int sh) { return (int)((c >> sh) & 0xFF); };
+  const int r0 = ch(got[0], 16), g0 = ch(got[0], 8), b0 = ch(got[0], 0);
+  const int r1 = ch(got[1], 16), g1 = ch(got[1], 8), b1 = ch(got[1], 0);
+  const int r2 = ch(got[2], 16), g2 = ch(got[2], 8), b2 = ch(got[2], 0);
+  const int r3 = ch(got[3], 16), g3 = ch(got[3], 8), b3 = ch(got[3], 0);
+  LOGI("色彩探针：红(%d,%d,%d) 绿(%d,%d,%d) 蓝(%d,%d,%d) 白(%d,%d,%d)", r0,
+       g0, b0, r1, g1, b1, r2, g2, b2, r3, g3, b3);
+  bool ok = true;
+  if (r0 < 160 || g0 > 90 || b0 > 90) ok = false;    // 红
+  if (g1 < 160 || r1 > 90 || b1 > 90) ok = false;    // 绿
+  if (b2 < 160 || r2 > 90 || g2 > 90) ok = false;    // 蓝
+  if (r3 < 160 || g3 < 160 || b3 < 160) ok = false;  // 白
+  if (!ok)
+    LOGW("色彩探针判定异常（期望 红/绿/蓝/白 通道分离，实际如上）");
+  return ok;
+}
+
 void App::updateSurface() {
   if (!renderer_ || !window_) return;
   SDL_GetWindowSize(window_, &winW_, &winH_);

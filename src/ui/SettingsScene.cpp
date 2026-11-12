@@ -621,6 +621,19 @@ class SettingsScene : public Scene {
       }
       y += 38 + 12 + 14;
     }
+    // ★v1.3.5 软件渲染（PC 排障项）：部分显卡驱动/Wine 转译层会打乱纹理
+    //   通道序（游戏画面偏色/发紫）。启动时的色彩探针异常会自动切软件；
+    //   此开关供手动指定（重启应用生效）。
+    {
+      const float ph = 62;
+      y = beginBlock(app, y, "软件渲染", ph);
+      const Rect rc(cx_ + 12, y, (float)app.draw.W - cx_ - 50, 38);
+      const bool f = rowFocus();
+      w::blockRow(app, rc, "软件渲染（排障）",
+                  "画面偏色/发紫时开启；不用显卡、CPU 渲染（重启生效）", f);
+      if (w::switchNeon(app, rc, app.config.renderSoftware, f)) saveConfig(app);
+      y += 38 + 12 + 14;
+    }
   }
 
   // ============ 4 输入 ============

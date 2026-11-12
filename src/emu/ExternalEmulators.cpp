@@ -134,8 +134,11 @@ std::string findAppBundles(const std::string& dir, const std::vector<std::string
 //   模拟器秒退时界面无任何反应 —— “点了没动静”的根因）。
 // ★v1.3.1 POSIX 端：stderr 重定向到日志文件 + 分离线程后台验证 3s
 //   （不再阻塞 UI；秒退经 App::postNotice 播报原因，捕获动态库报错）
+// ★v1.3.5 extraEnv：随包运行库注入（LD_LIBRARY_PATH=<exe>/lib +
+//   QT_PLUGIN_PATH=<exe>/plugins；CI 捆绑的 dolphin/eden 便携库生效）
 bool spawnDetached(const std::string& exe, const std::string& args,
-                   std::string* verifyErr = nullptr) {
+                   std::string* verifyErr = nullptr,
+                   const std::vector<std::string>* extraEnv = nullptr) {
 #ifdef _WIN32
   std::string cmd = "\"" + exe + "\"" + (args.empty() ? "" : " " + args);
   std::wstring wcmd;
@@ -207,7 +210,15 @@ bool spawnDetached(const std::string& exe, const std::string& args,
   }
 
   pid_t pid = 0;
-  const int rc = posix_spawn(&pid, exe.c_str(), &fa, nullptr, argv.data(), environ);
+  // ★v1.3.5 envp = extraEnv（随包 lib/plugins 路径）+ environ
+  std::vector<std::string> envStore;
+  if (extraEnv)
+    for (const auto& kv : *extraEnv) envStore.push_back(kv);
+  std::vector<char*> envp;
+  for (const auto& kv : envStore) envp.push_back(const_cast<char*>(kv.c_str()));
+  for (char** e = environ; e && *e; e++) envp.push_back(*e);
+  envp.push_back(nullptr);
+  const int rc = posix_spawn(&pid, exe.c_str(), &fa, nullptr, argv.data(), envp.data());
   if (fdErr >= 0) close(fdErr);
   posix_spawn_file_actions_destroy(&fa);
   if (rc != 0) return false;
@@ -713,7 +724,26 @@ bool ExternalEmulators::launch(const ExternalCore& c, const std::string& romPath
   g_stderrLog = fsutil::join(dataDir_, "external", live->id + "-stderr.log");
   fsutil::makeDirs(fsutil::join(dataDir_, "external"));
   g_verify = true;
-  if (!spawnDetached(exe, args)) {
+  // ★v1.3.5 随包运行库注入：CI 捆绑的 emulators/<id>/lib 与 /plugins
+  //   （rpath $ORIGIN/lib 已覆盖主二进制；Qt 插件必须走 QT_PLUGIN_PATH，
+  //    LD_LIBRARY_PATH 为随包库二次依赖兜底）
+  std::vector<std::string> extraEnv;
+  {
+    const std::string exeDir = fsutil::dirOf(exe);
+    const std::string libDir = fsutil::join(exeDir, "lib");
+    const std::string plugDir = fsutil::join(exeDir, "plugins");
+    const std::string sysLibDir = fsutil::join(fsutil::exeDir(), "lib");
+    if (fsutil::isDir(libDir)) {
+      extraEnv.push_back("LD_LIBRARY_PATH=" + libDir);
+      extraEnv.push_back("LD_PRELOAD=");
+    }
+    if (fsutil::isDir(plugDir)) extraEnv.push_back("QT_PLUGIN_PATH=" + plugDir);
+    if (!extraEnv.empty())
+      LOGI("随包运行库注入：%s lib=%s plugins=%s", exe.c_str(),
+           fsutil::isDir(libDir) ? "有" : "无", fsutil::isDir(plugDir) ? "有" : "无");
+    (void)sysLibDir;
+  }
+  if (!spawnDetached(exe, args, nullptr, &extraEnv)) {
     g_verify = false;
     if (err) *err = "posix_spawn 失败（" + live->name + "）";
     return false;

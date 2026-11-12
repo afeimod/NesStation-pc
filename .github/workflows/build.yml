@@ -185,19 +185,25 @@ jobs:
         # ★v1.3.3：失败时 dump 应用日志 —— 旧版错误只写 nesstation.log 文件，
         #   CI 上只剩 exit code 零线索（本次 arm64 job 空容器无字体，自检
         #   rc=1 挂了三分钟才定位）；配合 main.cpp 的 stderr 镜像双保险
+        # ★v1.3.5：+gba（真实 mGBA + 彩条 ROM 全链路 —— 用户反复反馈
+        #   「GBA 颜色不对」的端到端回归：截图含红/绿/蓝/白/黑八色条）
         timeout-minutes: 5
         run: |
-          rm -rf smoke/shots && mkdir -p smoke/shots
+          rm -rf smoke/shots && mkdir -p smoke/shots build/bin/cores
+          curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 -o mgb.zip \
+            https://buildbot.libretro.com/nightly/linux/x86_64/latest/mgba_libretro.so.zip
+          python3 -c "import zipfile; zipfile.ZipFile('mgb.zip').extractall('build/bin/cores')"
+          rm -f mgb.zip
           # ★v1.3.4：+library / fsd 库（核心列表两套 APK 顺序回归）
-          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3,library:30,fsd:5,library:30" \
+          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3,library:30,fsd:5,library:30,gba:45,gamemenu:30" \
             NESSTATION_SHOT_DIR=smoke/shots \
             SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
             ./build/bin/nesstation || { \
               echo "=== 自检进程异常退出，dump 应用日志 ==="; \
               cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null; exit 1; }
           n=$(find smoke/shots -name '*.png' | wc -l)
-          if [ "$n" != "6" ]; then
-            echo "=== 截图 $n/6，dump 应用日志 ==="
+          if [ "$n" != "8" ]; then
+            echo "=== 截图 $n/8，dump 应用日志 ==="
             cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null
             exit 1
           fi
@@ -342,19 +348,24 @@ jobs:
       - name: Headless UI selftest (aarch64, core settings panels)
         # ★v1.3.2 无头 UI 截图自检（ARM64 目标架构同跑；布局像素级验证在 x64 job）
         # ★v1.3.3：同 x64 job —— 失败时 dump 应用日志（本 job 死因即容器无字体）
+        # ★v1.3.5：+gba（真实 mGBA 彩条全链路颜色回归，同 x64 job）
         timeout-minutes: 5
         run: |
-          rm -rf smoke/shots && mkdir -p smoke/shots
+          rm -rf smoke/shots && mkdir -p smoke/shots build/bin/cores
+          curl -fSL --retry 5 --retry-delay 5 --connect-timeout 20 -o mgb.zip \
+            https://buildbot.libretro.com/nightly/linux/aarch64/latest/mgba_libretro.so.zip
+          python3 -c "import zipfile; zipfile.ZipFile('mgb.zip').extractall('build/bin/cores')"
+          rm -f mgb.zip
           # ★v1.3.4：+library / fsd 库（核心列表两套 APK 顺序回归）
-          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3,library:30,fsd:5,library:30" \
+          NESSTATION_SELFTEST="copts_ext:3,copts_switch:3,copts:3,library:30,fsd:5,library:30,gba:45,gamemenu:30" \
             NESSTATION_SHOT_DIR=smoke/shots \
             SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
             ./build/bin/nesstation || { \
               echo "=== 自检进程异常退出，dump 应用日志 ==="; \
               cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null; exit 1; }
           n=$(find smoke/shots -name '*.png' | wc -l)
-          if [ "$n" != "6" ]; then
-            echo "=== 截图 $n/6，dump 应用日志 ==="
+          if [ "$n" != "8" ]; then
+            echo "=== 截图 $n/8，dump 应用日志 ==="
             cat "$HOME/.config/NesStation/nesstation.log" 2>/dev/null
             exit 1
           fi

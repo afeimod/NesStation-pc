@@ -603,7 +603,13 @@ bool LibretroCore::environment(unsigned cmd, void* data) {
       return true;
     case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: {
       const enum retro_pixel_format fmt = *(enum retro_pixel_format*)data;
-      if ((int)fmt > (int)RETRO_PIXEL_FORMAT_XRGB8888) return false;
+      // ★v1.3.5 修复「GBA 颜色不对」根因：旧校验写成 fmt > XRGB8888(1)，
+      //   把 RGB565(2) 一并拒绝 —— mGBA（buildbot 全平台新版）声明
+      //   RGB565 被拒后仍按 565 输出，前端按默认 0RGB1555 解读 →
+      //   通道错位（画面发紫/蓝绿噪点；纯蓝测试碰巧测不出）。
+      //   正确语义：仅拒绝超出合法范围的值（0RGB1555/XRGB8888/RGB565）。
+      if ((int)fmt < 0 || (int)fmt > (int)RETRO_PIXEL_FORMAT_RGB565)
+        return false;
       video_.setPixelFormat(fmt);
       return true;
     }

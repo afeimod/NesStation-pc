@@ -61,6 +61,10 @@ struct Config {
   std::string homeBackground;  // 自定义主页背景图路径（空 = 默认背景）
   bool fullscreenOnLaunch = false;   // 启动游戏时自动全屏（退出游戏恢复）
   int audioBufferMs = 64;      // 音频缓冲毫秒（越大越稳、延迟越高）
+  // ★v1.3.5 软件渲染（排障开关）：true = 跳过 GPU 加速直用软件渲染。
+  //   部分驱动/Wine 转译层会打乱 ARGB 纹理通道序（GBA 颜色发紫的
+  //   典型根因）；启动时自动色彩探针失败也会临时切软件（不改此键）。
+  bool renderSoftware = false;
   std::map<std::string, std::string> emulatorPaths;  // dolphin/cemu/eden → exe
   // ★v1.3.1 SWF 游戏目录（主页 SWF 入口扫描 .swf；默认数据目录 swf/）
   std::vector<std::string> swfDirs;
@@ -162,6 +166,9 @@ class App {
  private:
   bool init();
   bool initFontChain();   // 系统字体选链（v1.2.4：不随包附带字体）
+  // ★v1.3.5 渲染后端色彩探针（ARGB 纹理链路红/绿/蓝/白回读校验）
+  bool probeRendererColors();
+  bool softwareRendererForced_ = false;  // 探针失败自动切软件（会话内有效）
   void shutdown();
   void pumpEvents();
   void frame(float dt);

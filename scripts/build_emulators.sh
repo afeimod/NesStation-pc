@@ -70,6 +70,69 @@ install_ok() { # $1=构建目录
   fi
 }
 
+# ★v1.3.5 Linux 运行库随包捆绑（「ngcwii 没集合进 full 包」根治）：
+#   deb 只 Depends libc6/libsdl2 —— 用户系统（Debian/自定义 ARM 盒子）没装
+#   Qt6/boost 等时 dolphin/eden 秒退或被缺库预检拦下。把二进制的非系统
+#   动态库（Qt6/pulse/alsa/fmt/…）拷到 lib/ + rpath $ORIGIN/lib，Qt 插件
+#   拷到 plugins/（launch 侧自动设 QT_PLUGIN_PATH/LD_LIBRARY_PATH）。
+#   白名单 = 任何 Linux 都有的基础运行库（不拷，避免 glibc 版本倒灌）。
+bundle_linux_runtime_libs() { # $1 = 模拟器目录（含主二进制）
+  local OUTDIR="$1"
+  [ "$WINDOWS" = "1" ] && return 0
+  command -v patchelf >/dev/null 2>&1 || return 0
+  local BIN
+  BIN=$(find "$OUTDIR" -maxdepth 2 -type f \( -name 'dolphin-emu' -o -name 'eden' -o -name 'Cemu' \) 2>/dev/null | head -1)
+  [ -z "$BIN" ] && return 0
+  echo "（捆绑运行库：ldd 展开 $BIN → $OUTDIR/lib）"
+  local LIBDIR="$OUTDIR/lib"
+  mkdir -p "$LIBDIR"
+  # 白名单：glibc/libgcc/libstdc++/动态加载器等基础库（拷了反而在新版
+  # 系统 glibc 冲突）；其余全部随包
+  local WL='(ld-linux|libc\.so|libm\.so|libdl\.so|libpthread\.so|librt\.so|libresolv\.so|libgcc_s\.so|libstdc\+\+\.so|libatomic\.so|libanl\.so|libBrokenLocale|libcidn|libcrypt\.so|libnsl|libnss_|libutil\.so)'
+  ldd "$BIN" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\//) print $i}' \
+    | grep -vE "/${WL}" | sort -u | while read -r so; do
+      [ -f "$so" ] || continue
+      cp -L -n "$so" "$LIBDIR/" 2>/dev/null || cp -L "$so" "$LIBDIR/" 2>/dev/null || true
+    done
+  # 递归捆绑：随包库自身的依赖（如 Qt6Core 依赖 icu）
+  for _ in 1 2 3; do
+    for so in "$LIBDIR"/*.so*; do
+      [ -f "$so" ] || continue
+      ldd "$so" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i ~ /^\//) print $i}' \
+        | grep -vE "/${WL}" | sort -u | while read -r dep; do
+          [ -f "$dep" ] || continue
+          cp -L -n "$dep" "$LIBDIR/" 2>/dev/null || true
+        done
+    done
+  done
+  local NLIB
+  NLIB=$(find "$LIBDIR" -type f | wc -l)
+  echo "（随包库 $NLIB 个 → rpath \$ORIGIN/lib）"
+  # rpath：主二进制 + dolphin-tool + 随包库自身（相对加载）
+  for f in "$OUTDIR"/dolphin-emu "$OUTDIR"/dolphin-tool "$OUTDIR"/eden "$OUTDIR"/Cemu \
+           "$LIBDIR"/*.so*; do
+    [ -f "$f" ] || continue
+    patchelf --set-rpath '$ORIGIN/lib:$ORIGIN' "$f" 2>/dev/null || true
+  done
+  # Qt 插件（platforms/imageformats/iconengines/styles/tls 等；无 Qt 库则跳过）
+  if ls "$LIBDIR"/libQt6Core.so* >/dev/null 2>&1; then
+    local PLUGROOT=""
+    for c in /usr/lib/*/qt6/plugins /usr/lib/qt6/plugins /usr/lib64/qt6/plugins \
+             /usr/lib/*/qt5/plugins /usr/lib/qt5/plugins; do
+      [ -d "$c" ] && PLUGROOT="$c" && break
+    done
+    if [ -n "$PLUGROOT" ]; then
+      echo "（Qt 插件 $PLUGROOT → $OUTDIR/plugins）"
+      for sub in platforms imageformats iconengines styles tls networkinformation \
+                 xcbglintegrations wayland-shell-integration wayland-graphics-integration-client \
+                 wayland-decoration-client wayland-inputdevice-integration; do
+        [ -d "$PLUGROOT/$sub" ] && mkdir -p "$OUTDIR/plugins/$sub" \
+          && cp -L "$PLUGROOT/$sub"/*.so "$OUTDIR/plugins/$sub/" 2>/dev/null || true
+      done
+    fi
+  fi
+}
+
 build_dolphin() {
   echo "=== Dolphin（NGC/Wii）==="
   # ccache 仅 Linux/macOS（CI 已安装并预热缓存；MSVC 无 ccache）
@@ -133,6 +196,7 @@ build_dolphin() {
     fi
   fi
   echo "✓ Dolphin → $OUT/dolphin"
+  bundle_linux_runtime_libs "$OUT/dolphin"
 }
 
 build_cemu() {
@@ -231,6 +295,7 @@ build_eden() {
     fi
   fi
   echo "✓ Eden → $OUT/eden"
+  bundle_linux_runtime_libs "$OUT/eden"
 }
 
 case "$TARGET" in

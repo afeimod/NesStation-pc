@@ -559,6 +559,16 @@ void icon(App& app, int id, const Rect& rc, Color8 c) {
     case 38: iconImage(app, rc, c); break;
     case 39: iconDownload(app, rc, c); break;
     case 40: iconNetwork(app, rc, c); break;
+    // ★v1.3.5 游戏内横排菜单（APK MenuOverlay 图标）
+    case 41: iconPause(app, rc, c); break;
+    case 42: iconFastForward(app, rc, c); break;
+    case 43: iconCamera(app, rc, c); break;
+    case 44: iconWrench(app, rc, c); break;
+    case 45: iconSliders(app, rc, c); break;
+    case 46: iconFullscreen(app, rc, c); break;
+    case 47: iconClose(app, rc, c); break;
+    case 48: iconUpload(app, rc, c); break;
+    case 49: iconHome(app, rc, c); break;
     default: break;
   }
 }
@@ -1195,6 +1205,27 @@ void iconDownload(App& app, const Rect& rc, Color8 c) {  // 39 Download（安装
   d.line(rc.x + rc.w * 0.2f, rc.y + rc.h * 0.82f, rc.x + rc.w * 0.8f, rc.y + rc.h * 0.82f, c, 2.4f);
 }
 
+void iconUpload(App& app, const Rect& rc, Color8 c) {  // 48 UploadFile（导入ROM）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), top = rc.y + rc.h * 0.30f, bot = rc.y + rc.h * 0.80f;
+  d.line(cx, top, cx, bot, c, 2.4f);
+  d.line(cx - rc.w * 0.16f, top + rc.h * 0.16f, cx, top, c, 2.4f);
+  d.line(cx + rc.w * 0.16f, top + rc.h * 0.16f, cx, top, c, 2.4f);
+  d.line(rc.x + rc.w * 0.2f, rc.y + rc.h * 0.92f, rc.x + rc.w * 0.8f, rc.y + rc.h * 0.92f, c, 2.4f);
+}
+
+void iconHome(App& app, const Rect& rc, Color8 c) {  // 49 Home（主页）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), bot = rc.y + rc.h * 0.88f;
+  // 屋顶（三角）
+  d.line(cx, rc.y + rc.h * 0.10f, rc.x + rc.w * 0.10f, rc.y + rc.h * 0.48f, c, 2.4f);
+  d.line(cx, rc.y + rc.h * 0.10f, rc.x + rc.w * 0.90f, rc.y + rc.h * 0.48f, c, 2.4f);
+  // 屋身（方形）
+  d.rectOutline(Rect(rc.x + rc.w * 0.20f, rc.y + rc.h * 0.46f, rc.w * 0.60f, bot - (rc.y + rc.h * 0.46f)), c, 2.2f);
+  // 门
+  d.line(cx, bot, cx, bot - rc.h * 0.22f, c, 2.0f);
+}
+
 void iconNetwork(App& app, const Rect& rc, Color8 c) {  // 40 NetworkCheck（网络状态）
   Draw& d = app.draw;
   const float cx = rc.cx(), cy = rc.bottom() - rc.h * 0.12f;
@@ -1202,6 +1233,88 @@ void iconNetwork(App& app, const Rect& rc, Color8 c) {  // 40 NetworkCheck（网
   d.arc(cx, cy, rc.minDim() * 0.32f, -2.356f, -0.785f, c, 2);
   d.arc(cx, cy, rc.minDim() * 0.48f, -2.356f, -0.785f, c, 2);
   d.circle(cx, cy, std::max(1.4f, rc.minDim() * 0.05f), c);
+}
+
+// ★v1.3.5 游戏内横排菜单图标（对齐 APK MenuOverlay Material 图标的视觉语义）
+
+void iconPause(App& app, const Rect& rc, Color8 c) {  // 41 Pause（双竖条）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), cy = rc.cy();
+  const float h = rc.minDim() * 0.52f, w = std::max(2.6f, rc.minDim() * 0.13f);
+  d.rect(Rect(cx - w - w * 0.6f, cy - h / 2, w, h), c);
+  d.rect(Rect(cx + w * 0.6f, cy - h / 2, w, h), c);
+}
+
+void iconFastForward(App& app, const Rect& rc, Color8 c) {  // 42 FastForward（▶▶）
+  Draw& d = app.draw;
+  const float cy = rc.cy();
+  const float s = rc.minDim() * 0.30f;  // 半高
+  const float x0 = rc.cx() - s * 1.35f;
+  for (int k = 0; k < 2; k++) {
+    const float x = x0 + (float)k * s * 1.15f;
+    d.line(x, cy - s, x + s * 0.9f, cy, c, 2.6f);
+    d.line(x + s * 0.9f, cy, x, cy + s, c, 2.6f);
+  }
+}
+
+void iconCamera(App& app, const Rect& rc, Color8 c) {  // 43 CameraAlt（相机）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), cy = rc.cy();
+  const float w = rc.minDim() * 0.66f, h = rc.minDim() * 0.44f;
+  // 机身
+  d.roundRectOutline(Rect(cx - w / 2, cy - h / 2 + rc.minDim() * 0.07f, w, h),
+                      2.5f, c, 2.0f);
+  // 顶部取景器凸起
+  d.rectOutline(Rect(cx - w * 0.14f, cy - h / 2 - rc.minDim() * 0.02f, w * 0.28f,
+                     rc.minDim() * 0.09f), c, 2.0f);
+  // 镜头
+  d.circleOutline(cx, cy + rc.minDim() * 0.07f, rc.minDim() * 0.13f, c, 2.0f);
+}
+
+void iconWrench(App& app, const Rect& rc, Color8 c) {  // 44 Build（扳手）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), cy = rc.cy();
+  const float s = rc.minDim() * 0.30f;
+  // 扳手头（开口圆弧）+ 柄（45° 斜线）
+  d.arc(cx - s * 0.55f, cy - s * 0.55f, s * 0.62f, -0.6f, 2.2f, c, 3.2f);
+  d.line(cx - s * 0.25f, cy - s * 0.25f, cx + s * 0.85f, cy + s * 0.85f, c, 3.4f);
+}
+
+void iconSliders(App& app, const Rect& rc, Color8 c) {  // 45 Tune（三道滑杆）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), cy = rc.cy();
+  const float w = rc.minDim() * 0.68f;
+  const float ys[3] = {cy - rc.minDim() * 0.20f, cy, cy + rc.minDim() * 0.20f};
+  const float knobX[3] = {cx - w * 0.18f, cx + w * 0.10f, cx - w * 0.05f};
+  for (int i = 0; i < 3; i++) {
+    d.line(cx - w / 2, ys[i], cx + w / 2, ys[i], c, 2.0f);
+    d.circle(knobX[i], ys[i], rc.minDim() * 0.085f, c);
+  }
+}
+
+void iconFullscreen(App& app, const Rect& rc, Color8 c) {  // 46 Fullscreen（四角括弧）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), cy = rc.cy();
+  const float s = rc.minDim() * 0.30f;
+  const float t = std::max(2.0f, rc.minDim() * 0.09f);
+  // 四角 L 形括弧
+  const float k = s * 0.6f;
+  d.line(cx - s, cy - s, cx - s + k, cy - s, c, t);
+  d.line(cx - s, cy - s, cx - s, cy - s + k, c, t);
+  d.line(cx + s - k, cy - s, cx + s, cy - s, c, t);
+  d.line(cx + s, cy - s, cx + s, cy - s + k, c, t);
+  d.line(cx - s, cy + s - k, cx - s, cy + s, c, t);
+  d.line(cx - s, cy + s, cx - s + k, cy + s, c, t);
+  d.line(cx + s, cy + s - k, cx + s, cy + s, c, t);
+  d.line(cx + s - k, cy + s, cx + s, cy + s, c, t);
+}
+
+void iconClose(App& app, const Rect& rc, Color8 c) {  // 47 Close（X）
+  Draw& d = app.draw;
+  const float cx = rc.cx(), cy = rc.cy();
+  const float s = rc.minDim() * 0.30f;
+  d.line(cx - s, cy - s, cx + s, cy + s, c, 3.0f);
+  d.line(cx - s, cy + s, cx + s, cy - s, c, 3.0f);
 }
 
 // —— ★v1.2.9 共享背景（1:1 对齐 APK）——

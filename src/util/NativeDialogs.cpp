@@ -146,6 +146,16 @@ PickResult pickFile(void* sdlWindow, const char* title, const char* filterSpec,
   return runIFileDialog(sdlWindow, false, title, fw.c_str(), outPath);
 }
 
+// ★v1.3.5 在资源管理器中打开目录（Windows）
+bool openInFileManager(const std::string& dir) {
+  if (dir.empty()) return false;
+  const std::wstring w = fsutil::toWide(dir);
+  // SW_SHOWNORMAL 打开目录本身（/select 需指向具体项）
+  const INT_PTR r = (INT_PTR)ShellExecuteW(nullptr, L"open", w.c_str(), nullptr,
+                                           nullptr, SW_SHOWNORMAL);
+  return r > 32;
+}
+
 #else  // !_WIN32 ————————————————————————————————————————
 
 static std::string readCommandOutput(const std::string& cmd) {
@@ -205,15 +215,90 @@ static PickResult pickViaKdialog(bool folder, const char* title,
   return PickResult::Ok;
 }
 
-PickResult pickFolder(void*, const char* title, std::string* outPath) {
-  if (commandExists("zenity")) return pickViaZenity(true, title, nullptr, outPath);
-  if (commandExists("kdialog")) return pickViaKdialog(true, title, nullptr, outPath);
+// ★v1.3.5 yad（轻量 GTK 选择器；zenity 缺席时的 GTK 系后备）
+static PickResult pickViaYad(bool folder, const char* title,
+                             const char* yadFilters, std::string* outPath) {
+  std::string cmd = "yad --file-selection";
+  if (folder) cmd += " --directory";
+  if (title && *title) cmd += " --title=" + shellEscape(title);
+  if (yadFilters && *yadFilters) cmd += std::string(" ") + yadFilters;
+  cmd += " 2>/dev/null";
+  const std::string r = readCommandOutput(cmd);
+  if (r.empty()) return PickResult::Cancel;
+  *outPath = r;
+  return PickResult::Ok;
+}
+
+// ★v1.3.5 桌面文件管理器生态探测（用户需求：「默认 thunar，没有时其他
+//   文件管理器，都没有用自带」）：
+//   · 文件管理器本体无法回传所选路径（thunar/nautilus/dolphin 均无
+//     「选择器」模式），实际承担选择的是各桌面生态的【选择器工具】：
+//       Xfce/Thunar、GNOME/Nautilus、LXDE/PCManFM → GTK 系（zenity/yad）
+//       KDE/Dolphin                              → kdialog
+//   · 按已装文件管理器判定生态，优先匹配该生态的选择器：
+//       thunar 存在    → zenity → yad → qarma → kdialog
+//       dolphin 存在   → kdialog → zenity → yad
+//       其他/无法判定  → zenity → kdialog → yad
+//   · 全部缺席 → PickResult::Unavailable（调用方回退内置浏览器）。
+enum class FmEcosystem { Thunar, Kde, Generic };
+
+static FmEcosystem detectEcosystem() {
+  if (commandExists("thunar")) return FmEcosystem::Thunar;
+  if (commandExists("dolphin") || commandExists("kdialog")) return FmEcosystem::Kde;
+  return FmEcosystem::Generic;
+}
+
+struct Chooser {
+  const char* tool;  // 探测用命令名
+  PickResult (*fn)(bool, const char*, const char*, std::string*);
+};
+
+PickResult pickPath(bool folder, const char* title, const char* zenityFilters,
+                    const char* kdialogFilter, const char* yadFilters,
+                    std::string* outPath) {
+  static FmEcosystem eco = detectEcosystem();  // 进程内探测一次
+  std::vector<Chooser> chain;
+  switch (eco) {
+    case FmEcosystem::Thunar:  // Xfce：GTK 系选择器优先（zenity 的
+                               // GTKFileChooserDialog 即 Thunar 同生态控件）
+      chain.push_back({"zenity", pickViaZenity});
+      chain.push_back({"yad", pickViaYad});
+      chain.push_back({"qarma", pickViaZenity});  // qarma 兼容 zenity 参数
+      chain.push_back({"kdialog", pickViaKdialog});
+      break;
+    case FmEcosystem::Kde:  // KDE：kdialog 优先
+      chain.push_back({"kdialog", pickViaKdialog});
+      chain.push_back({"zenity", pickViaZenity});
+      chain.push_back({"yad", pickViaYad});
+      break;
+    default:
+      chain.push_back({"zenity", pickViaZenity});
+      chain.push_back({"kdialog", pickViaKdialog});
+      chain.push_back({"yad", pickViaYad});
+      break;
+  }
+  for (const auto& c : chain) {
+    if (!commandExists(c.tool)) continue;
+    const std::string f = std::string(c.tool) == "kdialog"
+                              ? (kdialogFilter ? kdialogFilter : "")
+                              : (std::string(c.tool) == "yad"
+                                     ? (yadFilters ? yadFilters : "")
+                                     : (zenityFilters ? zenityFilters : ""));
+    const PickResult r =
+        c.fn(folder, title, f.empty() ? nullptr : f.c_str(), outPath);
+    // Ok / Cancel（用户主动关闭）都终止链 —— Cancel 不再试下一个工具
+    if (r != PickResult::Unavailable) return r;
+  }
   return PickResult::Unavailable;
+}
+
+PickResult pickFolder(void*, const char* title, std::string* outPath) {
+  return pickPath(true, title, nullptr, nullptr, nullptr, outPath);
 }
 
 PickResult pickFile(void*, const char* title, const char* filterSpec,
                     std::string* outPath) {
-  std::string zenityFilters, kdialogFilter;
+  std::string zenityFilters, kdialogFilter, yadFilters;
   if (filterSpec && *filterSpec) {
     std::string s(filterSpec);
     size_t pos = 0;
@@ -235,17 +320,30 @@ PickResult pickFile(void*, const char* title, const char* filterSpec,
       zenityFilters += "--file-filter=" + shellEscape(label + " | " + pattern);
       if (!kdialogFilter.empty()) kdialogFilter += " ";
       kdialogFilter += pattern;
+      if (!yadFilters.empty()) yadFilters += " ";
+      yadFilters += "--file-filter=" + shellEscape(label + " | " + pattern);
     }
   }
-  if (commandExists("zenity"))
-    return pickViaZenity(false, title,
-                         zenityFilters.empty() ? nullptr : zenityFilters.c_str(),
-                         outPath);
-  if (commandExists("kdialog"))
-    return pickViaKdialog(false, title,
-                          kdialogFilter.empty() ? nullptr : kdialogFilter.c_str(),
-                          outPath);
-  return PickResult::Unavailable;
+  return pickPath(false, title,
+                  zenityFilters.empty() ? nullptr : zenityFilters.c_str(),
+                  kdialogFilter.empty() ? nullptr : kdialogFilter.c_str(),
+                  yadFilters.empty() ? nullptr : yadFilters.c_str(), outPath);
+}
+
+// ★v1.3.5 在系统文件管理器中打开目录（thunar 优先 → pcmanfm → nautilus →
+//   nemo → dolphin → xdg-open；内置浏览器「在系统中打开」按钮用）。
+bool openInFileManager(const std::string& dir) {
+  if (dir.empty()) return false;
+  static const char* kFms[] = {"thunar", "pcmanfm", "nautilus", "nemo",
+                               "dolphin", nullptr};
+  for (int i = 0; kFms[i]; i++) {
+    if (!commandExists(kFms[i])) continue;
+    const std::string cmd = std::string(kFms[i]) + " " + shellEscape(dir) +
+                            " >/dev/null 2>&1 &";
+    return std::system(cmd.c_str()) == 0;
+  }
+  const std::string cmd = "xdg-open " + shellEscape(dir) + " >/dev/null 2>&1 &";
+  return std::system(cmd.c_str()) == 0;
 }
 
 #endif  // _WIN32

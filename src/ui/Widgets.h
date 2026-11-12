@@ -135,6 +135,16 @@ void iconDevices(App& app, const Rect& rc, Color8 c);     // 37 双设备（Wii 
 void iconImage(App& app, const Rect& rc, Color8 c);       // 38 图片（获取封面）
 void iconDownload(App& app, const Rect& rc, Color8 c);    // 39 下载（安装CIA）
 void iconNetwork(App& app, const Rect& rc, Color8 c);     // 40 网络状态
+// ★v1.3.5 游戏内横排菜单（对齐 APK MenuOverlay 图标）
+void iconPause(App& app, const Rect& rc, Color8 c);        // 41 暂停（双竖条）
+void iconFastForward(App& app, const Rect& rc, Color8 c);  // 42 快进（双三角）
+void iconCamera(App& app, const Rect& rc, Color8 c);       // 43 截图（相机）
+void iconWrench(App& app, const Rect& rc, Color8 c);       // 44 金手指（扳手）
+void iconSliders(App& app, const Rect& rc, Color8 c);      // 45 手柄布局（Tune 滑杆）
+void iconFullscreen(App& app, const Rect& rc, Color8 c);   // 46 隐藏菜单（Fullscreen 四角）
+void iconClose(App& app, const Rect& rc, Color8 c);        // 47 退出（Close X）
+void iconUpload(App& app, const Rect& rc, Color8 c);       // 48 导入ROM（UploadFile）
+void iconHome(App& app, const Rect& rc, Color8 c);         // 49 主页（Home）
 
 // —— ★v1.2.9 共享背景（各场景按皮肤复用，对齐 APK）——
 // FsdBackdrop（FsdScaffold.kt）：深蓝三段渐变 + 中央放射高光 + 斜向光带 + 底部渐暗
